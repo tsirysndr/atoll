@@ -52,6 +52,24 @@ defmodule Atoll.CID do
     end
   end
 
+  @doc """
+  Parses a canonical base32 string into a validated binary CID.
+  """
+  @spec from_base32(term()) :: {:ok, binary()} | {:error, :invalid_cid}
+  def from_base32("b" <> encoded = text) when byte_size(encoded) == 58 do
+    with {:ok, cid} <- Base.decode32(encoded, case: :lower, padding: false),
+         {:ok, _fields} <- decode(cid),
+         true <- to_base32(cid) == text do
+      {:ok, cid}
+    else
+      _ -> {:error, :invalid_cid}
+    end
+  end
+
+  def from_base32(_value) do
+    {:error, :invalid_cid}
+  end
+
   defp codec_code(:dag_cbor), do: 0x71
   defp codec_code(:raw), do: 0x55
 end

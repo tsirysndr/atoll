@@ -3,6 +3,8 @@ defmodule Atoll.CIDTest do
 
   alias Atoll.CID
 
+  @empty_map_cid "bafyreigbtj4x7ip5legnfznufuopl4sg4knzc2cof6duas4b3q2fy6swua"
+
   test "constructs a DAG-CBOR CID for an encoded empty map" do
     # CBOR encodes an empty map as the single byte 0xA0.
     digest =
@@ -98,6 +100,58 @@ defmodule Atoll.CIDTest do
           <<1, 0x71, 0x12, 160, 0>>
         ] do
       assert CID.decode(header <> digest) == {:error, :invalid_cid}
+    end
+  end
+
+  test "parses a known base32 CID" do
+    expected =
+      Base.decode16!(
+        "01711220c19a797fa1fd590cd2e5b42d1cf5f246e29b91684e2f87404b81dc345c7a56a0",
+        case: :lower
+      )
+
+    assert CID.from_base32(@empty_map_cid) == {:ok, expected}
+  end
+
+  test "round-trips a raw CID through base32" do
+    cid = CID.create("abc", :raw)
+
+    assert CID.from_base32(CID.to_base32(cid)) == {:ok, cid}
+  end
+
+  test "rejects incorrect prefixes, case, lengths, and characters" do
+    for text <- [
+          "",
+          "b",
+          String.replace_prefix(@empty_map_cid, "b", "z"),
+          String.upcase(@empty_map_cid),
+          "b" <> String.upcase(binary_part(@empty_map_cid, 1, 58)),
+          @empty_map_cid <> "=",
+          @empty_map_cid <> "a",
+          "b" <> String.duplicate("!", 58)
+        ] do
+      assert CID.from_base32(text) == {:error, :invalid_cid}
+    end
+  end
+
+  test "rejects nonzero unused bits in the final base32 character" do
+    # Changing the final "a" to "b" changes only unused encoding bits.
+    text = binary_part(@empty_map_cid, 0, 58) <> "b"
+
+    assert CID.from_base32(text) == {:error, :invalid_cid}
+  end
+
+  test "rejects valid base32 containing an unsupported CID" do
+    digest = :binary.copy(<<0>>, 32)
+    invalid_cid = <<2, 0x71, 0x12, 32, digest::binary>>
+    text = "b" <> Base.encode32(invalid_cid, case: :lower, padding: false)
+
+    assert CID.from_base32(text) == {:error, :invalid_cid}
+  end
+
+  test "rejects non-string inputs" do
+    for value <- [nil, 123, true, [], %{}] do
+      assert CID.from_base32(value) == {:error, :invalid_cid}
     end
   end
 end
