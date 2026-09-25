@@ -38,7 +38,8 @@ Checked items are implemented in this repository. Unchecked items are remaining 
 - [x] Strict CBOR CID-link decoding with tag, prefix, and CID validation.
 - [x] Deterministic CBOR encoding and strict decoding for ATProto values (64-container decoding limit).
 - [x] ATProto JSON representations and conversion (`$link` and `$bytes`).
-- [ ] Validation of DIDs, handles, NSIDs, record keys, and AT URIs.
+- [x] Syntax validation of DIDs, handles, NSIDs, record keys, and restricted AT URIs.
+- [x] TID parsing, formatting, and generation after a supplied previous revision.
 - [ ] TID generation and monotonically increasing repository revisions.
 
 ### Block storage
