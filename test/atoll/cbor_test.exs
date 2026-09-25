@@ -1,8 +1,8 @@
 defmodule Atoll.CBORTest do
   use ExUnit.Case, async: true
 
-  alias Atoll.CBOR
-  alias Atoll.CBOR.Bytes
+  alias Atoll.{CBOR, CID}
+  alias Atoll.CBOR.{Bytes, Link}
 
   test "encodes null and booleans" do
     assert CBOR.encode!(nil) == <<0xF6>>
@@ -175,5 +175,47 @@ defmodule Atoll.CBORTest do
 
     assert cid ==
              "bafyreigbtj4x7ip5legnfznufuopl4sg4knzc2cof6duas4b3q2fy6swua"
+  end
+
+  test "encodes a known CID link using tag 42 and the zero prefix" do
+    cid =
+      Base.decode16!(
+        "01711220c19a797fa1fd590cd2e5b42d1cf5f246e29b91684e2f87404b81dc345c7a56a0",
+        case: :lower
+      )
+
+    expected =
+      Base.decode16!(
+        "d82a58250001711220c19a797fa1fd590cd2e5b42d1cf5f246e29b91684e2f87404b81dc345c7a56a0",
+        case: :lower
+      )
+
+    assert CBOR.encode!(%Link{cid: cid}) == expected
+  end
+
+  test "encodes a raw CID link nested in a map" do
+    cid = CID.create("hello", :raw)
+    value = %{"r" => %Link{cid: cid}}
+
+    assert CBOR.encode!(value) ==
+             <<0xA1, 0x61, "r", 0xD8, 0x2A, 0x58, 37, 0, cid::binary>>
+  end
+
+  test "rejects malformed binary CIDs in links" do
+    valid = CID.create("hello", :raw)
+
+    for cid <- [<<>>, <<1, 2>>, valid <> <<0>>] do
+      assert_raise ArgumentError, "CBOR links must contain a valid binary CID", fn ->
+        CBOR.encode!(%Link{cid: cid})
+      end
+    end
+  end
+
+  test "rejects non-binary CID values in links" do
+    for cid <- [nil, 123, []] do
+      assert_raise ArgumentError, fn ->
+        CBOR.encode!(%Link{cid: cid})
+      end
+    end
   end
 end

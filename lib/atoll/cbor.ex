@@ -3,10 +3,11 @@ defmodule Atoll.CBOR do
   Deterministic CBOR encoding for ATProto.
 
   Currently supports integers, booleans, null, UTF-8 text, byte strings,
-  arrays, and maps with UTF-8 string keys.
+  arrays, maps with UTF-8 string keys, and CID links.
   """
 
-  alias Atoll.CBOR.Bytes
+  alias Atoll.CID
+  alias Atoll.CBOR.{Bytes, Link}
 
   @min_integer -9_223_372_036_854_775_808
   @max_integer 9_223_372_036_854_775_807
@@ -62,6 +63,16 @@ defmodule Atoll.CBOR do
       end)
 
     IO.iodata_to_binary([encode_head(5, map_size(value)), items])
+  end
+
+  def encode!(%Link{cid: cid}) when is_binary(cid) do
+    case CID.decode(cid) do
+      {:ok, _fields} ->
+        <<0xD8, 0x2A>> <> encode!(%Bytes{data: <<0, cid::binary>>})
+
+      {:error, :invalid_cid} ->
+        raise ArgumentError, "CBOR links must contain a valid binary CID"
+    end
   end
 
   def encode!(_value) do
