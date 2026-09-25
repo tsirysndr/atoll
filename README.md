@@ -49,10 +49,14 @@ Checked items are implemented in this repository. Unchecked items are remaining 
 - [x] Duplicate inserts succeed without replacing stored content.
 - [x] `Atoll.Storage.get_block/1` retrieves exact bytes and distinguishes invalid CIDs from missing blocks.
 - [x] PostgreSQL integration tests for reads, writes, duplicates, and rejected content.
+- [x] Structured CBOR node storage and retrieval with CID verification and decoding validation.
 - [ ] Repository ownership and block references.
 - [ ] Unreferenced-block cleanup and storage quotas.
 
-Block storage is currently an internal API. Digest verification does not validate CBOR structure or grant access to account data.
+Block storage is currently an internal API. `put_block/2` verifies digests;
+`put_node/1` also validates CBOR and decoding limits. `get_node/1` verifies stored
+content against its CID before decoding it. These operations do not validate
+record Lexicons or grant access to account data.
 
 ### Repositories and records
 
