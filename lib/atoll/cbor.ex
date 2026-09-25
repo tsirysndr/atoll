@@ -79,6 +79,14 @@ defmodule Atoll.CBOR do
     raise ArgumentError, "unsupported CBOR value or integer outside signed 64-bit range"
   end
 
+  @doc """
+  Decodes exactly one CBOR value.
+
+  Currently supports integers, booleans, and null.
+  """
+  @spec decode(binary()) :: {:ok, term()} | {:error, :invalid_cbor}
+  defdelegate decode(bytes), to: Atoll.CBOR.Decoder
+
   defp encode_head(major, value) when value < 24 do
     <<major::3, value::5>>
   end

@@ -31,6 +31,7 @@ Checked items are implemented in this repository. Unchecked items are remaining 
 - [x] CBOR UTF-8 text and byte-string encoding with minimal length headers.
 - [x] CBOR array and map encoding with deterministic UTF-8 key ordering.
 - [x] CBOR CID-link encoding using tag 42 and validated binary CIDs.
+- [x] Strict CBOR scalar decoding with minimal-encoding, integer-range, and trailing-data checks.
 - [ ] Deterministic CBOR encoding and decoding (DRISL / ATProto's DAG-CBOR subset).
 - [ ] CBOR CID links and ATProto JSON representations (`$link` and `$bytes`).
 - [ ] Validation of DIDs, handles, NSIDs, record keys, and AT URIs.
