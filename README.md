@@ -13,6 +13,7 @@ Checked items are implemented in this repository. Unchecked items are remaining 
 - [x] Phoenix API application with a PostgreSQL connection through Ecto.
 - [x] Database migrations and isolated database tests.
 - [x] `GET /health` HTTP liveness endpoint (does not check database readiness).
+- [x] `GET /` plain-text ATProto ASCII banner and API location.
 - [x] `GET /xrpc/com.atproto.server.describeServer` with configurable `did` and `availableUserDomains`.
 - [x] Controller test for unauthenticated server description.
 - [ ] Public server identity and domain configuration (development uses `did:web:localhost`).

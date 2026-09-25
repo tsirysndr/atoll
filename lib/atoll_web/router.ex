@@ -5,6 +5,10 @@ defmodule AtollWeb.Router do
     plug :accepts, ["json"]
   end
 
+  scope "/", AtollWeb do
+    get "/", HomeController, :show
+  end
+
   scope "/api", AtollWeb do
     pipe_through :api
   end
