@@ -82,7 +82,7 @@ defmodule Atoll.CBOR do
   @doc """
   Decodes exactly one CBOR value.
 
-  Currently supports integers, booleans, and null.
+  Currently supports integers, booleans, null, UTF-8 text, and byte strings.
   """
   @spec decode(binary()) :: {:ok, term()} | {:error, :invalid_cbor}
   defdelegate decode(bytes), to: Atoll.CBOR.Decoder

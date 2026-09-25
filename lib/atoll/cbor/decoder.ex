@@ -2,8 +2,10 @@ defmodule Atoll.CBOR.Decoder do
   @moduledoc """
   Strict decoding of ATProto CBOR.
 
-  Currently supports integers, booleans, and null.
+  Currently supports integers, booleans, null, UTF-8 text, and byte strings.
   """
+
+  alias Atoll.CBOR.Bytes
 
   @max_integer 9_223_372_036_854_775_807
 
@@ -25,6 +27,25 @@ defmodule Atoll.CBOR.Decoder do
            decode_argument(info, rest) do
       value = if major == 0, do: argument, else: -1 - argument
       {:ok, value, rest}
+    else
+      _ -> {:error, :invalid_cbor}
+    end
+  end
+
+  defp decode_item(<<major::3, info::5, rest::binary>>)
+       when major in [2, 3] do
+    with {:ok, size, rest} <- decode_argument(info, rest),
+         <<data::binary-size(size), tail::binary>> <- rest do
+      cond do
+        major == 2 ->
+          {:ok, %Bytes{data: data}, tail}
+
+        String.valid?(data) ->
+          {:ok, data, tail}
+
+        true ->
+          {:error, :invalid_cbor}
+      end
     else
       _ -> {:error, :invalid_cbor}
     end
