@@ -34,6 +34,7 @@ Checked items are implemented in this repository. Unchecked items are remaining 
 - [x] Strict CBOR scalar decoding with minimal-encoding, integer-range, and trailing-data checks.
 - [x] Strict CBOR text and byte-string decoding with UTF-8 and length validation.
 - [x] Strict CBOR array decoding with element validation and a nesting limit.
+- [x] Strict CBOR map decoding with UTF-8 keys, canonical ordering, and duplicate rejection.
 - [ ] Deterministic CBOR encoding and decoding (DRISL / ATProto's DAG-CBOR subset).
 - [ ] CBOR CID links and ATProto JSON representations (`$link` and `$bytes`).
 - [ ] Validation of DIDs, handles, NSIDs, record keys, and AT URIs.

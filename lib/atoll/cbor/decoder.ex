@@ -3,7 +3,7 @@ defmodule Atoll.CBOR.Decoder do
   Strict decoding of ATProto CBOR.
 
   Currently supports integers, booleans, null, UTF-8 text, byte strings,
-  and arrays. Decoding allows at most 64 nested containers.
+  arrays, and maps. Decoding allows at most 64 nested containers.
   """
 
   alias Atoll.CBOR.Bytes
@@ -15,6 +15,16 @@ defmodule Atoll.CBOR.Decoder do
   def decode(bytes) when is_binary(bytes) do
     case decode_value(bytes, 0) do
       {:ok, value, <<>>} -> {:ok, value}
+      _ -> {:error, :invalid_cbor}
+    end
+  end
+
+  defp decode_value(<<5::3, info::5, rest::binary>>, depth)
+       when depth < @max_nesting do
+    with {:ok, count, rest} <- decode_argument(info, rest),
+         true <- count <= div(byte_size(rest), 2) do
+      decode_map(rest, count, depth + 1, %{}, nil)
+    else
       _ -> {:error, :invalid_cbor}
     end
   end
@@ -40,6 +50,27 @@ defmodule Atoll.CBOR.Decoder do
   defp decode_array(bytes, remaining, depth, items) do
     with {:ok, value, rest} <- decode_value(bytes, depth) do
       decode_array(rest, remaining - 1, depth, [value | items])
+    end
+  end
+
+  defp decode_map(rest, 0, _depth, result, _previous_key) do
+    {:ok, result, rest}
+  end
+
+  defp decode_map(bytes, remaining, depth, result, previous_key) do
+    with {:ok, key, after_key} when is_binary(key) <- decode_item(bytes),
+         encoded_key = binary_part(bytes, 0, byte_size(bytes) - byte_size(after_key)),
+         true <- is_nil(previous_key) or previous_key < encoded_key,
+         {:ok, value, rest} <- decode_value(after_key, depth) do
+      decode_map(
+        rest,
+        remaining - 1,
+        depth,
+        Map.put(result, key, value),
+        encoded_key
+      )
+    else
+      _ -> {:error, :invalid_cbor}
     end
   end
 

@@ -201,4 +201,89 @@ defmodule Atoll.CBOR.DecoderTest do
 
     assert CBOR.decode(too_deep) == {:error, :invalid_cbor}
   end
+
+  test "decodes an empty map" do
+    assert CBOR.decode(<<0xA0>>) == {:ok, %{}}
+  end
+
+  test "decodes maps with canonically ordered keys" do
+    bytes = <<0xA3, 0x61, "a", 3, 0x61, "b", 2, 0x62, "aa", 1>>
+
+    assert CBOR.decode(bytes) == {:ok, %{"a" => 3, "b" => 2, "aa" => 1}}
+
+    assert CBOR.decode(<<0xA2, 0x61, "z", 2, 0x62, 0xC3, 0xA9, 1>>) ==
+             {:ok, %{"z" => 2, "é" => 1}}
+  end
+
+  test "decodes nested maps and arrays" do
+    bytes = <<0xA1, 0x61, "a", 0x82, 0xA1, 0x61, "b", 0xF5, 0x41, 255>>
+
+    assert CBOR.decode(bytes) ==
+             {:ok, %{"a" => [%{"b" => true}, %Bytes{data: <<255>>}]}}
+  end
+
+  test "rejects non-text and invalid UTF-8 map keys" do
+    for bytes <- [
+          <<0xA1, 0, 1>>,
+          <<0xA1, 0x40, 1>>,
+          <<0xA1, 0x80, 1>>,
+          <<0xA1, 0x61, 255, 1>>
+        ] do
+      assert CBOR.decode(bytes) == {:error, :invalid_cbor}
+    end
+  end
+
+  test "rejects duplicate and incorrectly ordered map keys" do
+    for bytes <- [
+          <<0xA2, 0x61, "a", 1, 0x61, "a", 2>>,
+          <<0xA2, 0x61, "b", 1, 0x61, "a", 2>>,
+          <<0xA2, 0x62, "aa", 1, 0x61, "b", 2>>
+        ] do
+      assert CBOR.decode(bytes) == {:error, :invalid_cbor}
+    end
+  end
+
+  test "rejects malformed map lengths, entries, and trailing data" do
+    for bytes <- [
+          <<0xA1>>,
+          <<0xA1, 0x61, "a">>,
+          <<0xB8, 0>>,
+          <<0xBF, 0xFF>>,
+          <<0xBB, 0xFFFFFFFFFFFFFFFF::64>>,
+          <<0xA1, 0x61, "a", 0xF7>>,
+          <<0xA0, 0>>
+        ] do
+      assert CBOR.decode(bytes) == {:error, :invalid_cbor}
+    end
+  end
+
+  test "decodes map lengths at the first header boundary" do
+    for {count, header} <- [{23, <<0xB7>>}, {24, <<0xB8, 24>>}] do
+      entries =
+        for index <- 0..(count - 1), into: <<>> do
+          <<0x61, ?a + index, 0>>
+        end
+
+      expected =
+        Map.new(0..(count - 1), fn index ->
+          {<<?a + index>>, 0}
+        end)
+
+      assert CBOR.decode(header <> entries) == {:ok, expected}
+    end
+  end
+
+  test "shares the nesting limit across maps and arrays" do
+    maps = :binary.copy(<<0xA1, 0x60>>, 64) <> <<0>>
+    expected = Enum.reduce(1..64, 0, fn _, value -> %{"" => value} end)
+
+    assert CBOR.decode(maps) == {:ok, expected}
+    assert CBOR.decode(<<0x81>> <> maps) == {:error, :invalid_cbor}
+
+    mixed = :binary.copy(<<0x81, 0xA1, 0x60>>, 32) <> <<0>>
+    expected_mixed = Enum.reduce(1..32, 0, fn _, value -> [%{"" => value}] end)
+
+    assert CBOR.decode(mixed) == {:ok, expected_mixed}
+    assert CBOR.decode(<<0x81>> <> mixed) == {:error, :invalid_cbor}
+  end
 end
