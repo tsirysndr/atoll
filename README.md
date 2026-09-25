@@ -37,7 +37,7 @@ Checked items are implemented in this repository. Unchecked items are remaining 
 - [x] Strict CBOR map decoding with UTF-8 keys, canonical ordering, and duplicate rejection.
 - [x] Strict CBOR CID-link decoding with tag, prefix, and CID validation.
 - [x] Deterministic CBOR encoding and strict decoding for ATProto values (64-container decoding limit).
-- [ ] ATProto JSON representations and conversion (`$link` and `$bytes`).
+- [x] ATProto JSON representations and conversion (`$link` and `$bytes`).
 - [ ] Validation of DIDs, handles, NSIDs, record keys, and AT URIs.
 - [ ] TID generation and monotonically increasing repository revisions.
 
