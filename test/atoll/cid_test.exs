@@ -154,4 +154,41 @@ defmodule Atoll.CIDTest do
       assert CID.from_base32(value) == {:error, :invalid_cid}
     end
   end
+
+  test "verifies content against a known raw CID" do
+    cid =
+      Base.decode16!(
+        "01551220ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+        case: :lower
+      )
+
+    assert CID.verify(cid, "abc") == :ok
+  end
+
+  test "verifies encoded CBOR against a known DAG-CBOR CID" do
+    {:ok, cid} = CID.from_base32(@empty_map_cid)
+
+    assert CID.verify(cid, <<0xA0>>) == :ok
+  end
+
+  test "rejects content that does not match the digest" do
+    {:ok, cid} = CID.from_base32(@empty_map_cid)
+
+    for content <- [<<>>, <<0xA1>>, "{}", <<0xA0, 0>>] do
+      assert CID.verify(cid, content) == {:error, :content_mismatch}
+    end
+  end
+
+  test "rejects malformed CIDs before verifying content" do
+    digest = :crypto.hash(:sha256, "abc")
+
+    for cid <- [
+          <<>>,
+          <<1, 0x55>>,
+          <<2, 0x55, 0x12, 32, digest::binary>>,
+          <<1, 0x55, 0x12, 32, digest::binary, 0>>
+        ] do
+      assert CID.verify(cid, "abc") == {:error, :invalid_cid}
+    end
+  end
 end

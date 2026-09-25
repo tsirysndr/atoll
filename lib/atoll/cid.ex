@@ -70,6 +70,23 @@ defmodule Atoll.CID do
     {:error, :invalid_cid}
   end
 
+  @doc """
+  Checks that content matches a supported binary CID's digest.
+
+  Does not validate the content's codec-specific encoding.
+  """
+  @spec verify(binary(), binary()) ::
+          :ok | {:error, :invalid_cid | :content_mismatch}
+  def verify(cid, content) when is_binary(cid) and is_binary(content) do
+    with {:ok, %{digest: digest}} <- decode(cid) do
+      if :crypto.hash(:sha256, content) == digest do
+        :ok
+      else
+        {:error, :content_mismatch}
+      end
+    end
+  end
+
   defp codec_code(:dag_cbor), do: 0x71
   defp codec_code(:raw), do: 0x55
 end
