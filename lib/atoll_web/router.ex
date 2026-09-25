@@ -14,4 +14,10 @@ defmodule AtollWeb.Router do
 
     get "/health", HealthController, :show
   end
+
+  scope "/xrpc", AtollWeb do
+    pipe_through :api
+
+    get "/com.atproto.server.describeServer", ServerController, :describe
+  end
 end
