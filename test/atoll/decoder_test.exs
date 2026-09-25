@@ -143,4 +143,62 @@ defmodule Atoll.CBOR.DecoderTest do
       assert CBOR.decode(bytes) == {:error, :invalid_cbor}
     end
   end
+
+  test "decodes empty and nested empty arrays" do
+    assert CBOR.decode(<<0x80>>) == {:ok, []}
+    assert CBOR.decode(<<0x81, 0x80>>) == {:ok, [[]]}
+  end
+
+  test "decodes mixed nested arrays in their original order" do
+    bytes = <<0x84, 1, 0x82, 0xF4, 0xF6, 0x62, "hi", 0x41, 255>>
+
+    assert CBOR.decode(bytes) ==
+             {:ok, [1, [false, nil], "hi", %Bytes{data: <<255>>}]}
+  end
+
+  test "decodes array lengths at encoding boundaries" do
+    for {count, header} <- [
+          {23, <<0x97>>},
+          {24, <<0x98, 24>>},
+          {256, <<0x99, 1, 0>>}
+        ] do
+      bytes = header <> :binary.copy(<<0xF6>>, count)
+
+      assert CBOR.decode(bytes) == {:ok, List.duplicate(nil, count)}
+    end
+  end
+
+  test "rejects malformed array lengths, missing items, and trailing data" do
+    for bytes <- [
+          <<0x81>>,
+          <<0x82, 1>>,
+          <<0x98, 0>>,
+          <<0x9F, 0xFF>>,
+          <<0x9B, 0xFFFFFFFFFFFFFFFF::64>>,
+          <<0x81, 0, 1>>
+        ] do
+      assert CBOR.decode(bytes) == {:error, :invalid_cbor}
+    end
+  end
+
+  test "rejects invalid values inside arrays" do
+    for bytes <- [
+          <<0x81, 0xF7>>,
+          <<0x81, 0x61, 255>>,
+          <<0x81, 0x81, 0x18, 0>>
+        ] do
+      assert CBOR.decode(bytes) == {:error, :invalid_cbor}
+    end
+  end
+
+  test "limits array nesting to 64 containers" do
+    allowed = :binary.copy(<<0x81>>, 64) <> <<0>>
+    expected = Enum.reduce(1..64, 0, fn _, value -> [value] end)
+
+    assert CBOR.decode(allowed) == {:ok, expected}
+
+    too_deep = :binary.copy(<<0x81>>, 65) <> <<0>>
+
+    assert CBOR.decode(too_deep) == {:error, :invalid_cbor}
+  end
 end

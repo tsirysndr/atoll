@@ -2,18 +2,44 @@ defmodule Atoll.CBOR.Decoder do
   @moduledoc """
   Strict decoding of ATProto CBOR.
 
-  Currently supports integers, booleans, null, UTF-8 text, and byte strings.
+  Currently supports integers, booleans, null, UTF-8 text, byte strings,
+  and arrays. Decoding allows at most 64 nested containers.
   """
 
   alias Atoll.CBOR.Bytes
 
   @max_integer 9_223_372_036_854_775_807
+  @max_nesting 64
 
   @spec decode(binary()) :: {:ok, term()} | {:error, :invalid_cbor}
   def decode(bytes) when is_binary(bytes) do
-    case decode_item(bytes) do
+    case decode_value(bytes, 0) do
       {:ok, value, <<>>} -> {:ok, value}
       _ -> {:error, :invalid_cbor}
+    end
+  end
+
+  defp decode_value(<<4::3, info::5, rest::binary>>, depth)
+       when depth < @max_nesting do
+    with {:ok, count, rest} <- decode_argument(info, rest),
+         true <- count <= byte_size(rest) do
+      decode_array(rest, count, depth + 1, [])
+    else
+      _ -> {:error, :invalid_cbor}
+    end
+  end
+
+  defp decode_value(bytes, _depth) do
+    decode_item(bytes)
+  end
+
+  defp decode_array(rest, 0, _depth, items) do
+    {:ok, Enum.reverse(items), rest}
+  end
+
+  defp decode_array(bytes, remaining, depth, items) do
+    with {:ok, value, rest} <- decode_value(bytes, depth) do
+      decode_array(rest, remaining - 1, depth, [value | items])
     end
   end
 
