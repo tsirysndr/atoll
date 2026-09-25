@@ -1,8 +1,8 @@
 defmodule Atoll.CBOR.DecoderTest do
   use ExUnit.Case, async: true
 
-  alias Atoll.CBOR
-  alias Atoll.CBOR.Bytes
+  alias Atoll.{CBOR, CID}
+  alias Atoll.CBOR.{Bytes, Link}
 
   test "decodes null and booleans" do
     assert CBOR.decode(<<0xF6>>) == {:ok, nil}
@@ -285,5 +285,83 @@ defmodule Atoll.CBOR.DecoderTest do
 
     assert CBOR.decode(mixed) == {:ok, expected_mixed}
     assert CBOR.decode(<<0x81>> <> mixed) == {:error, :invalid_cbor}
+  end
+
+  test "decodes a known CID link" do
+    bytes =
+      Base.decode16!(
+        "d82a58250001711220c19a797fa1fd590cd2e5b42d1cf5f246e29b91684e2f87404b81dc345c7a56a0",
+        case: :lower
+      )
+
+    cid =
+      Base.decode16!(
+        "01711220c19a797fa1fd590cd2e5b42d1cf5f246e29b91684e2f87404b81dc345c7a56a0",
+        case: :lower
+      )
+
+    assert CBOR.decode(bytes) == {:ok, %Link{cid: cid}}
+  end
+
+  test "decodes a raw CID link nested in a map" do
+    cid = CID.create("hello", :raw)
+    bytes = <<0xA1, 0x61, "r", 0xD8, 0x2A, 0x58, 37, 0, cid::binary>>
+
+    assert CBOR.decode(bytes) == {:ok, %{"r" => %Link{cid: cid}}}
+  end
+
+  test "rejects unsupported and non-minimal tags" do
+    cid = CID.create("hello", :raw)
+    payload = <<0x58, 37, 0, cid::binary>>
+
+    for tag <- [
+          <<0xC0>>,
+          <<0xD8, 43>>,
+          <<0xD9, 0, 42>>,
+          <<0xDA, 0, 0, 0, 42>>
+        ] do
+      assert CBOR.decode(tag <> payload) == {:error, :invalid_cbor}
+    end
+  end
+
+  test "rejects malformed link payloads" do
+    cid = CID.create("hello", :raw)
+    <<_version, remainder::binary>> = cid
+    invalid_cid = <<2, remainder::binary>>
+
+    for payload <- [
+          <<0x58, 36, cid::binary>>,
+          <<0x58, 37, 1, cid::binary>>,
+          <<0x58, 37, 0, invalid_cid::binary>>,
+          <<0x58, 37, 0>>,
+          <<0x40>>,
+          <<0x60>>,
+          <<0x80>>
+        ] do
+      assert CBOR.decode(<<0xD8, 0x2A>> <> payload) ==
+               {:error, :invalid_cbor}
+    end
+  end
+
+  test "rejects non-minimal and indefinite link byte strings" do
+    cid = CID.create("hello", :raw)
+
+    for payload <- [
+          <<0x59, 0, 37, 0, cid::binary>>,
+          <<0x5F, 0x58, 37, 0, cid::binary, 0xFF>>
+        ] do
+      assert CBOR.decode(<<0xD8, 0x2A>> <> payload) ==
+               {:error, :invalid_cbor}
+    end
+  end
+
+  test "rejects links as map keys and trailing bytes after links" do
+    cid = CID.create("hello", :raw)
+    link = <<0xD8, 0x2A, 0x58, 37, 0, cid::binary>>
+
+    assert CBOR.decode(<<0xA1>> <> link <> <<0>>) ==
+             {:error, :invalid_cbor}
+
+    assert CBOR.decode(link <> <<0>>) == {:error, :invalid_cbor}
   end
 end

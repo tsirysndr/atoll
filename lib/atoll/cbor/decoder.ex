@@ -2,11 +2,12 @@ defmodule Atoll.CBOR.Decoder do
   @moduledoc """
   Strict decoding of ATProto CBOR.
 
-  Currently supports integers, booleans, null, UTF-8 text, byte strings,
-  arrays, and maps. Decoding allows at most 64 nested containers.
+  Supports integers, booleans, null, UTF-8 text, byte strings,
+  arrays, maps, and CID links. Decoding allows at most 64 nested containers.
   """
 
-  alias Atoll.CBOR.Bytes
+  alias Atoll.CID
+  alias Atoll.CBOR.{Bytes, Link}
 
   @max_integer 9_223_372_036_854_775_807
   @max_nesting 64
@@ -105,6 +106,16 @@ defmodule Atoll.CBOR.Decoder do
       end
     else
       _ -> {:error, :invalid_cbor}
+    end
+  end
+
+  defp decode_item(<<0xD8, 0x2A, 0x58, 37, 0, cid::binary-size(36), rest::binary>>) do
+    case CID.decode(cid) do
+      {:ok, _fields} ->
+        {:ok, %Link{cid: cid}, rest}
+
+      {:error, :invalid_cid} ->
+        {:error, :invalid_cbor}
     end
   end
 

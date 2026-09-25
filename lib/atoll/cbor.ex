@@ -82,8 +82,8 @@ defmodule Atoll.CBOR do
   @doc """
   Decodes exactly one CBOR value.
 
-  Currently supports integers, booleans, null, UTF-8 text, byte strings,
-  arrays, and maps. Decoding allows at most 64 nested containers.
+  Supports integers, booleans, null, UTF-8 text, byte strings,
+  arrays, maps, and CID links. Decoding allows at most 64 nested containers.
   """
   @spec decode(binary()) :: {:ok, term()} | {:error, :invalid_cbor}
   defdelegate decode(bytes), to: Atoll.CBOR.Decoder
