@@ -29,6 +29,7 @@ Checked items are implemented in this repository. Unchecked items are remaining 
 - [x] Known-value and malformed-input tests for varints and CIDs.
 - [x] Deterministic CBOR encoding for signed 64-bit integers, booleans, and null.
 - [x] CBOR UTF-8 text and byte-string encoding with minimal length headers.
+- [x] CBOR array and map encoding with deterministic UTF-8 key ordering.
 - [ ] Deterministic CBOR encoding and decoding (DRISL / ATProto's DAG-CBOR subset).
 - [ ] CBOR CID links and ATProto JSON representations (`$link` and `$bytes`).
 - [ ] Validation of DIDs, handles, NSIDs, record keys, and AT URIs.

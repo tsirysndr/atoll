@@ -108,4 +108,72 @@ defmodule Atoll.CBORTest do
       end
     end
   end
+
+  test "encodes empty arrays and maps" do
+    assert CBOR.encode!([]) == <<0x80>>
+    assert CBOR.encode!(%{}) == <<0xA0>>
+  end
+
+  test "encodes nested arrays while preserving element order" do
+    value = [1, [false, nil], "hi", %Bytes{data: <<255>>}]
+
+    assert CBOR.encode!(value) ==
+             <<0x84, 1, 0x82, 0xF4, 0xF6, 0x62, "hi", 0x41, 255>>
+  end
+
+  test "orders map keys by encoded bytes" do
+    value = %{"aa" => 1, "b" => 2, "a" => 3}
+
+    assert CBOR.encode!(value) ==
+             <<0xA3, 0x61, "a", 3, 0x61, "b", 2, 0x62, "aa", 1>>
+
+    assert CBOR.encode!(%{"é" => 1, "z" => 2}) ==
+             <<0xA2, 0x61, "z", 2, 0x62, 0xC3, 0xA9, 1>>
+  end
+
+  test "encodes nested maps, arrays, and byte strings" do
+    value = %{"a" => [%{"b" => true}, %Bytes{data: <<255>>}]}
+
+    assert CBOR.encode!(value) ==
+             <<0xA1, 0x61, "a", 0x82, 0xA1, 0x61, "b", 0xF5, 0x41, 255>>
+  end
+
+  test "rejects invalid map keys and unsupported nested values" do
+    for value <- [
+          %{name: "hello"},
+          %{1 => "hello"},
+          %{<<255>> => "hello"},
+          %{"nested" => %{bad: true}},
+          [1, 1.5]
+        ] do
+      assert_raise ArgumentError, fn ->
+        CBOR.encode!(value)
+      end
+    end
+  end
+
+  test "rejects unsupported structs" do
+    assert_raise ArgumentError, fn ->
+      CBOR.encode!(%URI{scheme: "https", host: "example.com"})
+    end
+  end
+
+  test "uses minimal array length headers" do
+    assert CBOR.encode!(List.duplicate(nil, 23)) ==
+             <<0x97>> <> :binary.copy(<<0xF6>>, 23)
+
+    assert CBOR.encode!(List.duplicate(nil, 24)) ==
+             <<0x98, 24>> <> :binary.copy(<<0xF6>>, 24)
+  end
+
+  test "encoded empty map produces the known CID" do
+    cid =
+      %{}
+      |> CBOR.encode!()
+      |> Atoll.CID.create(:dag_cbor)
+      |> Atoll.CID.to_base32()
+
+    assert cid ==
+             "bafyreigbtj4x7ip5legnfznufuopl4sg4knzc2cof6duas4b3q2fy6swua"
+  end
 end

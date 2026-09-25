@@ -2,7 +2,8 @@ defmodule Atoll.CBOR do
   @moduledoc """
   Deterministic CBOR encoding for ATProto.
 
-  Currently supports integers, booleans, null, UTF-8 text, and byte strings.
+  Currently supports integers, booleans, null, UTF-8 text, byte strings,
+  arrays, and maps with UTF-8 string keys.
   """
 
   alias Atoll.CBOR.Bytes
@@ -35,6 +36,32 @@ defmodule Atoll.CBOR do
     else
       raise ArgumentError, "CBOR text must be valid UTF-8"
     end
+  end
+
+  def encode!(values) when is_list(values) do
+    items = Enum.map(values, &encode!/1)
+
+    IO.iodata_to_binary([encode_head(4, length(values)), items])
+  end
+
+  def encode!(value) when is_map(value) and not is_struct(value) do
+    entries =
+      value
+      |> Enum.map(fn
+        {key, item} when is_binary(key) ->
+          {encode!(key), encode!(item)}
+
+        _ ->
+          raise ArgumentError, "CBOR map keys must be UTF-8 strings"
+      end)
+      |> Enum.sort_by(fn {encoded_key, _encoded_value} -> encoded_key end)
+
+    items =
+      Enum.map(entries, fn {encoded_key, encoded_value} ->
+        [encoded_key, encoded_value]
+      end)
+
+    IO.iodata_to_binary([encode_head(5, map_size(value)), items])
   end
 
   def encode!(_value) do
