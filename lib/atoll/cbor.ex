@@ -2,8 +2,10 @@ defmodule Atoll.CBOR do
   @moduledoc """
   Deterministic CBOR encoding for ATProto.
 
-  Currently supports integers, booleans, and null.
+  Currently supports integers, booleans, null, UTF-8 text, and byte strings.
   """
+
+  alias Atoll.CBOR.Bytes
 
   @min_integer -9_223_372_036_854_775_808
   @max_integer 9_223_372_036_854_775_807
@@ -21,6 +23,18 @@ defmodule Atoll.CBOR do
   def encode!(value)
       when is_integer(value) and value < 0 and value >= @min_integer do
     encode_head(1, -1 - value)
+  end
+
+  def encode!(%Bytes{data: data}) when is_binary(data) do
+    encode_head(2, byte_size(data)) <> data
+  end
+
+  def encode!(value) when is_binary(value) do
+    if String.valid?(value) do
+      encode_head(3, byte_size(value)) <> value
+    else
+      raise ArgumentError, "CBOR text must be valid UTF-8"
+    end
   end
 
   def encode!(_value) do

@@ -2,6 +2,7 @@ defmodule Atoll.CBORTest do
   use ExUnit.Case, async: true
 
   alias Atoll.CBOR
+  alias Atoll.CBOR.Bytes
 
   test "encodes null and booleans" do
     assert CBOR.encode!(nil) == <<0xF6>>
@@ -52,6 +53,58 @@ defmodule Atoll.CBORTest do
         ] do
       assert_raise ArgumentError, fn ->
         CBOR.encode!(value)
+      end
+    end
+  end
+
+  test "encodes empty and ASCII text" do
+    assert CBOR.encode!("") == <<0x60>>
+    assert CBOR.encode!("hello") == <<0x65, "hello">>
+  end
+
+  test "counts UTF-8 bytes and preserves their exact representation" do
+    assert CBOR.encode!("\u00E9") == <<0x62, 0xC3, 0xA9>>
+    assert CBOR.encode!("e\u0301") == <<0x63, 0x65, 0xCC, 0x81>>
+  end
+
+  test "rejects invalid UTF-8 text" do
+    for value <- [<<255>>, <<0xC3>>, <<0xC0, 0x80>>] do
+      assert_raise ArgumentError, "CBOR text must be valid UTF-8", fn ->
+        CBOR.encode!(value)
+      end
+    end
+  end
+
+  test "encodes byte strings without interpreting them as text" do
+    assert CBOR.encode!(%Bytes{data: <<>>}) == <<0x40>>
+
+    assert CBOR.encode!(%Bytes{data: <<0, 255>>}) ==
+             <<0x42, 0, 255>>
+
+    assert CBOR.encode!(%Bytes{data: "hello"}) ==
+             <<0x45, "hello">>
+  end
+
+  test "uses minimal length headers for text and byte strings" do
+    for {size, text_header, bytes_header} <- [
+          {23, <<0x77>>, <<0x57>>},
+          {24, <<0x78, 24>>, <<0x58, 24>>},
+          {255, <<0x78, 255>>, <<0x58, 255>>},
+          {256, <<0x79, 1, 0>>, <<0x59, 1, 0>>},
+          {65_535, <<0x79, 255, 255>>, <<0x59, 255, 255>>},
+          {65_536, <<0x7A, 0, 1, 0, 0>>, <<0x5A, 0, 1, 0, 0>>}
+        ] do
+      data = :binary.copy("a", size)
+
+      assert CBOR.encode!(data) == text_header <> data
+      assert CBOR.encode!(%Bytes{data: data}) == bytes_header <> data
+    end
+  end
+
+  test "rejects byte wrappers containing non-binary data" do
+    for value <- [nil, 123, [1, 2]] do
+      assert_raise ArgumentError, fn ->
+        CBOR.encode!(%Bytes{data: value})
       end
     end
   end
