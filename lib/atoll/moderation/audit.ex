@@ -4,6 +4,19 @@ defmodule Atoll.Moderation.Audit do
   alias Atoll.{Repo, Syntax}
   alias Atoll.Moderation.AuditEntry
 
+  @doc "Records completion of pending ordinary work against a verified active directory head."
+  def active_update!(row, head, before_handle, handle) do
+    insert!(
+      "atoll.plc.reconcileActive",
+      row.did,
+      %{kind: "plcUpdate", did: row.did},
+      %{operationCid: row.cid, observedHead: head},
+      %{completed: false, handle: before_handle},
+      %{completed: true, handle: handle},
+      "operator"
+    )
+  end
+
   @doc "Records an operator handle reconciliation atomically with the local profile change."
   def handle_change!(profile, handle) do
     insert!(

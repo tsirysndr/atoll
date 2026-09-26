@@ -153,7 +153,8 @@ record Lexicons or grant access to account data.
 - [x] Explicit audited retirement of historical signup key envelopes after completed key reconciliation.
 - [x] Recovery with explicitly absent local authority metadata and supplied private custody.
 - [x] Operator reconciliation of pending PLC operations explicitly nullified in verified directory history.
-- [ ] Recovery conflict resolution for pending operations still active or absent from directory history.
+- [x] Operator reconciliation of ordinary pending PLC operations retained in active history after compatible directory advancement.
+- [ ] Recovery/key-rotation conflict resolution after directory advancement, and resolution of pending operations absent from history.
 - [x] Per-revision signing-key provenance for historical record and block verification.
 - [x] Internal atomic repository signing-key replacement with unchanged-tree commits and vault rollback.
 - [x] PostgreSQL repository heads and atomic record, tree, and commit updates with optional head compare-and-swap.
@@ -3994,6 +3995,39 @@ explicitly nullified in verified history and recovery supersession before remote
 acceptance. Do not delete or mark these operations completed to bypass the journal.
 Schema downgrade refuses existing nullified rows rather than reopening them.
 
+
+### Reconciling active pending PLC work
+
+If an ordinary handle update or signed submission was accepted, but the directory
+advanced again before local completion, reconcile against a reviewed current head:
+
+```sh
+mix atoll.plc.reconcile_active did:plc:ACCOUNT PENDING_OPERATION_CID EXPECTED_DIRECTORY_HEAD_CID
+```
+
+The command fetches fresh verified audit history and checks its latest head. The
+pending CID must remain on the active chain and its signed operation must match
+the local journal. Both that operation and the latest head must advertise the
+local repository signing key, this PDS endpoint, and the intended primary handle.
+Additional aliases or unrelated services on the latest head are allowed. Custom
+handles require fresh forward resolution to the same DID. It makes no directory
+POST and cannot reconcile an absent or nullified operation this way.
+
+Under the event/account locks, Atoll rechecks key custody, profile, pending workflow,
+and handle reservation. A changed handle requires the exact matching reservation,
+an unchanged previous profile handle, and an available destination name. Completion
+atomically updates the profile and identity observation, confirms/completes the
+journal, releases its reservation, emits one identity event, and writes a private
+operator audit containing the operation CID and observed directory head. Existing
+confirmation timestamps are preserved. Completed retries verify fresh evidence
+without repeating events or audits.
+
+Active and deactivated accounts are supported; status, sessions, repository data,
+and installed keys are preserved. Pending signup, recovery, and key-replacement
+journals are rejected and require their dedicated workflows. This command does
+not resolve key/recovery supersession or operations absent from directory history.
+Local locks cannot prevent a later external directory update; a failed freshness or
+compatibility check leaves the pending state for further review.
 
 ### Custom-domain signup with operator reservation
 
