@@ -333,6 +333,7 @@ events. The `[:atoll, :identity, :refresh]` telemetry event reports a count and
 ### Operations
 
 - [x] `mix precommit` checks compilation warnings, unused dependency locks, formatting, and tests.
+- [x] GitHub Actions runs checks and the Docker MinIO integration suite on every push (also available manually).
 - [ ] Rate limiting and request / upload size limits.
 - [ ] Administrative account controls and takedowns.
 - [ ] Production configuration, HTTPS deployment, and signing-key protection.
