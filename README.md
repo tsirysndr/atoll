@@ -387,7 +387,8 @@ mutation. Deletes and empty batches need no record schema, even with `validate: 
 - [x] Internal ES256 DPoP signature, request, nonce, and access-token binding verification.
 - [x] Internal issuer/role-bound OAuth nonce issuance and PostgreSQL-shared atomic DPoP replay rejection.
 - [x] Internal bounded client-metadata retrieval and validation of client IDs, redirects, scopes, and authentication declarations.
-- [ ] OAuth client JWKS verification, JWT client assertions, and localhost virtual client metadata.
+- [x] Fresh inline/remote confidential-client JWKS retrieval and ES256 public-key validation.
+- [ ] OAuth JWT client assertions, session key binding, and localhost virtual client metadata.
 - [ ] OAuth nonce challenges and proof admission integrated into authorization/resource server routes.
 - [ ] ATProto OAuth authorization and resource server support.
 - [x] Live-session and repository ownership checks for blob uploads and single/batch record writes.
@@ -4456,10 +4457,36 @@ and 2 KiB URLs. The loader supports public `none` authentication and declaration
 for confidential `private_key_jwt` clients using ES256. A confidential declaration
 must identify exactly one inline or remote JWKS source; inline sets are limited
 to 32 key objects. These declarations are **not verified client authentication**:
-key validation, remote JWKS retrieval, JWT assertions, and session key binding
-remain unfinished. Metadata branding is untrusted and must not be displayed as
+the `ClientKeys` loader below adds key validation and remote JWKS retrieval, while
+JWT assertions and session key binding remain unfinished. Metadata branding is untrusted and must not be displayed as
 verified application identity. The optional localhost virtual-client flow and
 PAR/authorization/token route integration also remain pending.
 
 The declaration rules follow the
 [ATProto OAuth client profile](https://atproto.com/specs/oauth#clients).
+
+### Confidential-client verification keys
+
+`Atoll.OAuth.ClientKeys.fetch/2` freshly fetches and validates client metadata,
+requires `private_key_jwt`, and reads its inline JWKS or fetches the declared
+HTTPS JWKS URL. Remote key documents use the same DNS pinning, public-address
+checks, timeouts, 64 KiB limit, exact HTTP 200/JSON requirement, and duplicate-member
+rejection as client metadata. Neither metadata nor keys are cached by this loader;
+an unavailable or invalid response fails without returning previously seen keys.
+
+Key sets contain 1–32 ES256/P-256 public keys with distinct, case-sensitive `kid`
+values of 1–256 printable ASCII bytes. Coordinates must be canonical base64url
+encodings of exactly 32 bytes, and OpenSSL validates the full elliptic-curve point.
+Private/symmetric key fields, duplicate IDs, other algorithms/curves, incompatible
+`use`/`key_ops`, and key-level remote references are rejected. Optional `alg`,
+`use`, and `key_ops` must be `ES256`, `sig`, and `["verify"]` when supplied. Only
+the public curve and coordinates are passed to JOSE; unsupported keys invalidate
+the set instead of being silently selected or ignored.
+
+The result contains validated metadata and a map indexed by `kid`, with each
+entry's public JOSE key, algorithm, and JWK thumbprint. Removal or replacement of
+a key is visible on the next fetch, including replacement under an unchanged
+`kid`. These are advertised verification keys, not proof of client authentication.
+JWT assertion validation/replay rejection and enforcing the original session's
+`kid`/`alg`/`jkt` binding still need implementation before OAuth routes can use
+confidential-client authentication.

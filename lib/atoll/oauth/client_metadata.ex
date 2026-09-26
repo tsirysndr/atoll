@@ -2,7 +2,7 @@ defmodule Atoll.OAuth.ClientMetadata do
   @moduledoc """
   Fresh, bounded OAuth client metadata retrieval and declaration validation.
   Metadata is untrusted branding, not client authentication or consent. Embedded
-  and remote JWKS declarations still require key validation and JWT verification.
+  and remote JWKS declarations require ClientKeys validation and JWT verification.
   Transport options are trusted configuration, never request parameters.
   """
   alias Atoll.Identity.Resolver
@@ -11,7 +11,7 @@ defmodule Atoll.OAuth.ClientMetadata do
     with {:ok, uri} <- https_url(client_id),
          true <- authority(client_id) == authority_host(uri),
          {:ok, body} <- Resolver.fetch_oauth_document(client_id, opts),
-         {:ok, document} <- decode(body),
+         {:ok, document} <- decode_document(body),
          {:ok, metadata} <- validate(document, client_id, uri) do
       {:ok, metadata}
     else
@@ -187,7 +187,8 @@ defmodule Atoll.OAuth.ClientMetadata do
 
   defp scopes(_), do: {:error, :invalid_scope}
 
-  defp decode(body) when is_binary(body) and byte_size(body) <= 65_536 do
+  @doc false
+  def decode_document(body) when is_binary(body) and byte_size(body) <= 65_536 do
     with {:ok, %Jason.OrderedObject{} = object} <- Jason.decode(body, objects: :ordered_objects),
          do: {:ok, unique!(object, 0)},
          else: (_ -> {:error, :invalid_client_metadata})
@@ -195,7 +196,7 @@ defmodule Atoll.OAuth.ClientMetadata do
     ArgumentError -> {:error, :invalid_client_metadata}
   end
 
-  defp decode(_), do: {:error, :invalid_client_metadata}
+  def decode_document(_), do: {:error, :invalid_client_metadata}
   defp unique!(_, depth) when depth > 16, do: raise(ArgumentError)
 
   defp unique!(%Jason.OrderedObject{values: pairs}, depth) do
