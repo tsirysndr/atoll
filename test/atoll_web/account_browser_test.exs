@@ -261,7 +261,10 @@ defmodule AtollWeb.AccountBrowserTest do
     secret = Base.decode32!(enrollment.secret, padding: false)
     now = System.system_time(:second)
     {:ok, code} = Atoll.Accounts.TOTP.code(secret, now)
-    assert {:ok, :enabled} = Atoll.Accounts.Authenticator.confirm(c.pair.access_jwt, code)
+
+    assert {:ok, %{recovery_codes: _}} =
+             Atoll.Accounts.Authenticator.confirm(c.pair.access_jwt, code)
+
     {:ok, next} = Atoll.Accounts.TOTP.code(secret, now + 30)
     next
   end

@@ -40,6 +40,7 @@ defmodule Atoll.MixProject do
   defp deps do
     [
       {:phoenix, "~> 1.8.15"},
+      {:tailwind, "~> 0.5", runtime: Mix.env() == :dev},
       {:phoenix_ecto, "~> 4.5"},
       {:ecto_sql, "~> 3.13"},
       {:postgrex, ">= 0.0.0"},
@@ -63,11 +64,20 @@ defmodule Atoll.MixProject do
   # See the documentation for `Mix` for more info on aliases.
   defp aliases do
     [
-      setup: ["deps.get", "ecto.setup"],
+      setup: ["deps.get", "ecto.setup", "assets.setup", "assets.build"],
+      "assets.setup": ["tailwind.install --if-missing"],
+      "assets.build": ["tailwind atoll --minify"],
+      "assets.deploy": ["assets.build", "phx.digest"],
       "ecto.setup": ["ecto.create", "ecto.migrate", "run priv/repo/seeds.exs"],
       "ecto.reset": ["ecto.drop", "ecto.setup"],
       test: ["ecto.create --quiet", "ecto.migrate --quiet", "test"],
-      precommit: ["compile --warnings-as-errors", "deps.unlock --unused", "format", "test"]
+      precommit: [
+        "compile --warnings-as-errors",
+        "deps.unlock --unused",
+        "format",
+        "assets.build",
+        "test"
+      ]
     ]
   end
 end

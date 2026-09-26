@@ -7,6 +7,13 @@
 # General application configuration
 import Config
 
+config :tailwind,
+  version: "4.3.0",
+  atoll: [
+    args: ~w(--input=assets/css/account.css --output=priv/static/assets/account.css),
+    cd: Path.expand("..", __DIR__)
+  ]
+
 config :atoll,
   ecto_repos: [Atoll.Repo],
   generators: [timestamp_type: :utc_datetime]

@@ -27,7 +27,8 @@ defmodule Atoll.Accounts.Authenticator do
           credential_digest: digest,
           pending_expires_at: now + 600,
           confirmed_at: nil,
-          last_used_step: -1
+          last_used_step: -1,
+          recovery_hashes: []
         }
 
         row = row || %TOTPFactor{did: head.did}
@@ -51,11 +52,73 @@ defmodule Atoll.Accounts.Authenticator do
 
         case consume(row, code, now) do
           {:ok, row} ->
+            {codes, hashes} = recovery_codes(row.did)
+
             row
-            |> Ecto.Changeset.change(confirmed_at: now, pending_expires_at: nil)
+            |> Ecto.Changeset.change(
+              confirmed_at: now,
+              pending_expires_at: nil,
+              recovery_hashes: hashes
+            )
             |> Repo.update!(log: false)
 
-            {:ok, :enabled}
+            {:ok, %{recovery_codes: codes}}
+
+          error ->
+            error
+        end
+      end)
+    end
+  end
+
+  @doc "Owner-only factor state; never returns a secret or recovery hash."
+  def status(token) do
+    with {:ok, head} <- Sessions.authenticate_management(token) do
+      transact(fn ->
+        owner!(token, head.did, nil)
+        row = factor(head.did)
+
+        state =
+          cond do
+            is_nil(row) -> :disabled
+            row.confirmed_at -> :enabled
+            row.pending_expires_at > clock!() -> :pending
+            true -> :disabled
+          end
+
+        {:ok,
+         %{state: state, recovery_remaining: if(row, do: length(row.recovery_hashes), else: 0)}}
+      end)
+    end
+  end
+
+  @doc "Disable TOTP with a full session, fresh password and a one-time factor proof."
+  def disable(token, password, code), do: manage(token, password, code, :disable)
+
+  @doc "Replace all recovery codes, displaying the new plaintext codes only once."
+  def regenerate(token, password, code), do: manage(token, password, code, :regenerate)
+
+  defp manage(token, password, code, action) do
+    with {:ok, head} <- Sessions.authenticate_management(token),
+         {:ok, digest} <- Credentials.verified_digest(head.did, password) do
+      transact(fn ->
+        owner!(token, head.did, digest)
+        row = factor(head.did)
+        if is_nil(row) or is_nil(row.confirmed_at), do: Repo.rollback(:totp_not_enrolled)
+
+        case consume(row, code, clock!()) do
+          {:ok, row} when action == :disable ->
+            Repo.delete!(row, log: false)
+            {:ok, :disabled}
+
+          {:ok, row} ->
+            {codes, hashes} = recovery_codes(row.did)
+
+            row
+            |> Ecto.Changeset.change(recovery_hashes: hashes, version: random())
+            |> Repo.update!(log: false)
+
+            {:ok, %{recovery_codes: codes}}
 
           error ->
             error
@@ -158,23 +221,50 @@ defmodule Atoll.Accounts.Authenticator do
         {:error, :totp_rate_limited}
 
       true ->
-        with {:ok, secret} <- TOTPSecret.open(row.did, row.envelope) do
-          case TOTP.verify(secret, code, now, row.last_used_step) do
-            {:ok, step} ->
-              # Successful attempts also count, bounding admission throughput for a stolen secret.
-              updated =
-                row
-                |> Ecto.Changeset.change(last_used_step: step, attempts: row.attempts + 1)
-                |> Repo.update!(log: false)
+        case verify_factor(row, code, now) do
+          {:ok, attrs} ->
+            # All successful proofs count toward the same per-account attempt limit.
+            updated =
+              row
+              |> Ecto.Changeset.change(Map.put(attrs, :attempts, row.attempts + 1))
+              |> Repo.update!(log: false)
 
-              {:ok, updated}
+            {:ok, updated}
 
-            _ ->
-              row |> Ecto.Changeset.change(attempts: row.attempts + 1) |> Repo.update!(log: false)
-              {:error, :invalid_totp}
-          end
+          {:error, :invalid_totp} ->
+            row |> Ecto.Changeset.change(attempts: row.attempts + 1) |> Repo.update!(log: false)
+            {:error, :invalid_totp}
+
+          error ->
+            error
         end
     end
+  end
+
+  # Recovery codes are 128 random bits; fast hashes are safe for this high-entropy input.
+  defp recovery_codes(did) do
+    codes = for _ <- 1..10, do: Base.encode32(:crypto.strong_rand_bytes(16), padding: false)
+    {codes, Enum.map(codes, &recovery_hash(did, &1))}
+  end
+
+  defp recovery_hash(did, code),
+    do: :crypto.hash(:sha256, ["atoll.totp-recovery.v1", <<0>>, did, <<0>>, code])
+
+  defp verify_factor(%{confirmed_at: confirmed} = row, code, _now)
+       when not is_nil(confirmed) and is_binary(code) and byte_size(code) == 26 do
+    hash = recovery_hash(row.did, code)
+    # Compare all candidates, then remove the matched hash while holding the factor lock.
+    remaining = Enum.reject(row.recovery_hashes, &Plug.Crypto.secure_compare(&1, hash))
+
+    if length(remaining) < length(row.recovery_hashes),
+      do: {:ok, %{recovery_hashes: remaining}},
+      else: {:error, :invalid_totp}
+  end
+
+  defp verify_factor(row, code, now) do
+    with {:ok, secret} <- TOTPSecret.open(row.did, row.envelope),
+         {:ok, step} <- TOTP.verify(secret, code, now, row.last_used_step),
+         do: {:ok, %{last_used_step: step}}
   end
 
   defp owner!(token, did, digest) do

@@ -104,7 +104,7 @@ defmodule AtollWeb.ConsentController do
         put_resp_header(
           conn,
           "content-security-policy",
-          "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'"
+          "default-src 'none'; style-src 'self'; frame-ancestors 'none'; base-uri 'none'"
         )
 
       conn = put_session(conn, :oauth_pending, Map.put(context, "did", did))

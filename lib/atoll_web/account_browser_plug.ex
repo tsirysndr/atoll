@@ -3,7 +3,7 @@ defmodule AtollWeb.AccountBrowserPlug do
   @behaviour Plug
   import Plug.Conn
 
-  @paths ~w(/account/login /account/sessions /account/sessions/revoke /account/logout /oauth/authorize)
+  @paths ~w(/account/login /account/sessions /account/sessions/revoke /account/logout /oauth/authorize /account/security /account/security/begin /account/security/confirm /account/security/recovery /account/security/disable)
 
   def init(opts), do: opts
 
@@ -20,7 +20,7 @@ defmodule AtollWeb.AccountBrowserPlug do
         |> put_resp_header("x-frame-options", "DENY")
         |> put_resp_header(
           "content-security-policy",
-          "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'"
+          "default-src 'none'; style-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'"
         )
 
       cond do
@@ -40,13 +40,24 @@ defmodule AtollWeb.AccountBrowserPlug do
     end
   end
 
+  defp methods("/account/security"), do: ["GET"]
+
   defp methods(path) when path in ["/account/login", "/account/sessions", "/oauth/authorize"],
     do: if(path in ["/account/login", "/oauth/authorize"], do: ["GET", "POST"], else: ["GET"])
 
   defp methods(_), do: ["POST"]
 
   defp limited(conn, path) do
-    login? = path == "/account/login" and conn.method == "POST"
+    login? =
+      conn.method == "POST" and
+        path in [
+          "/account/login",
+          "/account/security/begin",
+          "/account/security/confirm",
+          "/account/security/recovery",
+          "/account/security/disable"
+        ]
+
     bucket = if login?, do: :account_login, else: :account_browser
     limit = if login?, do: 10, else: 100
 

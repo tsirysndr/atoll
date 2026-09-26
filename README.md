@@ -398,7 +398,7 @@ mutation. Deletes and empty batches need no record schema, even with `validate: 
 - [ ] Optional passkey enrollment, authentication, management, and recovery.
 - [x] Internal RFC 6238 TOTP verification, authenticator provisioning URIs, and account-bound encrypted secret envelopes.
 - [x] Internal persistent TOTP enrollment and confirmation, one-time login codes, database attempt limits, and key rotation.
-- [ ] Authenticator enrollment/management UI and recovery codes (optional TOTP).
+- [x] Authenticator enrollment/management UI and single-use recovery codes (optional TOTP).
 - [x] Internal owner-authenticated OAuth session inventory and per-grant revocation.
 - [x] Browser account login, OAuth session inventory/revocation, and logout with encrypted cookies and CSRF protection.
 - [x] Persisted OAuth client/DPoP/session bindings and source password-session deletion cascades.
@@ -5215,13 +5215,15 @@ revokes that session and therefore the grants authorized through it; the consent
 and account pages state this behavior. Browser cookie expiry alone does not
 revoke grants. Individually revoked applications and independently created grants
 retain their existing behavior. Authenticator login enforcement is described below;
-its enrollment UI and recovery flow, and optional passkeys, remain on the roadmap.
+its enrollment and recovery screens are available at `/account/security`. Optional
+passkeys remain on the roadmap.
 
 HTTP tests cover login resumption, permission narrowing, code exchange, a resource
 read, denial, logout cascades, CSRF and form tampering, hint mismatches, expired
 requests and duplicate/extra query fields. A transaction-level test verifies the
-displayed account cannot be replaced during code issuance. Visual browser review
-is still unavailable in the current tooling; discovery remains a separate task.
+displayed account cannot be replaced during code issuance. The shared login shell
+has been visually checked in desktop, mobile and dark mode; a complete browser
+OAuth interoperability run and discovery remain separate tasks.
 
 ### Authenticator cryptographic primitives
 
@@ -5251,12 +5253,13 @@ count. Tests cover account binding, tampering, fallback decryption and retiremen
 
 `Atoll.Accounts.Authenticator.begin/2` requires a full account session and fresh
 password. It stores an encrypted pending secret for ten minutes; `confirm/2`
-enables the factor only after a valid code and consumes that code. Enrollment is
-currently an internal API: public enrollment screens, disable/re-enrollment,
-recovery codes and passkeys remain pending. Accounts without a confirmed factor
-retain password login behavior.
+enables the factor only after a valid code and consumes that code. The browser
+flow at `/account/security` displays a manual setup key for Google Authenticator
+and compatible apps, then requires a code to finish setup. Accounts without a
+confirmed factor retain password login behavior. Passkeys remain pending.
 
-Confirmed factors require a six-digit code on browser password login and on
+Confirmed factors require a six-digit authenticator code or a 26-character
+recovery code on browser password login and on
 `com.atproto.server.createSession`, using the Atoll-specific optional `totpCode`
 field. If the email factor is enabled too, both factors are required. Restricted
 app passwords retain their existing behavior and cannot open browser management.
@@ -5273,3 +5276,37 @@ Session creation rechecks the factor version and a short-lived internal admissio
 under the account lock. Admission is server state, never an HTTP parameter.
 Tests cover enrollment expiry, credential changes, replay, parallel connections,
 attempt persistence, stale admissions, browser/API login and master-key rotation.
+
+### Authenticator recovery and management
+
+Confirmation returns ten random 128-bit recovery codes, displayed once in the
+uncached browser response. Only account-bound SHA-256 hashes are persisted.
+Enter a recovery code in the authenticator field (or XRPC `totpCode`) in place of
+a current app code; the password and any enabled email factor are still required.
+Recovery login consumes that code without disabling TOTP. Failed login steps
+cannot restore a consumed recovery code. Recovery attempts share the same
+five-attempt/five-minute database budget with ordinary codes and management.
+
+At `/account/security`, a full account session, fresh password and unused
+factor code are required to replace recovery codes or disable TOTP. Replacement
+invalidates the complete old set and any outstanding login admissions. Disabling
+removes the factor and its recovery codes; a new authenticator can then be enrolled.
+An unfinished setup can be restarted with a fresh password. Secrets and recovery
+codes are never returned by the status endpoint or stored in browser cookies.
+Existing password/OAuth sessions and app passwords remain active; changing the
+factor protects future password sign-ins. There is no self-service recovery if both the authenticator and all recovery
+codes are lost; no email-only factor reset is provided.
+
+### Browser styles and asset builds
+
+Account and OAuth consent screens share a locally compiled Tailwind CSS 4.3.0
+stylesheet. The compact card, neutral surfaces, field sizing and footer follow
+the deployed [Witchcraft PDS](https://pds.witchcraft.systems/account) and
+[selfhosted.social PDS](https://selfhosted.social/account) screens, with purple
+(`#8338ec`) actions and automatic light/dark colors. Atoll retains its own name,
+account fields and supported actions. `mix setup` installs the pinned CLI and builds the assets; development
+runs a Tailwind watcher. Use `mix assets.build` after changes to the stylesheet or
+screen markup. `mix precommit` builds assets before tests, so CI checks that the
+build succeeds. Before making a production release, run `MIX_ENV=prod mix assets.deploy` to build and digest the stylesheet. Generated assets are ignored
+by Git and must be included in the release. The pages load no third-party styles,
+scripts, fonts or QR services. CSP permits only same-origin styles.

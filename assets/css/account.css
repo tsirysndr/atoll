@@ -1,0 +1,50 @@
+@import "tailwindcss" source(none);
+@source "../../lib/atoll_web/controllers";
+
+@theme {
+  --color-brand: #8338ec;
+  --color-brand-hover: #7025d5;
+  --color-brand-soft: #f3ebff;
+  --color-surface: oklch(1 0 0);
+  --color-ink: oklch(0.145 0 0);
+  --color-muted: oklch(0.97 0 0);
+  --color-edge: oklch(0.922 0 0);
+  --color-subtle: oklch(0.556 0 0);
+}
+
+@layer base {
+  html { @apply min-h-full bg-muted; }
+  body { @apply min-h-svh font-sans text-sm text-ink antialiased leading-relaxed; }
+  h1 { @apply mb-4 text-center text-xl leading-snug font-medium; }
+  h2 { @apply mt-8 mb-3 text-lg font-semibold; }
+  p { @apply my-4; }
+  label { @apply my-4 block text-sm font-medium; }
+  input:not([type="hidden"]):not([type="checkbox"]) { @apply mt-2 block h-8 w-full rounded-lg border border-edge bg-transparent px-2.5 py-1 text-base font-normal placeholder:text-subtle md:text-sm; }
+  input[type="checkbox"] { @apply mr-3 size-4 accent-brand; }
+  button { @apply my-2 ml-auto block min-h-8 w-full sm:w-auto rounded-lg bg-brand px-2.5 py-1 text-sm font-medium text-white hover:bg-brand-hover cursor-pointer; }
+  button[value="deny"] { @apply border border-edge bg-surface text-ink hover:bg-muted; }
+  a { @apply text-brand underline-offset-4 hover:underline; }
+  a, button, input, summary { @apply focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-brand; }
+  summary { @apply cursor-pointer text-sm text-brand; }
+  li { @apply my-4 wrap-anywhere; }
+  strong, code { @apply wrap-anywhere; }
+  p[role="status"]:empty { @apply hidden; }
+  p[role="status"]:not(:empty) { @apply rounded-lg bg-brand-soft p-3 text-sm text-purple-950; }
+}
+
+@layer components {
+  .account-background {
+    @apply bg-muted;
+  }
+  .secret-panel { @apply rounded-lg border border-purple-100 bg-brand-soft p-4 font-mono text-purple-950; }
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --color-surface: oklch(0.205 0 0);
+    --color-ink: oklch(0.985 0 0);
+    --color-muted: oklch(0.269 0 0);
+    --color-edge: oklch(1 0 0 / 10%);
+    --color-subtle: oklch(0.708 0 0);
+  }
+}

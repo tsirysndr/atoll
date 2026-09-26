@@ -39,7 +39,7 @@ defmodule Atoll.AuthenticatorTest do
     assert {:ok, _} = Sessions.create(c.did, "authenticator password")
     now = System.system_time(:second)
     {:ok, code} = TOTP.code(secret, now)
-    assert {:ok, :enabled} = Authenticator.confirm(c.pair.access_jwt, code)
+    assert {:ok, %{recovery_codes: _}} = Authenticator.confirm(c.pair.access_jwt, code)
     assert Repo.get!(TOTPFactor, c.did).confirmed_at
 
     assert {:error, :totp_already_enabled} =
@@ -99,7 +99,7 @@ defmodule Atoll.AuthenticatorTest do
     {:ok, enrollment} = Authenticator.begin(c.pair.access_jwt, "authenticator password")
     secret = Base.decode32!(enrollment.secret, padding: false)
     {:ok, code} = TOTP.code(secret, System.system_time(:second))
-    assert {:ok, :enabled} = Authenticator.confirm(c.pair.access_jwt, code)
+    assert {:ok, %{recovery_codes: _}} = Authenticator.confirm(c.pair.access_jwt, code)
 
     assert {:error, :totp_required} =
              Sessions.create_for_account(c.did,
@@ -141,7 +141,7 @@ defmodule Atoll.AuthenticatorTest do
     secret = Base.decode32!(enrollment.secret, padding: false)
     now = System.system_time(:second)
     {:ok, initial} = TOTP.code(secret, now)
-    {:ok, :enabled} = Authenticator.confirm(c.pair.access_jwt, initial)
+    {:ok, %{recovery_codes: _}} = Authenticator.confirm(c.pair.access_jwt, initial)
     {:ok, next} = TOTP.code(secret, now + 30)
 
     assert {:error, :session_configuration_missing} =
@@ -167,6 +167,121 @@ defmodule Atoll.AuthenticatorTest do
     assert {:ok, secret} = TOTPSecret.open(c.did, row.envelope)
     assert Base.encode32(secret, padding: false) == enrollment.secret
     assert {:ok, %{totp: 0, unchanged: 1}} = Atoll.KeyRewrap.batch()
+  end
+
+  test "recovery codes are hashed, single-use, and do not disable the factor", c do
+    codes = enroll(c)
+    assert length(codes) == 10
+    assert length(Enum.uniq(codes)) == 10
+    assert Enum.all?(codes, &Regex.match?(~r/\A[A-Z2-7]{26}\z/, &1))
+    row = Repo.get!(TOTPFactor, c.did)
+    assert length(row.recovery_hashes) == 10
+    refute Enum.any?(codes, &(&1 in row.recovery_hashes))
+    assert Enum.all?(row.recovery_hashes, &(byte_size(&1) == 32))
+    assert {:ok, _} = Sessions.create(c.did, "authenticator password", totp_code: hd(codes))
+
+    assert {:error, :invalid_totp} =
+             Sessions.create(c.did, "authenticator password", totp_code: hd(codes))
+
+    assert {:error, :totp_required} = Sessions.create(c.did, "authenticator password")
+
+    assert {:ok, %{state: :enabled, recovery_remaining: 9}} =
+             Authenticator.status(c.pair.access_jwt)
+  end
+
+  test "replacing recovery codes invalidates old codes and pending login admission", c do
+    [first, second, third | _] = enroll(c)
+    {:ok, digest} = Credentials.verified_digest(c.did, "authenticator password")
+    {:ok, admission} = Authenticator.check_login(c.did, digest, first)
+
+    assert {:ok, %{recovery_codes: fresh}} =
+             Authenticator.regenerate(c.pair.access_jwt, "authenticator password", second)
+
+    assert length(fresh) == 10
+
+    assert {:error, :totp_required} =
+             Sessions.create_for_account(c.did,
+               credential_digest: digest,
+               totp_admission: admission
+             )
+
+    assert {:error, :invalid_totp} =
+             Sessions.create(c.did, "authenticator password", totp_code: third)
+
+    assert {:ok, _} = Sessions.create(c.did, "authenticator password", totp_code: hd(fresh))
+  end
+
+  test "disabling requires fresh password and factor proof and permits new enrollment", c do
+    codes = enroll(c)
+
+    assert {:error, :invalid_credentials} =
+             Authenticator.disable(c.pair.access_jwt, "wrong password", hd(codes))
+
+    assert {:error, :invalid_totp} =
+             Authenticator.disable(c.pair.access_jwt, "authenticator password", "bad")
+
+    assert Repo.get!(TOTPFactor, c.did).attempts == 2
+
+    assert {:ok, :disabled} =
+             Authenticator.disable(c.pair.access_jwt, "authenticator password", hd(codes))
+
+    refute Repo.get(TOTPFactor, c.did)
+    assert {:ok, _} = Sessions.create(c.did, "authenticator password")
+    assert {:ok, %{secret: _}} = Authenticator.begin(c.pair.access_jwt, "authenticator password")
+  end
+
+  test "recovery and ordinary codes share the durable attempt budget", c do
+    codes = enroll(c)
+
+    for _ <- 1..4 do
+      assert {:error, :invalid_totp} =
+               Authenticator.regenerate(
+                 c.pair.access_jwt,
+                 "authenticator password",
+                 "not a recovery code"
+               )
+    end
+
+    assert {:error, :totp_rate_limited} =
+             Sessions.create(c.did, "authenticator password", totp_code: hd(codes))
+
+    assert {:error, :totp_rate_limited} =
+             Authenticator.disable(c.pair.access_jwt, "authenticator password", hd(codes))
+
+    assert length(Repo.get!(TOTPFactor, c.did).recovery_hashes) == 10
+  end
+
+  test "a recovery code stays consumed after a later login failure", c do
+    codes = enroll(c)
+
+    assert {:error, :session_configuration_missing} =
+             Sessions.create(c.did, "authenticator password", totp_code: hd(codes), secret: nil)
+
+    assert {:error, :invalid_totp} =
+             Sessions.create(c.did, "authenticator password", totp_code: hd(codes))
+  end
+
+  test "restricted sessions cannot read or manage factors", c do
+    codes = enroll(c)
+    {:ok, app} = Atoll.Accounts.AppPasswords.create(c.pair.access_jwt, %{"name" => "restricted"})
+    {:ok, pair} = Sessions.create(c.did, app.password)
+    assert {:error, _} = Authenticator.status(pair.access_jwt)
+
+    assert {:error, _} =
+             Authenticator.regenerate(pair.access_jwt, "authenticator password", hd(codes))
+
+    assert {:error, _} =
+             Authenticator.disable(pair.access_jwt, "authenticator password", hd(codes))
+
+    assert Repo.get!(TOTPFactor, c.did).attempts == 1
+  end
+
+  defp enroll(c) do
+    {:ok, enrollment} = Authenticator.begin(c.pair.access_jwt, "authenticator password")
+    secret = Base.decode32!(enrollment.secret, padding: false)
+    {:ok, code} = TOTP.code(secret, System.system_time(:second))
+    {:ok, %{recovery_codes: codes}} = Authenticator.confirm(c.pair.access_jwt, code)
+    codes
   end
 
   defp wrong_code(secret) do

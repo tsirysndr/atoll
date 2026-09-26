@@ -70,7 +70,7 @@ defmodule AtollWeb.XRPCFallback do
         conn,
         401,
         "AuthFactorTokenRequired",
-        "Enter a six-digit authenticator code in totpCode."
+        "Enter an authenticator or recovery code in totpCode."
       )
 
   def call(conn, {:error, :invalid_totp}),

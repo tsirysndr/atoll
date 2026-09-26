@@ -27,7 +27,7 @@ config :atoll, AtollWeb.Endpoint,
   # Keep API failures in the same sanitized JSON format as production.
   debug_errors: false,
   secret_key_base: "9thh53AEEiK1f4+g62XIHSgk74eNsHcZY9Uf07leOCETBdiCeLGfBHdUIkd4OFtS",
-  watchers: []
+  watchers: [tailwind: {Tailwind, :install_and_run, [:atoll, ~w(--watch)]}]
 
 # ## SSL Support
 #

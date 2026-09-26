@@ -3,6 +3,7 @@ defmodule Atoll.Accounts.TOTPFactor do
   use Ecto.Schema
   @primary_key {:did, :string, autogenerate: false}
   schema "account_totp_factors" do
+    field :recovery_hashes, {:array, :binary}, default: [], redact: true
     field :version, :string, redact: true
     field :envelope, :binary, redact: true
     field :credential_digest, :binary, redact: true

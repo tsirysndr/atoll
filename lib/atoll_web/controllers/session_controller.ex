@@ -206,7 +206,10 @@ defmodule AtollWeb.SessionController do
   defp credentials(_), do: {:error, :invalid_request}
 
   defp valid_totp?(nil), do: true
-  defp valid_totp?(value) when is_binary(value), do: Regex.match?(~r/\A[0-9]{6}\z/, value)
+
+  defp valid_totp?(value) when is_binary(value),
+    do: Regex.match?(~r/\A(?:[0-9]{6}|[A-Z2-7]{26})\z/, value)
+
   defp valid_totp?(_), do: false
 
   defp valid_factor?(nil), do: true

@@ -12,6 +12,17 @@ defmodule AtollWeb.AccountController do
   end
 
   def dispatch(%{method: "POST"} = conn, "/account/login"), do: login(conn)
+
+  def dispatch(conn, path)
+      when path in [
+             "/account/security",
+             "/account/security/begin",
+             "/account/security/confirm",
+             "/account/security/recovery",
+             "/account/security/disable"
+           ],
+      do: AtollWeb.AuthenticatorController.dispatch(conn, path)
+
   def dispatch(conn, "/account/sessions"), do: sessions(conn)
   def dispatch(conn, "/account/sessions/revoke"), do: revoke(conn)
   def dispatch(conn, "/account/logout"), do: logout(conn)
@@ -43,7 +54,11 @@ defmodule AtollWeb.AccountController do
         |> go(if(pending, do: "/oauth/authorize", else: "/account/sessions"))
       else
         {:error, :totp_required} ->
-          login_form(conn, "Enter the current six-digit code from your authenticator app.", 401)
+          login_form(
+            conn,
+            "Enter the current six-digit code from your authenticator app, or an unused recovery code.",
+            401
+          )
 
         {:error, :totp_rate_limited} ->
           login_form(conn, "Too many authenticator attempts. Try again in five minutes.", 429)
@@ -128,7 +143,7 @@ defmodule AtollWeb.AccountController do
             conn,
             200,
             "Connected applications",
-            "<p>Revoking access disconnects this application. Other applications remain connected.</p>" <>
+            "<p><a href=\"/account/security\">Account security</a></p><p>Revoking access disconnects this application. Other applications remain connected.</p>" <>
               content <>
               next <>
               "<form method=\"post\" action=\"/account/logout\">" <>
@@ -191,16 +206,18 @@ defmodule AtollWeb.AccountController do
     page(
       conn,
       status,
-      "Sign in to Atoll",
-      "<p>Manage applications connected to your account.</p><p role=\"status\">" <>
+      "Sign in",
+      "<p class=\"text-center text-sm text-subtle\">Enter your account credentials to continue.</p><p role=\"status\">" <>
         e(error) <>
         "</p><form method=\"post\" action=\"/account/login\">" <>
         csrf() <>
-        "<label>Email or DID<input name=\"identifier\" autocomplete=\"username\" required maxlength=\"2048\"></label>" <>
+        "<label>Email or DID<input name=\"identifier\" autocomplete=\"username\" autofocus required maxlength=\"2048\"></label>" <>
         "<label>Account password<input type=\"password\" name=\"password\" autocomplete=\"current-password\" required maxlength=\"1024\"></label>" <>
-        "<label>Email sign-in code (if requested)<input name=\"authFactorToken\" autocomplete=\"one-time-code\" maxlength=\"32\"></label>" <>
-        "<label>Authenticator code (if enabled)<input name=\"totpCode\" inputmode=\"numeric\" pattern=\"[0-9]{6}\" autocomplete=\"one-time-code\" maxlength=\"6\"></label>" <>
-        "<button>Sign in</button></form>"
+        "<details class=\"my-5\"" <>
+        if(status == 200, do: "", else: " open") <>
+        "><summary>Two-factor authentication</summary><label>Email sign-in code (if requested)<input name=\"authFactorToken\" autocomplete=\"one-time-code\" maxlength=\"32\"></label>" <>
+        "<label>Authenticator or recovery code (if enabled)<input name=\"totpCode\" pattern=\"([0-9]{6}|[A-Z2-7]{26})\" autocomplete=\"one-time-code\" maxlength=\"26\"></label>" <>
+        "</details><button>Sign in</button></form>"
     )
   end
 
@@ -222,11 +239,23 @@ defmodule AtollWeb.AccountController do
   defp go(conn, path), do: conn |> put_resp_header("location", path) |> send_resp(303, "")
 
   def page(conn, status, title, content) do
+    width =
+      if conn.request_path in ["/account/login", "/oauth/authorize"],
+        do: "max-w-sm",
+        else: "max-w-2xl"
+
     html =
       "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>" <>
         e(title) <>
-        "</title><style>body{font:1rem system-ui;line-height:1.6;max-width:46rem;margin:3rem auto;padding:0 1rem;color:#17252b;background:#f4f8f8}main{background:white;padding:2rem;border-radius:1rem}label{display:block;margin:1rem 0}input{display:block;box-sizing:border-box;width:100%;padding:.6rem}input[type=checkbox]{display:inline;width:auto;margin-right:.5rem}button{padding:.65rem 1rem;cursor:pointer}li{overflow-wrap:anywhere;margin:1.5rem 0}a{color:#076b75}</style></head><body><main><h1>" <>
-        e(title) <> "</h1>" <> content <> "</main></body></html>"
+        "</title><link rel=\"stylesheet\" href=\"" <>
+        e(AtollWeb.Endpoint.static_path("/assets/account.css")) <>
+        "\"></head><body class=\"account-background\"><div class=\"flex min-h-svh flex-col items-center justify-center p-6 md:p-10\"><main class=\"w-full " <>
+        width <>
+        " overflow-hidden rounded-xl border border-edge bg-surface pt-4\"><header class=\"mb-4 px-4 pt-2 text-center font-medium\">Atoll PDS</header><div class=\"px-4\"><h1>" <>
+        e(title) <>
+        "</h1>" <>
+        content <>
+        "</div><footer class=\"mt-4 border-t border-edge bg-muted/50 p-4 text-center text-sm\"><select aria-label=\"Language\" class=\"h-7 rounded-lg border border-edge bg-transparent px-2\"><option value=\"en\">🇺🇸 English</option></select></footer></main></div></body></html>"
 
     conn |> put_resp_content_type("text/html") |> send_resp(status, html)
   end
