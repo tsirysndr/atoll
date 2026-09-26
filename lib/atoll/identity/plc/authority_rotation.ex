@@ -104,6 +104,33 @@ defmodule Atoll.Identity.PLC.AuthorityRotation do
     end
   end
 
+  @doc "Reconcile accepted authority rotation after reviewed compatible directory advancement; never submits."
+  def reconcile(did, cid, expected_head, opts \\ []) do
+    with false <- Repo.in_transaction?(),
+         %Update{
+           nullified_at: nil,
+           authority_public_key: public,
+           recovery_expected_head: nil,
+           signing_public_key: nil
+         } = row
+         when is_binary(public) <- Repo.get_by(Update, did: did, cid: cid),
+         %Profile{} = profile <- Repo.get(Profile, did),
+         observation = Repo.get(Observation, did),
+         :ok <- key_only(row, profile.handle),
+         {:ok, %{entries: entries, state: state}} <-
+           Client.fetch_audit(did, Keyword.take(opts, [:plug])),
+         true <- not state.tombstoned and state.cid == expected_head and cid in state.active_cids,
+         true <- Enum.any?(entries, &(&1["cid"] == cid and &1["operation"] == row.operation)),
+         true <- state.operation["rotationKeys"] == row.operation["rotationKeys"],
+         :ok <- forward(did, profile.handle, opts) do
+      finish(row, profile.handle, observation, state)
+    else
+      true -> {:error, :plc_update_inside_transaction}
+      {:error, _} = error -> error
+      _ -> {:error, :plc_conflict}
+    end
+  end
+
   defp preflight(row, handle, observation) do
     Repo.transaction(fn ->
       head = lock!(row.did)
@@ -121,7 +148,7 @@ defmodule Atoll.Identity.PLC.AuthorityRotation do
     end)
   end
 
-  defp finish(row, handle, observation) do
+  defp finish(row, handle, observation, verified_head \\ nil) do
     Repo.transaction(fn ->
       head = lock!(row.did)
 
@@ -129,8 +156,23 @@ defmodule Atoll.Identity.PLC.AuthorityRotation do
         Repo.get_by(Update, did: row.did, cid: row.cid) || Repo.rollback(:plc_update_not_found)
 
       unless is_nil(current.nullified_at) and current.operation == row.operation and
-               current.confirmed_at,
+               (current.confirmed_at || verified_head),
              do: Repo.rollback(:plc_conflict)
+
+      if verified_head do
+        if current.recovery_expected_head || current.signing_public_key,
+          do: Repo.rollback(:invalid_key_workflow)
+
+        check!(compatible(verified_head.operation, head, handle))
+
+        unless verified_head.operation["rotationKeys"] == current.operation["rotationKeys"],
+          do: Repo.rollback(:plc_conflict)
+
+        unwrap!(KeyVault.fetch(row.did))
+
+        if is_nil(current.confirmed_at),
+          do: current |> Ecto.Changeset.change(confirmed_at: DateTime.utc_now()) |> Repo.update!()
+      end
 
       if current.completed_at do
         fence!(head, public_key(current), handle, observation, current.operation)
@@ -146,7 +188,8 @@ defmodule Atoll.Identity.PLC.AuthorityRotation do
           row.did,
           row.cid,
           current.expected_authority_key,
-          public_key(current)
+          public_key(current),
+          if(verified_head, do: verified_head.cid)
         )
 
         %{did: row.did, cid: row.cid, result: :completed}

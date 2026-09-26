@@ -4,11 +4,14 @@ defmodule Mix.Tasks.Atoll.Plc.RotateAuthority do
   @moduledoc """
       mix atoll.plc.rotate_authority stage DID EXPECTED_AUTHORITY_DID_KEY k256|p256
       mix atoll.plc.rotate_authority resume DID OPERATION_CID
+      mix atoll.plc.rotate_authority reconcile DID OPERATION_CID EXPECTED_DIRECTORY_HEAD_CID
       mix atoll.plc.rotate_authority status DID
 
   Stage generates and encrypts a replacement key and prints the operation CID.
   Resume submits that exact operation and reconciles local publication. Retry
   resume with the same CID after errors. Requires retained PLC rotation authority.
+  Reconcile uses fresh active history without resubmission when the directory has
+  advanced compatibly. Requires the exact expected head and unchanged authority list.
   """
   def run(args) do
     action =
@@ -29,9 +32,12 @@ defmodule Mix.Tasks.Atoll.Plc.RotateAuthority do
         ["resume", "did:plc:" <> _ = did, cid] ->
           fn opts -> Atoll.Identity.PLC.AuthorityRotation.resume(did, cid, opts) end
 
+        ["reconcile", "did:plc:" <> _ = did, cid, expected] ->
+          fn opts -> Atoll.Identity.PLC.AuthorityRotation.reconcile(did, cid, expected, opts) end
+
         _ ->
           Mix.raise(
-            "Usage: mix atoll.plc.rotate_authority stage DID EXPECTED_AUTHORITY_DID_KEY k256|p256 | resume DID OPERATION_CID"
+            "Usage: mix atoll.plc.rotate_authority stage DID EXPECTED_AUTHORITY_DID_KEY k256|p256 | resume DID OPERATION_CID | reconcile DID OPERATION_CID EXPECTED_DIRECTORY_HEAD_CID | status DID"
           )
       end
 

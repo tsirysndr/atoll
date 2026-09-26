@@ -176,12 +176,17 @@ defmodule Atoll.Moderation.Audit do
   end
 
   @doc "Records an ordinary PLC authority-key replacement without private material."
-  def authority_rotation!(did, cid, expected, replacement) do
+  def authority_rotation!(did, cid, expected, replacement, observed_head \\ nil) do
+    requested = %{operationCid: cid, expectedKey: expected}
+
+    requested =
+      if observed_head, do: Map.put(requested, :observedHead, observed_head), else: requested
+
     insert!(
-      "atoll.plc.rotateAuthority",
+      if(observed_head, do: "atoll.plc.reconcileAuthority", else: "atoll.plc.rotateAuthority"),
       did,
       %{kind: "plcRotationKey", did: did},
-      %{operationCid: cid, expectedKey: expected},
+      requested,
       %{key: expected},
       %{key: replacement},
       "operator"

@@ -154,7 +154,8 @@ record Lexicons or grant access to account data.
 - [x] Recovery with explicitly absent local authority metadata and supplied private custody.
 - [x] Operator reconciliation of pending PLC operations explicitly nullified in verified directory history.
 - [x] Operator reconciliation of ordinary pending PLC operations retained in active history after compatible directory advancement.
-- [ ] Recovery/key-rotation conflict resolution after directory advancement, and resolution of pending operations absent from history.
+- [x] Operator completion of retained authority-key rotations after compatible directory advancement, without resubmission.
+- [ ] Recovery/repository-key conflict resolution after directory advancement, and resolution of pending operations absent from history.
 - [x] Per-revision signing-key provenance for historical record and block verification.
 - [x] Internal atomic repository signing-key replacement with unchanged-tree commits and vault rollback.
 - [x] PostgreSQL repository heads and atomic record, tree, and commit updates with optional head compare-and-swap.
@@ -3587,6 +3588,30 @@ mix atoll.plc.rotate_authority stage did:plc:ACCOUNT EXPECTED_AUTHORITY_DID_KEY 
 mix atoll.plc.rotate_authority status did:plc:ACCOUNT
 mix atoll.plc.rotate_authority resume did:plc:ACCOUNT STAGED_OPERATION_CID
 ```
+
+If that rotation was accepted but the directory advanced before local installation,
+review the new directory head and reconcile without another POST:
+
+```sh
+mix atoll.plc.rotate_authority reconcile did:plc:ACCOUNT STAGED_OPERATION_CID EXPECTED_DIRECTORY_HEAD_CID
+```
+
+Reconciliation verifies fresh active history containing the exact staged operation
+and requires the expected current head. The latest operation must retain the
+staged authority list in the same order, the local repository key, the same handle,
+and this PDS endpoint. Unrelated service changes are allowed. Forward handle
+verification, readable old authority/repository custody, and unchanged local
+profile/observation checks still apply. Recovery and combined key workflows are
+not accepted by this command.
+
+Within the account transaction, reconciliation records confirmation if absent,
+installs the retained replacement authority, completes the journal, releases its
+pending envelope, and writes an `atoll.plc.reconcileAuthority` audit containing the
+observed directory head. Installed authority metadata retains the accepted
+rotation's CID. Account status, repository signing keys, records, and sessions do
+not change; no stream event is emitted. Repeating the command with fresh compatible
+evidence does not duplicate the audit or completion timestamp. Conflicting or stale
+evidence leaves pending custody intact for review.
 
 `stage` accepts `k256` or `p256` and generates the replacement inside the durable
 staging transaction. Fresh verified directory history must authorize the

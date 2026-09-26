@@ -291,6 +291,122 @@ defmodule Atoll.PLCAuthorityRotationTest do
     assert {:ok, _} = AuthorityRotation.resume(c.did, cid, c.opts)
   end
 
+  test "reconciliation adopts accepted authority after compatible advancement without POST", c do
+    {:ok, %{cid: cid}} = AuthorityRotation.stage(c.did, c.expected, :p256, c.opts)
+    row = Repo.get_by!(Update, did: c.did, cid: cid)
+    {:ok, key} = PendingAuthorityKeys.fetch(c.did, cid)
+
+    expected =
+      advance(
+        c,
+        row,
+        key,
+        &put_in(&1, ["services", "extra"], %{
+          "type" => "ExampleService",
+          "endpoint" => "https://extra.example.com"
+        })
+      )
+
+    {:ok, _} = Repositories.set_status(c.did, :deactivated)
+    seq = Events.latest_seq()
+    assert {:error, :plc_conflict} = AuthorityRotation.resume(c.did, cid, c.opts)
+
+    assert {:ok, %{result: :completed}} =
+             AuthorityRotation.reconcile(c.did, cid, expected, c.opts)
+
+    assert Registrations.rotation_key(c.did) == {:ok, key}
+    assert KeyVault.fetch(c.did) == {:ok, c.old}
+    assert {:ok, %{status: :deactivated}} = Repositories.get_head(c.did)
+    assert Events.latest_seq() == seq
+    assert {:error, :key_not_found} = PendingAuthorityKeys.fetch(c.did, cid)
+    finished = Repo.get_by!(Update, did: c.did, cid: cid)
+    assert finished.confirmed_at && finished.completed_at
+    audit = Repo.one!(Atoll.Moderation.AuditEntry)
+    assert audit.operation == "atoll.plc.reconcileAuthority"
+    assert audit.requested["observedHead"] == expected
+    assert {:ok, _} = AuthorityRotation.reconcile(c.did, cid, expected, c.opts)
+    assert Repo.get_by!(Update, did: c.did, cid: cid).completed_at == finished.completed_at
+    assert Repo.aggregate(Atoll.Moderation.AuditEntry, :count) == 1
+    assert Agent.get(c.directory, & &1.posts) == 0
+  end
+
+  test "authority-list or identity advancement conflicts preserve pending custody", c do
+    {:ok, %{cid: cid}} = AuthorityRotation.stage(c.did, c.expected, :p256, c.opts)
+    row = Repo.get_by!(Update, did: c.did, cid: cid)
+    {:ok, key} = PendingAuthorityKeys.fetch(c.did, cid)
+    base = Agent.get(c.directory, & &1)
+
+    for change <- [
+          &Map.update!(&1, "rotationKeys", fn keys -> Enum.reverse(keys) end),
+          &Map.put(&1, "alsoKnownAs", ["at://other.example.com"]),
+          &put_in(&1, ["services", "atproto_pds", "endpoint"], "https://other.example.com")
+        ] do
+      Agent.update(c.directory, fn _ -> base end)
+      expected = advance(c, row, key, change)
+      assert {:error, _} = AuthorityRotation.reconcile(c.did, cid, expected, c.opts)
+      assert PendingAuthorityKeys.fetch(c.did, cid) == {:ok, key}
+      assert Registrations.rotation_key(c.did) == {:ok, c.rotation}
+      assert is_nil(Repo.get_by!(Update, did: c.did, cid: cid).confirmed_at)
+    end
+
+    assert Repo.aggregate(Atoll.Moderation.AuditEntry, :count) == 0
+  end
+
+  test "stale expectations and local changes during lookup cannot install pending authority", c do
+    {:ok, %{cid: cid}} = AuthorityRotation.stage(c.did, c.expected, :p256, c.opts)
+    row = Repo.get_by!(Update, did: c.did, cid: cid)
+    {:ok, key} = PendingAuthorityKeys.fetch(c.did, cid)
+    expected = advance(c, row, key, & &1)
+    assert {:error, :plc_conflict} = AuthorityRotation.reconcile(c.did, cid, cid, c.opts)
+
+    opts =
+      Keyword.put(c.opts, :txt_lookup, fn _ ->
+        Repo.get!(Profile, c.did)
+        |> Ecto.Changeset.change(handle: "interim.example.com")
+        |> Repo.update!()
+
+        [["did=" <> c.did]]
+      end)
+
+    assert {:error, :stale_identity_refresh} =
+             AuthorityRotation.reconcile(c.did, cid, expected, opts)
+
+    assert PendingAuthorityKeys.fetch(c.did, cid) == {:ok, key}
+    assert is_nil(Repo.get_by!(Update, did: c.did, cid: cid).confirmed_at)
+    assert Agent.get(c.directory, & &1.posts) == 0
+  end
+
+  defp advance(c, row, key, change) do
+    {:ok, unsigned} = Operation.successor(row.operation)
+    {:ok, advanced} = Operation.sign(change.(unsigned), key)
+    {:ok, expected} = Operation.cid(advanced)
+
+    entry = fn operation, cid, date ->
+      %{
+        "did" => c.did,
+        "operation" => operation,
+        "cid" => cid,
+        "nullified" => false,
+        "createdAt" => date
+      }
+    end
+
+    Agent.update(c.directory, fn state ->
+      %{
+        state
+        | audit:
+            state.audit ++
+              [
+                entry.(row.operation, row.cid, "2026-01-02T00:00:00Z"),
+                entry.(advanced, expected, "2026-01-03T00:00:00Z")
+              ],
+          last: advanced
+      }
+    end)
+
+    expected
+  end
+
   test "operator CLI stages and resumes using public metadata only", c do
     Application.put_env(:atoll, :identity_resolution_options, Keyword.drop(c.opts, [:plug]))
     Application.put_env(:atoll, :plc_submission_options, Keyword.take(c.opts, [:plug]))

@@ -99,7 +99,7 @@ defmodule Atoll.Identity.PLC.RotationKeys do
 
   defp store(_, _, _, _), do: {:error, :invalid_rotation_key}
 
-  @doc "Internal atomic adoption after the caller freshly verifies the staged update is current."
+  @doc "Internal atomic adoption after the caller freshly verifies the accepted staged authority remains current."
   def adopt_pending!(did, cid), do: install_pending!(did, cid, :ordinary)
 
   @doc "Internal recovery installation; caller must freshly verify accepted recovery authority."
