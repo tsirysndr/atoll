@@ -163,7 +163,8 @@ The same `validate: true` restriction applies to batch requests.
 - [x] Opt-in fresh PLC DID signup under configured server domains, including durable retries and optional recovery keys.
 - [x] Hosted handle resolution through `/.well-known/atproto-did`.
 - [x] Configurable invite-required signup and migration, limited uses, durable redemption and local operator issuance.
-- [ ] Invite-code HTTP administration, account invite listings, custom-domain signup, phone verification, and abandoned signup reservation cleanup.
+- [x] Separately authenticated HTTP invite issuance, bulk issuance, and disabling by code/account.
+- [ ] Admin/account invite listings, automatic invite allocation, custom-domain signup, phone verification, and abandoned signup reservation cleanup.
 - [x] Internal DID-scoped password credentials with salted Argon2id hashes, bounded input, redacted inspection, and duplicate protection.
 - [x] Shared configurable Cloudflare Worker email delivery client.
 - [x] Email confirmation requests and one-use confirmation through the Worker.
@@ -1183,6 +1184,39 @@ after policy becomes stricter. `Atoll.Accounts.Invites.disable/1` is an internal
 operator API that blocks new reservations without cancelling existing ones.
 
 Migration redemption also rolls back with failed provisioning and service-token
-consumption. Public HTTP issuance/disable administration, account invite listings,
-and automatic invite allocation remain pending; the Mix task and internal APIs
-are trusted operator operations.
+consumption. HTTP issuance/disabling uses the separate operator authentication
+below. Invite listings and automatic allocation remain pending; the Mix task and
+internal APIs are trusted operator operations.
+
+
+### Administrative invite endpoints
+
+Set `ATOLL_ADMIN_PASSWORD` to a separate secret of 32–1024 printable, non-space
+ASCII bytes to enable these routes. With no password configured they return 503.
+Use HTTP Basic authentication with username `admin` and that password over the
+PDS's HTTPS endpoint. Account access/refresh JWTs, app-password sessions and
+service JWTs do not grant admin access. The admin password is independent of all
+account passwords and signing/encryption keys; configure it in the deployment
+secret store. This implementation does not configure a live admin password.
+
+- `com.atproto.server.createInviteCode`: POST `useCount` (1–10000), optionally
+  `forAccount` (an existing local DID); returns `code`.
+- `com.atproto.server.createInviteCodes`: POST `codeCount` (1–500), `useCount`, and
+  optional `forAccounts` (up to 100 distinct local DIDs). It creates `codeCount`
+  codes for each supplied account, with at most 500 codes total. With no accounts,
+  the response groups unowned codes under `admin`. A failed owner validation rolls
+  back the entire batch.
+- `com.atproto.admin.disableInviteCodes`: POST optional `codes` and/or `accounts`,
+  each limited to 100 entries. It disables the selected codes and all codes
+  attributed to those DIDs. Unknown codes/accounts and an empty selection are
+  harmless no-ops. Existing signup reservations remain redeemable as described
+  above; new reservations are rejected.
+
+These methods accept POST JSON bodies up to 16 KiB. Authentication occurs before
+body parsing and is checked again by the controller. Responses use `no-store`;
+failed authentication includes a Basic challenge. A separate per-node, direct-IP
+bucket allows 60 admin attempts per five minutes, including failed authentication;
+forwarded client addresses do not change it. Account-wide disabling has a
+one-second lock timeout and five-second statement timeout, rolling back on timeout.
+Invite codes are filtered from request-parameter logs. General account moderation,
+admin invite listings, and other administrative methods remain pending.

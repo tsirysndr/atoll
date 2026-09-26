@@ -1,6 +1,9 @@
 defmodule AtollWeb.XRPCFallback do
   use AtollWeb, :controller
 
+  def call(conn, {:error, :admin_busy}),
+    do: error(conn, 503, "ServiceUnavailable", "Administrative update is busy; retry later.")
+
   def call(conn, {:error, :invalid_invite_code}),
     do: error(conn, 400, "InvalidInviteCode", "A valid, available invite code is required.")
 

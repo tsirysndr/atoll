@@ -1,5 +1,9 @@
 import Config
 
+config :atoll,
+       :admin_password,
+       Atoll.Accounts.AdminAuth.password_from_env!(System.get_env("ATOLL_ADMIN_PASSWORD"))
+
 case System.get_env("ATOLL_INVITE_CODE_REQUIRED", "false") do
   "true" -> config :atoll, :invite_code_required, true
   "false" -> config :atoll, :invite_code_required, false

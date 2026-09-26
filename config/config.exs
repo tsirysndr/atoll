@@ -32,6 +32,8 @@ config :phoenix, :json_library, Jason
 
 config :phoenix, :filter_parameters, [
   "inviteCode",
+  "code",
+  "codes",
   "password",
   "identifier",
   "email",

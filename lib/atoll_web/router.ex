@@ -26,6 +26,9 @@ defmodule AtollWeb.Router do
     pipe_through :api
 
     get "/com.atproto.server.describeServer", ServerController, :describe
+    post "/com.atproto.server.createInviteCode", AdminInviteController, :create
+    post "/com.atproto.server.createInviteCodes", AdminInviteController, :create_many
+    post "/com.atproto.admin.disableInviteCodes", AdminInviteController, :disable
 
     post "/com.atproto.server.requestEmailConfirmation",
          SessionController,

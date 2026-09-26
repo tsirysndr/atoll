@@ -40,6 +40,73 @@ defmodule Atoll.Accounts.Invites do
 
   def create(_, _), do: {:error, :invalid_request}
 
+  @doc "Creates up to 500 total codes atomically, grouped by attributed account."
+  def create_many(%{"codeCount" => count, "useCount" => uses} = params) do
+    accounts = Map.get(params, "forAccounts", [])
+
+    if Map.keys(params) -- ["codeCount", "useCount", "forAccounts"] == [] and
+         is_integer(count) and count in 1..500 and is_integer(uses) and uses in 1..10_000 and
+         is_list(accounts) and length(accounts) <= 100 and Enum.all?(accounts, &Syntax.did?/1) and
+         Enum.uniq(accounts) == accounts and max(length(accounts), 1) * count <= 500 do
+      accounts = if accounts == [], do: [nil], else: accounts
+
+      Repo.transaction(fn ->
+        Events.lock!()
+
+        Enum.map(accounts, fn account ->
+          codes =
+            Enum.map(1..count, fn _ ->
+              case create(uses, account) do
+                {:ok, result} -> result.code
+                {:error, reason} -> Repo.rollback(reason)
+              end
+            end)
+
+          %{account: account || "admin", codes: codes}
+        end)
+      end)
+    else
+      {:error, :invalid_request}
+    end
+  end
+
+  def create_many(_), do: {:error, :invalid_request}
+
+  @doc "Disables exact codes and/or every code attributed to the supplied accounts."
+  def disable_many(params) when is_map(params) do
+    codes = Map.get(params, "codes", [])
+    accounts = Map.get(params, "accounts", [])
+
+    if Map.keys(params) -- ["codes", "accounts"] == [] and
+         is_list(codes) and length(codes) <= 100 and Enum.all?(codes, &valid_code?/1) and
+         is_list(accounts) and length(accounts) <= 100 and Enum.all?(accounts, &Syntax.did?/1) do
+      Repo.transaction(fn ->
+        # Bound a potentially large account-wide update while preserving all-or-nothing semantics.
+        Repo.query!("SET LOCAL lock_timeout = '1s'")
+        Repo.query!("SET LOCAL statement_timeout = '5s'")
+        Events.lock!()
+
+        {count, _} =
+          Repo.update_all(
+            from(i in Invite, where: i.code in ^codes or i.for_account in ^accounts),
+            [set: [disabled: true, updated_at: DateTime.utc_now()]],
+            log: false
+          )
+
+        count
+      end)
+    else
+      {:error, :invalid_request}
+    end
+  rescue
+    e in Postgrex.Error ->
+      if e.postgres[:code] in [:lock_not_available, :query_canceled],
+        do: {:error, :admin_busy},
+        else: reraise(e, __STACKTRACE__)
+  end
+
+  def disable_many(_), do: {:error, :invalid_request}
+
   def disable(code) do
     if valid_code?(code) do
       Repo.transaction(fn ->

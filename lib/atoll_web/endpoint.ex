@@ -38,6 +38,7 @@ defmodule AtollWeb.Endpoint do
   plug Plug.Telemetry, event_prefix: [:phoenix, :endpoint]
 
   plug AtollWeb.SubscribeReposPlug
+  plug AtollWeb.AdminRequestPlug
   plug AtollWeb.SessionRequestPlug
   plug AtollWeb.BlobUploadPlug
   plug AtollWeb.RecordWritePlug
