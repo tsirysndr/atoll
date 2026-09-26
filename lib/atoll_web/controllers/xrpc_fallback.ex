@@ -1,6 +1,12 @@
 defmodule AtollWeb.XRPCFallback do
   use AtollWeb, :controller
 
+  def call(conn, {:error, :app_password_exists}),
+    do: error(conn, 400, "InvalidRequest", "App password name is already in use.")
+
+  def call(conn, {:error, :app_password_limit}),
+    do: error(conn, 400, "InvalidRequest", "Account app password limit reached.")
+
   def call(conn, {:error, :email_token_required}),
     do: error(conn, 400, "TokenRequired", "A token from the current email address is required.")
 

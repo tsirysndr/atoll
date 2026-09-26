@@ -44,6 +44,11 @@ defmodule AtollWeb.PasswordResetControllerTest do
   test "recovery replaces password, revokes all account sessions, and prevents stale-proof login",
        c do
     {:ok, second} = Sessions.create(@did, @old)
+
+    {:ok, app} =
+      Atoll.Accounts.AppPasswords.create(c.pair.access_jwt, %{"name" => "recovery-test"})
+
+    {:ok, app_session} = Sessions.create(@did, app.password)
     other = "did:web:other-password.example.com"
     {:ok, _} = Repositories.create(other, SigningKey.generate())
     {:ok, _} = Credentials.create(other, @old)
@@ -55,6 +60,9 @@ defmodule AtollWeb.PasswordResetControllerTest do
     refute profile.password_reset_digest == code
     assert response(reset(c, code, @new), 200) == ""
     assert {:error, :invalid_credentials} = Sessions.create(@did, @old)
+    assert {:error, :invalid_credentials} = Sessions.create(@did, app.password)
+    assert {:error, :invalid_token} = Sessions.authenticate(app_session.access_jwt)
+    refute Repo.exists?(Atoll.Accounts.AppPassword)
 
     assert {:error, :invalid_credentials} =
              Sessions.create_for_account(@did, credential_digest: digest)

@@ -17,7 +17,7 @@ defmodule AtollWeb.BlobUploadPlug do
   defp upload(%{method: "POST"} = conn) do
     with :ok <- limit(conn),
          {:ok, token} <- AtollWeb.BearerToken.get(conn),
-         {:ok, _} <- Sessions.authenticate_management(token),
+         {:ok, _} <- Sessions.authenticate_session(token),
          :ok <- encoding(conn),
          {:ok, mime} <- mime(conn),
          {:ok, length} <- content_length(conn),

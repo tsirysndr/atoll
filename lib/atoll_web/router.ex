@@ -34,6 +34,9 @@ defmodule AtollWeb.Router do
     post "/com.atproto.server.updateEmail", SessionController, :update_email
     post "/com.atproto.server.requestPasswordReset", SessionController, :request_password_reset
     post "/com.atproto.server.resetPassword", SessionController, :reset_password
+    post "/com.atproto.server.createAppPassword", SessionController, :create_app_password
+    get "/com.atproto.server.listAppPasswords", SessionController, :list_app_passwords
+    post "/com.atproto.server.revokeAppPassword", SessionController, :revoke_app_password
     post "/com.atproto.server.createSession", SessionController, :create
     post "/com.atproto.server.createAccount", SessionController, :create_account
     get "/com.atproto.server.getSession", SessionController, :show

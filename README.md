@@ -165,7 +165,7 @@ The same `validate: true` restriction applies to batch requests.
 - [x] Deactivated-account login, refresh, session inspection, repository import, blob upload, missing-blob inventory, and migration-scoped service tokens.
 - [x] Email/password login with normalized addresses and locked ownership rechecks.
 - [ ] Authentication factors and taken-down account session scopes.
-- [ ] App passwords.
+- [x] App password creation, metadata listing, revocation, restricted sessions, and privileged service delegation.
 - [ ] ATProto OAuth authorization and resource server support.
 - [x] Live-session and repository ownership checks for blob uploads and single/batch record writes.
 - [ ] Authorization for remaining account and repository operations.
@@ -458,7 +458,7 @@ until expiration even if the originating session is revoked; receiving services
 must enforce audience, method, expiration, and their own authorization policy.
 Atoll does not yet accept service JWTs as local access tokens or proxy requests.
 Deactivated accounts can request only the `com.atproto.server.createAccount`
-method for migration. Taken-down sessions and app-password delegation remain pending.
+method for migration. Taken-down sessions remain pending. App-password delegation requires an explicit method; standard app passwords cannot delegate chat methods.
 
 The internal `Atoll.Accounts.ServiceTokens.authenticate/4` verifier accepts account
 service JWTs with `typ: JWT`, ES256K/ES256, and default or explicit `kid: #atproto`.
@@ -803,3 +803,33 @@ credential error, with dummy Argon2 work for unknown addresses. Email ownership
 is rechecked under the account lock before session insertion. Updated addresses
 stop resolving to the old account. Existing account status checks, session caps,
 and direct-peer login limits apply. Request logs redact the identifier.
+
+
+### App passwords
+
+With a full account session, use `POST com.atproto.server.createAppPassword` with
+JSON `name` and optional `privileged` (default false). The response includes the
+password only once, plus its name, creation time, and privilege flag.
+`GET com.atproto.server.listAppPasswords` returns metadata without passwords.
+`POST com.atproto.server.revokeAppPassword` takes JSON `name` and atomically
+removes that credential and all of its sessions. Revoking an absent name succeeds.
+Names are case-sensitive, nonblank UTF-8 strings up to 128 bytes without control
+characters. Accounts may have at most 100 app passwords.
+
+Generated passwords contain 160 random bits encoded as eight groups of four
+lowercase base32 characters. Only a purpose- and account-bound SHA-256 digest is
+stored. Log in through `createSession` using DID, verified handle, or local email
+and the app password. App sessions count toward the ordinary session limit.
+They use `com.atproto.appPass` or `com.atproto.appPassPrivileged` access scopes;
+refresh preserves the persisted scope. Every access check compares the JWT scope
+with the session row, and session creation rechecks that the app credential has
+not been revoked.
+
+Both scopes permit ordinary record writes, blob uploads, session inspection,
+refresh, and logout. Account-management operations, repository migration imports,
+and app-password management require a full account session. `getServiceAuth`
+requires an explicit method for app sessions, rejects migration account creation,
+and permits `chat.bsky.*` methods only for privileged app passwords. Existing
+protected-method restrictions still apply. Already-issued service JWTs remain
+valid until their short expiry. Password recovery revokes all app credentials as
+well as sessions. OAuth and taken-down account scopes remain pending.

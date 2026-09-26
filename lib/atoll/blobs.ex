@@ -28,7 +28,7 @@ defmodule Atoll.Blobs do
         # deadlock with refresh, which takes a head share lock before its session lock.
         active_head!(claims["sub"], "FOR UPDATE", true)
 
-        with {:ok, %{did: did}} <- Atoll.Accounts.Sessions.authenticate_management(token),
+        with {:ok, %{did: did}} <- Atoll.Accounts.Sessions.authenticate_session(token),
              {:ok, blob} <- stage_for_status(did, bytes, content_type, opts, true) do
           blob
         else

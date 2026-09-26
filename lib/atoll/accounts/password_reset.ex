@@ -107,10 +107,16 @@ defmodule Atoll.Accounts.PasswordReset do
         {count, _} =
           Repo.update_all(
             from(c in Credential, where: c.did == ^head.did),
-            [set: [password_hash: hash]], log: false)
+            [set: [password_hash: hash]],
+            log: false
+          )
 
         if count != 1, do: Repo.rollback(:invalid_email_token)
         Repo.delete_all(from(s in Session, where: s.did == ^head.did), log: false)
+
+        Repo.delete_all(from(a in Atoll.Accounts.AppPassword, where: a.did == ^head.did),
+          log: false
+        )
 
         profile
         |> Ecto.Changeset.change(

@@ -13,14 +13,17 @@ defmodule Atoll.Accounts.Tokens do
 
   def pair(did, session_id, opts \\ []) do
     with {:ok, key, audience} <- configuration(opts),
-         true <- Syntax.did?(did) and valid_id?(session_id) do
+         true <- Syntax.did?(did) and valid_id?(session_id),
+         scope = Keyword.get(opts, :access_scope, "com.atproto.access"),
+         true <-
+           scope in ["com.atproto.access", "com.atproto.appPass", "com.atproto.appPassPrivileged"] do
       now = Keyword.get(opts, :now, System.system_time(:second))
       jti = random_id()
       claims = %{"sub" => did, "aud" => audience, "iat" => now, "sid" => session_id}
 
       {:ok,
        %{
-         access_jwt: sign(key, claims, :access, now),
+         access_jwt: sign(key, Map.put(claims, "scope", scope), :access, now),
          refresh_jwt: sign(key, Map.put(claims, "jti", jti), :refresh, now),
          refresh_hash: digest(jti),
          expires_at: now + @refresh_ttl
@@ -49,7 +52,7 @@ defmodule Atoll.Accounts.Tokens do
   def verify(_, _, _), do: {:error, :invalid_token}
 
   defp verify_signed(token, kind, key, audience, now) do
-    {typ, scope, ttl} = profile(kind)
+    {typ, _scope, ttl} = profile(kind)
 
     with {true, %JOSE.JWT{fields: claims}, %JOSE.JWS{fields: header, b64: :undefined}} <-
            JOSE.JWT.verify_strict(key, ["HS256"], token),
@@ -57,11 +60,12 @@ defmodule Atoll.Accounts.Tokens do
          %{
            "sub" => did,
            "aud" => ^audience,
-           "scope" => ^scope,
+           "scope" => scope,
            "sid" => sid,
            "iat" => issued,
            "exp" => expires
          } <- claims,
+         true <- valid_scope?(kind, scope),
          true <- Syntax.did?(did) and valid_id?(sid),
          true <- kind == :access or valid_id?(claims["jti"]),
          true <-
@@ -83,7 +87,7 @@ defmodule Atoll.Accounts.Tokens do
     key
     |> JOSE.JWT.sign(
       %{"alg" => "HS256", "typ" => typ},
-      Map.merge(claims, %{"scope" => scope, "exp" => now + ttl})
+      Map.merge(claims, %{"scope" => Map.get(claims, "scope", scope), "exp" => now + ttl})
     )
     |> JOSE.JWS.compact()
     |> elem(1)
@@ -97,6 +101,11 @@ defmodule Atoll.Accounts.Tokens do
       do: {:ok, JOSE.JWK.from_oct(secret), audience},
       else: {:error, :session_configuration_missing}
   end
+
+  defp valid_scope?(:access, scope),
+    do: scope in ["com.atproto.access", "com.atproto.appPass", "com.atproto.appPassPrivileged"]
+
+  defp valid_scope?(:refresh, scope), do: scope == "com.atproto.refresh"
 
   defp valid_id?(id) when is_binary(id), do: Regex.match?(~r/\A[A-Za-z0-9_-]{43}\z/, id)
   defp valid_id?(_), do: false

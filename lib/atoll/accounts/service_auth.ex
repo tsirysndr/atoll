@@ -28,8 +28,9 @@ defmodule Atoll.Accounts.ServiceAuth do
          :ok <- method(params["lxm"]),
          {:ok, expiry} <- expiration(params["exp"]) do
       Repo.transaction(fn ->
-        with {:ok, %{did: did} = head} <- Sessions.authenticate_management(token),
+        with {:ok, %{did: did} = head} <- Sessions.authenticate_session(token),
              :ok <- account_scope(head, params["lxm"]),
+             :ok <- app_scope(head.scope, params["lxm"]),
              now = System.system_time(:second),
              {:ok, exp} <- bounded_expiry(expiry, params["lxm"], now),
              {:ok, key} <- KeyVault.fetch(did),
@@ -43,6 +44,18 @@ defmodule Atoll.Accounts.ServiceAuth do
       false -> {:error, :invalid_request}
       error -> error
     end
+  end
+
+  defp app_scope("com.atproto.access", _), do: :ok
+  defp app_scope(_, nil), do: {:error, :forbidden}
+
+  defp app_scope(scope, method) do
+    method = String.downcase(method)
+
+    if method == "com.atproto.server.createaccount" or
+         (scope == "com.atproto.appPass" and String.starts_with?(method, "chat.bsky.")),
+       do: {:error, :forbidden},
+       else: :ok
   end
 
   defp account_scope(%{status: :active}, _method), do: :ok

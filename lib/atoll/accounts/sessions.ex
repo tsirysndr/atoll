@@ -9,12 +9,22 @@ defmodule Atoll.Accounts.Sessions do
   """
   import Ecto.Query
   alias Atoll.{Repo, Repositories}
-  alias Atoll.Accounts.{Credentials, EmailAddress, Profile, Session, Tokens}
+  alias Atoll.Accounts.{AppPasswords, Credentials, EmailAddress, Profile, Session, Tokens}
   alias Atoll.Repositories.Head
 
   def create(did, password, opts \\ []) do
-    with {:ok, digest} <- Credentials.verified_digest(did, password),
-         do: create_for_account(did, Keyword.put(opts, :credential_digest, digest))
+    case Credentials.verified_digest(did, password) do
+      {:ok, digest} ->
+        create_for_account(did, Keyword.put(opts, :credential_digest, digest))
+
+      {:error, :invalid_credentials} ->
+        with {:ok, app} <- AppPasswords.verify(did, password),
+             do:
+               create_for_account(
+                 did,
+                 Keyword.merge(opts, app_password_id: app.id, access_scope: app.scope)
+               )
+    end
   end
 
   @doc "Creates a password session using a local account email, rechecking ownership under the account lock."
@@ -53,6 +63,11 @@ defmodule Atoll.Accounts.Sessions do
                  do: Repo.rollback(:invalid_credentials)
         end
 
+        if app_id = opts[:app_password_id] do
+          unless AppPasswords.current?(did, app_id, opts[:access_scope]),
+            do: Repo.rollback(:invalid_credentials)
+        end
+
         now = Keyword.get(opts, :now, System.system_time(:second))
         live = from s in Session, where: s.did == ^did and s.expires_at > ^now
         if Repo.aggregate(live, :count) >= limit, do: Repo.rollback(:session_limit_exceeded)
@@ -61,13 +76,15 @@ defmodule Atoll.Accounts.Sessions do
           %Session{
             id: id,
             did: did,
+            app_password_id: opts[:app_password_id],
+            access_scope: Keyword.get(opts, :access_scope, "com.atproto.access"),
             refresh_hash: pair.refresh_hash,
             expires_at: pair.expires_at
           },
           log: false
         )
 
-        response(head, pair)
+        response(head, pair, Keyword.get(opts, :access_scope, "com.atproto.access"))
       end)
     end
   end
@@ -89,13 +106,17 @@ defmodule Atoll.Accounts.Sessions do
         session = session!(claims, opts, true)
         matching_refresh!(session, claims)
 
-        case Tokens.pair(session.did, session.id, opts) do
+        case Tokens.pair(
+               session.did,
+               session.id,
+               Keyword.put(opts, :access_scope, session.access_scope)
+             ) do
           {:ok, pair} ->
             session
             |> Ecto.Changeset.change(refresh_hash: pair.refresh_hash, expires_at: pair.expires_at)
             |> Repo.update!(log: false)
 
-            response(head, pair)
+            response(head, pair, session.access_scope)
 
           {:error, reason} ->
             Repo.rollback(reason)
@@ -106,7 +127,8 @@ defmodule Atoll.Accounts.Sessions do
 
   @doc "Read-only account status authorization; accepts inactive repositories without granting write access."
   def authenticate_status(token) do
-    with {:ok, claims} <- Tokens.verify(token, :access) do
+    with {:ok, claims} <- Tokens.verify(token, :access),
+         :ok <- full_scope(claims) do
       Repo.transaction(fn ->
         head =
           Repo.one(from h in Head, where: h.did == ^claims["sub"], lock: "FOR SHARE") ||
@@ -120,7 +142,8 @@ defmodule Atoll.Accounts.Sessions do
 
   @doc "Authorizes session management for active or deactivated accounts; not ordinary write permission."
   def authenticate_management(token, opts \\ []) do
-    with {:ok, claims} <- Tokens.verify(token, :access, opts) do
+    with {:ok, claims} <- Tokens.verify(token, :access, opts),
+         :ok <- full_scope(claims) do
       Repo.transaction(fn ->
         head = active_head!(claims["sub"], false, true)
         session!(claims, opts, false)
@@ -128,6 +151,20 @@ defmodule Atoll.Accounts.Sessions do
       end)
     end
   end
+
+  @doc "Inspects a live session, including restricted app sessions; does not authorize account management."
+  def authenticate_session(token, opts \\ []) do
+    with {:ok, claims} <- Tokens.verify(token, :access, opts) do
+      Repo.transaction(fn ->
+        head = active_head!(claims["sub"], false, true)
+        session!(claims, opts, false)
+        %{did: head.did, status: head.status, scope: claims["scope"]}
+      end)
+    end
+  end
+
+  defp full_scope(%{"scope" => "com.atproto.access"}), do: :ok
+  defp full_scope(_), do: {:error, :forbidden}
 
   @doc "Revokes a session with its current refresh token, even while the repository is inactive."
   def revoke(token, opts \\ []) do
@@ -150,6 +187,10 @@ defmodule Atoll.Accounts.Sessions do
         else: from(s in query, lock: "FOR SHARE")
 
     session = Repo.one(query) || Repo.rollback(:invalid_token)
+
+    if claims["scope"] != "com.atproto.refresh" and claims["scope"] != session.access_scope,
+      do: Repo.rollback(:invalid_token)
+
     now = Keyword.get(opts, :now, System.system_time(:second))
     if session.expires_at <= now, do: Repo.rollback(:expired_token)
     session
@@ -188,10 +229,11 @@ defmodule Atoll.Accounts.Sessions do
     end
   end
 
-  defp response(head, pair),
+  defp response(head, pair, scope),
     do: %{
       did: head.did,
       status: head.status,
+      scope: scope,
       access_jwt: pair.access_jwt,
       refresh_jwt: pair.refresh_jwt
     }

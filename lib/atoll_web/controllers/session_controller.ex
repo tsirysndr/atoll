@@ -37,6 +37,24 @@ defmodule AtollWeb.SessionController do
          do: send_resp(conn, 200, "")
   end
 
+  def create_app_password(conn, _params) do
+    with {:ok, token} <- bearer(conn),
+         {:ok, result} <- Atoll.Accounts.AppPasswords.create(token, conn.body_params),
+         do: json(conn, result)
+  end
+
+  def list_app_passwords(conn, _params) do
+    with {:ok, token} <- bearer(conn),
+         {:ok, result} <- Atoll.Accounts.AppPasswords.list(token),
+         do: json(conn, result)
+  end
+
+  def revoke_app_password(conn, _params) do
+    with {:ok, token} <- bearer(conn),
+         {:ok, _} <- Atoll.Accounts.AppPasswords.revoke(token, conn.body_params),
+         do: send_resp(conn, 200, "")
+  end
+
   def create_account(conn, _params) do
     with {:ok, token} <- bearer(conn),
          {:ok, account} <- Atoll.Accounts.Provisioning.import_account(token, conn.body_params),
@@ -53,7 +71,7 @@ defmodule AtollWeb.SessionController do
 
   def show(conn, _params) do
     with {:ok, token} <- bearer(conn),
-         {:ok, head} <- Sessions.authenticate_management(token) do
+         {:ok, head} <- Sessions.authenticate_session(token) do
       json(conn, identity(head))
     end
   end
