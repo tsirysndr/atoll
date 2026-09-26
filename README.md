@@ -75,7 +75,8 @@ record Lexicons or grant access to account data.
 - [ ] Repository description (`com.atproto.repo.describeRepo`).
 - [x] In-memory CARv1 encoding and decoding with block verification and resource limits.
 - [x] Consistent repository CAR export through the internal storage API.
-- [ ] Repository CAR import and streaming large transfers.
+- [x] Internal complete CAR import for existing repositories, with pinned-key verification, expected-head checks, and atomic replacement.
+- [ ] Authenticated `com.atproto.repo.importRepo`, new-account migration, and streaming large transfers.
 
 ### Identity, accounts, and authentication
 
@@ -148,6 +149,26 @@ The development server description currently returns:
 ```
 
 ## Checks
+
+### Internal repository restore
+
+For an existing repository, a trusted caller can import a complete CAR snapshot:
+
+```elixir
+{:ok, head} = Atoll.Repositories.get_head(did)
+{:ok, archive} = File.read("repository.car")
+Atoll.Repositories.import_archive(did, archive, head.head)
+```
+
+The import uses the stored public key, requires the expected head to remain
+unchanged, and replaces records and the head in one transaction. It accepts newer
+revisions or an identical-head retry. Archives must include the full tree and all
+records; referenced blobs and external records are not required. Unreferenced
+blocks are discarded. Local limits are 64 MiB per archive, 1 MB per record, and
+five minutes of future revision tolerance. This API does not authorize users,
+resolve identities, rotate keys, or validate record Lexicons.
+
+### Validation
 
 ```sh
 mix precommit

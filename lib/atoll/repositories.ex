@@ -13,7 +13,51 @@ defmodule Atoll.Repositories do
   """
   import Ecto.Query
   alias Atoll.{CAR, CBOR, CID, Commit, DataModel, MST, Repo, SigningKey, Storage, Syntax, TID}
-  alias Atoll.Repositories.{Head, Record}
+  alias Atoll.Repositories.{Head, Record, Snapshot}
+
+  @doc """
+  Replaces an existing repository with a verified complete CAR snapshot.
+
+  Uses the repository's pinned public key and requires the caller's expected
+  head CID. Revisions must advance, except an identical head is an idempotent
+  retry. This internal API neither authorizes an account nor rotates its key.
+  """
+  def import_archive(did, archive, expected_head)
+      when is_binary(did) and is_binary(expected_head) do
+    with {:ok, prior} <- get_head(did),
+         {:ok, snapshot} <- Snapshot.decode(archive, did, prior.curve, prior.public_key) do
+      Repo.transaction(fn ->
+        head = locked_head!(did, "FOR UPDATE")
+
+        if head.head != expected_head or head.public_key != prior.public_key or
+             head.curve != prior.curve,
+           do: Repo.rollback(:invalid_swap)
+
+        cond do
+          snapshot.head == head.head ->
+            head
+
+          snapshot.rev <= head.rev ->
+            Repo.rollback(:stale_revision)
+
+          true ->
+            Enum.each(snapshot.blocks, fn {cid, bytes} -> :ok = Storage.put_block(cid, bytes) end)
+            Repo.delete_all(from r in Record, where: r.did == ^did)
+
+            snapshot.records
+            |> Enum.map(fn {path, cid} -> %{did: did, path: path, cid: cid} end)
+            |> Enum.chunk_every(1000)
+            |> Enum.each(&Repo.insert_all(Record, &1))
+
+            head
+            |> Ecto.Changeset.change(head: snapshot.head, rev: snapshot.rev)
+            |> Repo.update!()
+        end
+      end)
+    end
+  end
+
+  def import_archive(_, _, _), do: {:error, :invalid_snapshot}
 
   def create(did, %SigningKey{} = key) do
     with true <- Syntax.did?(did),
