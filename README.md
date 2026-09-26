@@ -246,6 +246,7 @@ write transaction; token verification alone is not write permission.
 - [ ] Media-content sniffing and Lexicon-specific media validation.
 - [x] Atomic nested record-reference tracking, ownership/metadata checks on writes, and withdrawal when the last reference is removed.
 - [x] Public `com.atproto.sync.getBlob` and paginated `listBlobs`, with `since` filtering, repository status checks, and restrictive content headers.
+- [x] Authenticated `com.atproto.repo.listMissingBlobs` with account-scoped CID pagination and referencing record URIs.
 - [x] Internal staged-blob expiration with a 24-hour default grace period and a one-hour minimum.
 - [x] Durable cleanup queue for withdrawn/expired blob ownership, shared-owner checks, PostgreSQL/S3 deletion, and retryable S3 failures.
 - [x] Opt-in supervised cleanup scheduling with bounded batches, task deadlines, failure recovery, and outcome telemetry.
@@ -497,6 +498,17 @@ Uploads are buffered in memory with a 64 MiB limit, a five-second per-read timeo
 and a 30-second overall read budget. Imports allow ten attempts per direct peer IP
 per five minutes on each server process. This endpoint does not provision accounts,
 transfer blob bytes, rotate signing keys, or implement streaming migration.
+
+After import, `GET /xrpc/com.atproto.repo.listMissingBlobs` with an access token
+lists referenced CIDs that lack matching account-owned blob metadata. It accepts
+`limit` (1–1000, default 500) and an exclusive CID `cursor`, returning each CID
+once with a referencing `recordUri`. Uploading the matching bytes and MIME type
+removes that blob from the results. Metadata mismatches remain listed. This is
+an inventory of current database references, not a physical storage integrity
+scan; missing or corrupted backend objects require separate operational checks.
+It currently requires an active account and shares the session endpoint's
+300-request per-IP, per-five-minute limit. Pagination reflects current state
+rather than a snapshot across requests.
 
 ### Validation
 

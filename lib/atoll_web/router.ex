@@ -30,6 +30,7 @@ defmodule AtollWeb.Router do
     get "/com.atproto.identity.resolveHandle", IdentityController, :resolve_handle
     get "/com.atproto.repo.getRecord", RepoController, :get_record
     post "/com.atproto.repo.uploadBlob", BlobController, :upload
+    get "/com.atproto.repo.listMissingBlobs", BlobController, :list_missing
     post "/com.atproto.repo.createRecord", RecordWriteController, :create
     post "/com.atproto.repo.putRecord", RecordWriteController, :put
     post "/com.atproto.repo.deleteRecord", RecordWriteController, :delete

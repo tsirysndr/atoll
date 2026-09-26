@@ -11,6 +11,15 @@ defmodule AtollWeb.BlobController do
 
   def upload(_conn, _params), do: {:error, :auth_required}
 
+  def list_missing(conn, params) do
+    with {:ok, token} <- AtollWeb.BearerToken.get(conn),
+         {:ok, limit} <- limit(params["limit"]),
+         {:ok, cursor} <- cursor(params["cursor"]),
+         {:ok, result} <- Atoll.Blobs.Missing.list(token, limit, cursor) do
+      json(conn, result)
+    end
+  end
+
   def get_blob(conn, params) do
     with true <- Syntax.did?(params["did"]),
          {:ok, cid} <- raw_cid(params["cid"]),

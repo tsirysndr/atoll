@@ -7,7 +7,7 @@ defmodule AtollWeb.SessionRequestPlug do
     @prefix <> "refreshSession",
     @prefix <> "deleteSession"
   ]
-  @query @prefix <> "getSession"
+  @queries [@prefix <> "getSession", "/xrpc/com.atproto.repo.listMissingBlobs"]
   @parser Plug.Parsers.init(
             parsers: [:json],
             json_decoder: Jason,
@@ -21,11 +21,11 @@ defmodule AtollWeb.SessionRequestPlug do
   def call(conn, _opts) do
     # Match Phoenix's decoded path segments, including percent-encoded route spellings.
     path = "/" <> Enum.map_join(conn.path_info, "/", &URI.decode/1)
-    if path in @procedures or path == @query, do: session(conn, path), else: conn
+    if path in @procedures or path in @queries, do: session(conn, path), else: conn
   end
 
   defp session(conn, path) do
-    method = if path == @query, do: "GET", else: "POST"
+    method = if path in @queries, do: "GET", else: "POST"
 
     conn =
       conn
