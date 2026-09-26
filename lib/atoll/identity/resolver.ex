@@ -11,14 +11,23 @@ defmodule Atoll.Identity.Resolver do
   @max_bytes 262_144
 
   def resolve(did, opts \\ []) do
+    with {:ok, doc} <- resolve_document(did, opts),
+         {:ok, identity} <- Document.parse(doc, did) do
+      {:ok, Map.put(identity, :document, doc)}
+    end
+  end
+
+  @doc "Resolves a DID document without requiring a PDS service; useful for service identities."
+  def resolve_document(did, opts \\ []) do
     with {:ok, url} <- resolution_url(did),
          {:ok, body} <- fetch(url, opts),
          {:ok, doc} <- Jason.decode(body),
-         {:ok, identity} <- Document.parse(doc, did) do
-      {:ok, Map.put(identity, :document, doc)}
+         %{"id" => ^did} <- doc do
+      {:ok, doc}
     else
       {:error, %Jason.DecodeError{}} -> {:error, :invalid_did_document}
-      error -> error
+      {:error, _} = error -> error
+      _ -> {:error, :invalid_did_document}
     end
   end
 

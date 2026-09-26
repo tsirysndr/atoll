@@ -30,6 +30,28 @@ defmodule Atoll.Identity.Document do
 
   def parse(_, _), do: {:error, :invalid_did_document}
 
+  @doc "Extracts the uniquely identified account signing key from a resolved document."
+  def account_key(%{"id" => did, "verificationMethod" => methods}, did) when is_list(methods) do
+    matches =
+      Enum.filter(methods, fn
+        %{"id" => id} -> id in ["#atproto", did <> "#atproto"]
+        _ -> false
+      end)
+
+    case matches do
+      [method] ->
+        case signing_key(method, did) do
+          nil -> {:error, :invalid_did_document}
+          key -> {:ok, key}
+        end
+
+      _ ->
+        {:error, :invalid_did_document}
+    end
+  end
+
+  def account_key(_, _), do: {:error, :invalid_did_document}
+
   defp signing_key(
          %{"id" => id, "controller" => did, "type" => "Multikey", "publicKeyMultibase" => value},
          did

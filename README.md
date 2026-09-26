@@ -422,7 +422,8 @@ locking protects shared objects when collectors overlap.
 - [ ] Authenticated identity-management endpoints and distributed refresh coordination.
 - [ ] Relay discovery / crawl requests and federation interoperability tests.
 - [x] `com.atproto.server.getServiceAuth` issues short-lived account-signed service JWTs.
-- [ ] Incoming service JWT verification and request proxying to AppViews and other services.
+- [x] Internal incoming account service-JWT verification with exact audience/method checks and persistent replay protection.
+- [ ] Service-authenticated account migration endpoints and request proxying to AppViews and other services.
 
 Historical `getBlocks` reads are limited to active repositories and return only
 requested blocks in a rootless CAR. Deleted record bytes remain publicly retrievable
@@ -449,6 +450,23 @@ must enforce audience, method, expiration, and their own authorization policy.
 Atoll does not yet accept service JWTs as local access tokens or proxy requests.
 Deactivated accounts can request only the `com.atproto.server.createAccount`
 method for migration. Taken-down sessions and app-password delegation remain pending.
+
+The internal `Atoll.Accounts.ServiceTokens.authenticate/4` verifier accepts account
+service JWTs with `typ: JWT`, ES256K/ES256, and default or explicit `kid: #atproto`.
+It resolves the issuer's DID document without requiring a PDS service, rejects
+ambiguous account keys, and requires exact expected audience and method matches.
+`iat`, `exp`, and `jti` are required, with a maximum one-hour lifetime and up to
+30 seconds of issuer clock skew. Bare audiences are accepted only when the caller
+explicitly expects that exact bare DID; they do not match service fragments.
+Duplicate JSON fields and unsupported protected headers are rejected.
+
+Successful verification consumes the issuer/nonce once through a unique PostgreSQL
+digest row. No bearer token is persisted. Callers can include verification in their
+operation transaction so rollback also restores the ability to retry. Expired replay
+markers can be removed in bounded batches with
+`Atoll.Accounts.ServiceTokens.prune_expired/1` (default 500, maximum 1000).
+Automatic scheduling and HTTP migration consumers remain pending. The verifier
+uses the existing resolver's HTTPS trust model, not independent PLC log validation.
 
 For local development, connect to
 `ws://localhost:4000/xrpc/com.atproto.sync.subscribeRepos?cursor=0`.
