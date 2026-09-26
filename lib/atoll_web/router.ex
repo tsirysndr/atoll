@@ -23,5 +23,11 @@ defmodule AtollWeb.Router do
     pipe_through :api
 
     get "/com.atproto.server.describeServer", ServerController, :describe
+    get "/com.atproto.repo.getRecord", RepoController, :get_record
+    get "/com.atproto.repo.listRecords", RepoController, :list_records
+  end
+
+  scope "/xrpc", AtollWeb do
+    get "/com.atproto.sync.getRepo", RepoController, :get_repo
   end
 end

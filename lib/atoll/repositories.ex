@@ -75,6 +75,80 @@ defmodule Atoll.Repositories do
     end
   end
 
+  @doc "Lists current records in bytewise key order. Options are validated by the HTTP boundary."
+  def list_records(did, collection, opts \\ []) do
+    limit = Keyword.get(opts, :limit, 50)
+    reverse = Keyword.get(opts, :reverse, false)
+    cursor = Keyword.get(opts, :cursor)
+    prefix = collection <> "/"
+    upper = collection <> "0"
+
+    with {:ok, _} <- get_head(did) do
+      query =
+        from r in Record,
+          join: b in Atoll.Storage.Block,
+          on: b.cid == r.cid,
+          where: r.did == ^did,
+          where:
+            fragment(
+              "? COLLATE \"C\" >= ? AND ? COLLATE \"C\" < ?",
+              r.path,
+              ^prefix,
+              r.path,
+              ^upper
+            ),
+          select: {r.path, r.cid, b.data},
+          limit: ^(limit + 1)
+
+      query =
+        if reverse,
+          do: from(r in query, order_by: [asc: fragment("? COLLATE \"C\"", r.path)]),
+          else: from(r in query, order_by: [desc: fragment("? COLLATE \"C\"", r.path)])
+
+      query =
+        case {cursor, reverse} do
+          {nil, _} ->
+            query
+
+          {key, true} ->
+            from r in query, where: fragment("? COLLATE \"C\" > ?", r.path, ^(prefix <> key))
+
+          {key, false} ->
+            from r in query, where: fragment("? COLLATE \"C\" < ?", r.path, ^(prefix <> key))
+        end
+
+      rows = Repo.all(query)
+      page = Enum.take(rows, limit)
+
+      Enum.reduce_while(page, {:ok, []}, fn {path, cid, bytes}, {:ok, records} ->
+        with :ok <- CID.verify(cid, bytes),
+             {:ok, value} <- CBOR.decode(bytes),
+             {:ok, json} <- DataModel.to_json(value) do
+          {:cont, {:ok, [%{uri: "at://" <> did <> "/" <> path, cid: cid, value: json} | records]}}
+        else
+          error -> {:halt, error}
+        end
+      end)
+      |> case do
+        {:ok, records} ->
+          result = %{records: Enum.reverse(records)}
+
+          result =
+            if length(rows) > limit do
+              {path, _, _} = List.last(page)
+              Map.put(result, :cursor, String.replace_prefix(path, prefix, ""))
+            else
+              result
+            end
+
+          {:ok, result}
+
+        error ->
+          error
+      end
+    end
+  end
+
   @doc "Exports a consistent snapshot, holding a shared head lock until the CAR is assembled."
   def export(did) do
     Repo.transaction(fn ->

@@ -69,7 +69,8 @@ record Lexicons or grant access to account data.
 - [ ] Persistent repository signing keys and secure key lifecycle management.
 - [x] PostgreSQL repository heads and atomic record, tree, and commit updates with optional head compare-and-swap.
 - [x] Internal record create, put, delete, and read operations with collection/type checks (not Lexicon validation).
-- [ ] Record reads and listing (`getRecord`, `listRecords`).
+- [x] Public `getRecord` and paginated `listRecords` for repository DIDs and current record versions.
+- [ ] Handle lookup and historical CID versions for record reads.
 - [ ] Record writes and deletion (`createRecord`, `putRecord`, `deleteRecord`, `applyWrites`).
 - [ ] Repository description (`com.atproto.repo.describeRepo`).
 - [x] In-memory CARv1 encoding and decoding with block verification and resource limits.
@@ -99,7 +100,8 @@ Raw CID support and generic block storage are implemented; the ATProto blob API 
 
 ### Synchronization and federation
 
-- [ ] Repository export via `com.atproto.sync.getRepo`.
+- [x] Full repository export via `com.atproto.sync.getRepo` (in-memory, 64 MiB archive limit).
+- [ ] Incremental repository exports using `since` (currently rejected explicitly).
 - [ ] Sync endpoints for blocks, records, repository status, and repository listing.
 - [ ] Durable repository event sequencing and replay.
 - [ ] `com.atproto.sync.subscribeRepos` WebSocket stream with resume cursors.
