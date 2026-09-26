@@ -149,7 +149,8 @@ The same `validate: true` restriction applies to batch requests.
 - [x] Public `com.atproto.identity.resolveHandle` forward lookup (does not assert bidirectional verification).
 - [x] Handle-based repository reads with bidirectional verification and canonical DID record URIs.
 - [ ] Handle updates, caching, and redirect support.
-- [ ] Account creation, activation, deactivation, and deletion.
+- [x] Authenticated account activation and deactivation with atomic status events.
+- [ ] Account creation and deletion.
 - [x] Internal DID-scoped password credentials with salted Argon2id hashes, bounded input, redacted inspection, and duplicate protection.
 - [ ] Email verification, password changes, and account recovery.
 - [x] Internal password session creation, scoped HS256 JWT verification, single-use refresh rotation, and persistent revocation.
@@ -263,6 +264,23 @@ receives HTTP 429 `RateLimitExceeded`; revoking an existing session or waiting
 for expiration frees capacity. Refresh rotates an existing session and does not
 consume another slot. Lowering the limit does not revoke existing sessions;
 zero disables new logins while preserving existing sessions and refreshes.
+
+`POST /xrpc/com.atproto.server.deactivateAccount` accepts a JSON object and an
+access token. Deactivation immediately blocks public repository reads and ordinary
+writes; session management remains available. Optional `deleteAfter` timestamps
+are validated as advisory retention hints. Atoll currently retains deactivated
+accounts indefinitely and does not schedule deletion from this hint.
+
+`POST /xrpc/com.atproto.server.activateAccount` has no input body. It resolves the
+account DID, requires its signing key and PDS endpoint to match the local account
+and configured public URL, and requires a decryptable stored signing key. These
+checks use the existing resolver's trust model; independent PLC log/rotation-key
+verification remains pending. Authorization is rechecked under the repository
+write lock after resolution. Both endpoints return an empty HTTP 200 on success,
+publish one durable account event per status change, and are idempotent. They
+cannot undo an administrative takedown or suspension. Activation does not assert
+that all referenced blob bytes have arrived; use account status and missing-blob
+inventory to assess transfer progress first.
 
 ### Blobs
 

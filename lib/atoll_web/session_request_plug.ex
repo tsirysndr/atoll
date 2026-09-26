@@ -5,7 +5,9 @@ defmodule AtollWeb.SessionRequestPlug do
   @procedures [
     @prefix <> "createSession",
     @prefix <> "refreshSession",
-    @prefix <> "deleteSession"
+    @prefix <> "deleteSession",
+    @prefix <> "activateAccount",
+    @prefix <> "deactivateAccount"
   ]
   @queries [
     @prefix <> "getSession",
@@ -57,7 +59,8 @@ defmodule AtollWeb.SessionRequestPlug do
     end
   end
 
-  defp parse(conn, @prefix <> "createSession") do
+  defp parse(conn, path)
+       when path in [@prefix <> "createSession", @prefix <> "deactivateAccount"] do
     case get_req_header(conn, "content-type") do
       [type] ->
         case Plug.Conn.Utils.media_type(type) do

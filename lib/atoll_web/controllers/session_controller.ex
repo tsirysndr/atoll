@@ -46,6 +46,18 @@ defmodule AtollWeb.SessionController do
     end
   end
 
+  def activate(conn, _params) do
+    with {:ok, token} <- bearer(conn),
+         {:ok, _} <- Atoll.Accounts.Lifecycle.activate(token),
+         do: send_resp(conn, 200, "")
+  end
+
+  def deactivate(conn, _params) do
+    with {:ok, token} <- bearer(conn),
+         {:ok, _} <- Atoll.Accounts.Lifecycle.deactivate(token, conn.body_params),
+         do: send_resp(conn, 200, "")
+  end
+
   defp revoke(token) do
     case Sessions.revoke(token) do
       {:ok, :ok} -> :ok
