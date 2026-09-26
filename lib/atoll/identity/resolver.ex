@@ -41,7 +41,14 @@ defmodule Atoll.Identity.Resolver do
     if Syntax.did?(did), do: {:error, :unsupported_did_method}, else: {:error, :invalid_did}
   end
 
-  defp fetch(url, opts) do
+  @doc false
+  def fetch_handle(host, opts) do
+    with {:ok, _} <- resolution_url("did:web:" <> host) do
+      fetch("https://" <> host <> "/.well-known/atproto-did", opts, 4096)
+    end
+  end
+
+  defp fetch(url, opts, max_bytes \\ @max_bytes) do
     uri = URI.parse(url)
     lookup = Keyword.get(opts, :lookup, &lookup/1)
 
@@ -65,14 +72,15 @@ defmodule Atoll.Identity.Resolver do
           connect_options: [hostname: uri.host, timeout: 3000],
           receive_timeout: 5000,
           request_timeout: 5000,
-          into: &collect/2
+          into: fn event, pair -> collect(event, pair, max_bytes) end
         )
 
       case result do
         {:ok, %{body: :too_large}} ->
           {:error, :did_document_too_large}
 
-        {:ok, %{status: 200, body: body, headers: headers}} when is_binary(body) ->
+        {:ok, %{status: status, body: body, headers: headers}}
+        when status in 200..299 and is_binary(body) ->
           if Map.get(headers, "content-encoding", []) in [[], ["identity"]],
             do: {:ok, body},
             else: {:error, :resolution_failed}
@@ -89,8 +97,8 @@ defmodule Atoll.Identity.Resolver do
     end
   end
 
-  defp collect({:data, chunk}, {req, resp}) do
-    if byte_size(resp.body) + byte_size(chunk) > @max_bytes,
+  defp collect({:data, chunk}, {req, resp}, max_bytes) do
+    if byte_size(resp.body) + byte_size(chunk) > max_bytes,
       do: {:halt, {req, %{resp | body: :too_large}}},
       else: {:cont, {req, %{resp | body: resp.body <> chunk}}}
   end

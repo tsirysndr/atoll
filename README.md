@@ -87,7 +87,10 @@ record Lexicons or grant access to account data.
 - [x] Internal HTTPS resolution for `did:plc` and hostname-level `did:web`, with expected-document identity checks.
 - [x] Resolver public-IPv4 address pinning, TLS hostname verification, timeouts, redirect rejection, and 256 KiB response limit.
 - [ ] DID resolution caching, IPv6 and localhost development support, and independent PLC operation-log verification (currently trusts `plc.directory` over HTTPS).
-- [ ] Handle resolution, verification, and updates.
+- [x] DNS TXT handle resolution with HTTPS fallback, normalization, ambiguity checks, and reserved-domain rejection.
+- [x] Internal bidirectional handle verification against the resolved DID document.
+- [x] Public `com.atproto.identity.resolveHandle` forward lookup (does not assert bidirectional verification).
+- [ ] Handle updates, caching, redirect support, and handle-based repository API lookup.
 - [ ] Account creation, activation, deactivation, and deletion.
 - [ ] Password hashing, email verification, and account recovery.
 - [ ] Session creation, refresh, inspection, and revocation.
