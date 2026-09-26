@@ -171,6 +171,8 @@ record Lexicons or grant access to account data.
 - [x] Internal complete CAR import for existing repositories, with pinned-key verification, expected-head checks, and atomic replacement.
 - [x] Authenticated `com.atproto.repo.importRepo` for existing repositories, with bounded uploads and atomic replacement.
 - [x] Existing-DID migration provisioning with source-key verification and destination-key signing.
+- [x] Internal durable encrypted signing-key reservations, transactional claims, and bounded master-key rewrapping.
+- [ ] Public `reserveSigningKey` endpoint and reserved-key selection during account creation.
 - [x] Chunked repository exports with lazy record-body reads.
 - [x] Streamed HTTP imports with private staging and atomic publication.
 - [ ] Bounded-memory repository metadata traversal.
@@ -2198,6 +2200,8 @@ For a deployment with multiple nodes, rotate in these stages:
    If JSON output contains `cursor`, pass it to the next invocation with `--after DID`.
    Continue until there is no cursor. Use the production environment and secret
    source when operating a production database.
+   Also run `mix atoll.keys.rewrap_reserved --limit 100` through all pages, using
+   `--after DID_KEY` for its public-key cursor, to cover keys reserved before account creation.
 4. Repeat a complete pass from the beginning to verify every envelope is readable
    with the active key; it should report zero rewrapped envelopes. Remove the old
    fallback from every node only after the complete successful pass. Keep old keys
@@ -2216,10 +2220,41 @@ private/public signing-key material, repository commits, signed PLC operation,
 registration state, sessions, and public events. Both repository keys and retained
 PLC rotation keys, plus pending replacement repository keys, must migrate before
 retiring an old master key. Pending-key rewraps are included in the `plc` count.
+Reserved keys have no repository yet and are covered by the separate
+`rewrap_reserved` command, which reports `scanned`, `rotated`, `unchanged`, and an
+optional public-key cursor. Verify a complete pass of both commands before
+retiring a fallback key.
 
 This rotates encryption protection, not repository signing keys, PLC authority,
 JWT secrets, or server identity keys. It cannot recover an envelope when every
 key capable of decrypting it has been lost. No rotation is scheduled automatically.
+
+### Reserved signing-key custody
+
+The internal `Atoll.Accounts.SigningKeyReservations` coordinator persists secp256k1
+keys before a repository exists. This is preparation for `reserveSigningKey`;
+the public endpoint and account-creation integration are not implemented yet.
+It does not submit DID operations, create accounts, or authorize migration.
+
+`reserve/1` accepts an optional DID and returns only the public `did:key`. Repeating
+a DID reservation returns the same usable key; reservations without a DID create
+distinct keys. Existing local repositories cannot receive another reservation.
+AES-256-GCM protects private material with a distinct purpose, optional DID, and
+public key bound as authenticated data. Active and previous encryption master
+keys follow the same custody policy as repository keys.
+
+Creation is serialized through the database event lock and capped at 10,000
+reservations. Internal application configuration `:reserved_signing_key_limit`
+can lower this cap to 1–10,000. Existing DID reservations remain readable at the
+cap. Reservations do not expire automatically because a public DID might already
+reference one; exhaustion rejects new reservations rather than deleting custody.
+
+`claim!/2` is an internal operation for a separately authorized account-creation
+transaction. Its caller must independently prove the DID and select the expected
+public key. It rejects a different DID binding or unreadable envelope, returns the
+private key only to the trusted caller, and deletes the reservation in that same
+transaction. Failed account/key installation must roll back the transaction to
+retain the reservation. A public key alone is not migration authorization.
 
 ### Session JWT signing-key rotation
 
