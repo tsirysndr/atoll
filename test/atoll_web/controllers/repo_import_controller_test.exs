@@ -204,6 +204,112 @@ defmodule AtollWeb.RepoImportControllerTest do
     assert [_] = get_resp_header(conn, "retry-after")
   end
 
+  test "staged publication is atomic, ignores extra blocks, and retries idempotently", c do
+    {:ok, decoded} = CAR.decode(archive(c))
+    extra = CID.create("unreachable", :raw)
+
+    {:ok, chunks} =
+      CAR.encode_stream(decoded.roots, Map.put(decoded.blocks, extra, "unreachable"))
+
+    seq = Atoll.Repositories.Events.latest_seq()
+
+    assert {:ok, imported} =
+             Atoll.CAR.Stage.with_chunks(chunks, fn stage ->
+               Repositories.import_staged(c.pair.access_jwt, stage, c.head.head)
+             end)
+
+    assert Atoll.Storage.get_block(extra) == {:error, :not_found}
+    assert {:ok, [%{kind: :sync} = event]} = Atoll.Repositories.Events.list_after(seq)
+
+    assert {:ok, ^imported} =
+             Atoll.CAR.Stage.with_chunks(chunks, fn stage ->
+               Repositories.import_staged(c.pair.access_jwt, stage, imported.head)
+             end)
+
+    assert Atoll.Repositories.Events.latest_seq() == event.seq
+    assert {:ok, %{value: %{"text" => "imported"}}} = Repositories.get_record(@did, @path)
+  end
+
+  test "staged publication rolls back blocks, references and events when quota rejects it", c do
+    prior = Application.fetch_env(:atoll, :repository_quota)
+
+    on_exit(fn ->
+      case prior do
+        {:ok, config} -> Application.put_env(:atoll, :repository_quota, config)
+        :error -> Application.delete_env(:atoll, :repository_quota)
+      end
+    end)
+
+    Application.put_env(:atoll, :repository_quota, max_bytes: 0)
+    count = Repo.aggregate(Atoll.Storage.Block, :count)
+    references = Repo.aggregate(Atoll.Blobs.Reference, :count)
+
+    record = %{
+      "$type" => "com.example.record",
+      "image" => %{
+        "$type" => "blob",
+        "ref" => %Atoll.CBOR.Link{cid: CID.create("blob", :raw)},
+        "mimeType" => "image/png",
+        "size" => 4
+      }
+    }
+
+    bytes = archive(c, record: record)
+    seq = Atoll.Repositories.Events.latest_seq()
+
+    assert {:error, :repository_quota_exceeded} =
+             Atoll.CAR.Stage.with_chunks([bytes], fn stage ->
+               Repositories.import_staged(c.pair.access_jwt, stage, c.head.head)
+             end)
+
+    assert Repositories.get_head(@did) == {:ok, c.head}
+    assert Repo.aggregate(Atoll.Storage.Block, :count) == count
+    assert Repo.aggregate(Atoll.Blobs.Reference, :count) == references
+    assert Atoll.Repositories.Events.latest_seq() == seq
+  end
+
+  test "staged migration re-signs the imported snapshot with the local repository key", c do
+    previous = Application.fetch_env(:atoll, :key_encryption_key)
+    Application.put_env(:atoll, :key_encryption_key, :binary.copy(<<88>>, 32))
+
+    on_exit(fn ->
+      case previous do
+        {:ok, key} -> Application.put_env(:atoll, :key_encryption_key, key)
+        :error -> Application.delete_env(:atoll, :key_encryption_key)
+      end
+    end)
+
+    {:ok, _} = Atoll.KeyVault.store(@did, c.key)
+    source = SigningKey.generate(:p256)
+
+    Repo.insert!(%Atoll.Accounts.Profile{
+      did: @did,
+      handle: "migration.example.com",
+      import_curve: source.curve,
+      import_public_key: source.public
+    })
+
+    {:ok, _} = Repositories.set_status(@did, :deactivated)
+    bytes = archive(c, key: source)
+    {:ok, %{roots: [foreign]}} = CAR.decode(bytes)
+
+    assert {:ok, imported} =
+             Atoll.CAR.Stage.with_chunks([bytes], fn stage ->
+               Repositories.import_staged(c.pair.access_jwt, stage, c.head.head)
+             end)
+
+    refute imported.head == foreign
+    assert imported.status == :deactivated
+    assert {:ok, local_bytes} = Atoll.Storage.get_block(imported.head)
+    assert {:ok, _} = Commit.verify(local_bytes, @did, c.key.curve, c.key.public)
+    assert Atoll.Storage.get_block(foreign) == {:error, :not_found}
+
+    assert {:ok, ^imported} =
+             Atoll.CAR.Stage.with_chunks([bytes], fn stage ->
+               Repositories.import_staged(c.pair.access_jwt, stage, imported.head)
+             end)
+  end
+
   defp upload_conn(c, bytes) do
     Plug.Test.conn(:post, @route, bytes)
     |> Map.put(:remote_ip, c.conn.remote_ip)

@@ -158,6 +158,7 @@ record Lexicons or grant access to account data.
 - [x] Incremental CARv1 decoding with bounded framing buffers and verified block callbacks.
 - [x] Request-scoped private disk staging for incrementally validated CAR blocks.
 - [x] Signed repository snapshot validation over staged block readers without collecting record bodies.
+- [x] Transactional staged snapshot publication with migration re-signing and quota rollback.
 - [x] Lazy CARv1 encoding with per-block validation and upstream cancellation cleanup.
 
 `com.atproto.repo.getRecord` returns the current record unless `cid` selects a
@@ -3198,5 +3199,21 @@ against the 1,000,000-byte limit and their collection's `$type`.
 The callback remains valid only inside `Stage.with_chunks/3`; publishing imports
 must finish all staged reads there. The record/CID map and reconstructed MST still
 occupy memory proportional to repository metadata. This validator does not publish
-blocks or update accounts, blob references, quotas, or event streams. Transactional
-publication and HTTP import integration remain pending.
+blocks or update accounts, blob references, quotas, or event streams. HTTP import
+integration remains pending.
+
+`Atoll.Repositories.import_staged/3` publishes a stage inside its owning callback.
+It authenticates the management session, validates the staged snapshot, then
+rechecks authorization and the captured repository head/key under the normal
+mutation locks. Record bodies are read individually for blob-reference indexing
+and block insertion. Records, retained-revision membership, quota enforcement,
+and the sync event commit atomically; a failure rolls them all back. Only reachable
+blocks are inserted. Identical retries remain idempotent.
+
+Migration imports retain their existing policy: a deactivated account may validate
+against its recorded source key and re-sign with the local repository key. The
+source commit is replaced in the published block set, while its CID/revision are
+retained in migration metadata. The destination stays deactivated. Tests cover
+staged publication, unreachable-block exclusion, quota rollback including blob
+references, and cross-curve migration re-signing/retries. Public HTTP imports still
+use the buffered request reader until request-body staging is connected.

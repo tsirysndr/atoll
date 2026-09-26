@@ -61,6 +61,10 @@ defmodule Atoll.Repositories do
     end
   end
 
+  @doc "Imports validated staged input within its owning Stage callback; rechecks authorization under lock."
+  def import_staged(token, %Atoll.CAR.Stage{} = stage, expected_head),
+    do: import_authenticated(token, stage, expected_head)
+
   defp import_snapshot(did, prior, snapshot, expected_head, token) do
     Repo.transaction(fn ->
       Events.lock!()
@@ -87,8 +91,16 @@ defmodule Atoll.Repositories do
           Repo.rollback(:stale_revision)
 
         true ->
-          Atoll.Blobs.References.import!(did, snapshot.records, snapshot.blocks, snapshot.rev)
-          Enum.each(snapshot.blocks, fn {cid, bytes} -> :ok = Storage.put_block(cid, bytes) end)
+          reader = snapshot_reader(snapshot)
+          Atoll.Blobs.References.import!(did, snapshot.records, reader, snapshot.rev)
+
+          Enum.each(snapshot_cids(snapshot), fn cid ->
+            case reader.(cid) do
+              {:ok, bytes} -> :ok = Storage.put_block(cid, bytes)
+              _ -> Repo.rollback(:invalid_snapshot)
+            end
+          end)
+
           Repo.delete_all(from r in Record, where: r.did == ^did)
 
           snapshot.records
@@ -101,7 +113,7 @@ defmodule Atoll.Repositories do
             |> Ecto.Changeset.change(head: snapshot.head, rev: snapshot.rev)
             |> Repo.update!()
 
-          remember_revision!(updated, Map.keys(snapshot.blocks))
+          remember_revision!(updated, snapshot_cids(snapshot))
           Events.append!(:sync, updated, event_head(updated, head))
           updated
       end
@@ -109,11 +121,11 @@ defmodule Atoll.Repositories do
   end
 
   defp authenticated_snapshot(head, archive) do
-    case Snapshot.decode(archive, head.did, head.curve, head.public_key) do
+    case decode_snapshot(archive, head.did, head.curve, head.public_key) do
       {:error, :invalid_snapshot} = error when head.status == :deactivated ->
         case Repo.get(Atoll.Accounts.Profile, head.did) do
           %{import_curve: curve, import_public_key: public} when not is_nil(public) ->
-            with {:ok, snapshot} <- Snapshot.decode(archive, head.did, curve, public),
+            with {:ok, snapshot} <- decode_snapshot(archive, head.did, curve, public),
                  do: {:ok, Map.put(snapshot, :source_key, {curve, public})}
 
           _ ->
@@ -153,12 +165,33 @@ defmodule Atoll.Repositories do
       |> Ecto.Changeset.change(import_head: snapshot.head, import_rev: snapshot.rev)
       |> Repo.update!()
 
-      blocks = snapshot.blocks |> Map.delete(snapshot.head) |> Map.put(commit.cid, commit.bytes)
-      %{snapshot | head: commit.cid, rev: rev, blocks: blocks}
+      replace_import_commit(snapshot, commit, rev)
     end
   end
 
   defp localize_import!(_head, snapshot), do: snapshot
+
+  defp decode_snapshot(%Atoll.CAR.Stage{} = stage, did, curve, public),
+    do: Snapshot.from_stage(stage, did, curve, public)
+
+  defp decode_snapshot(archive, did, curve, public),
+    do: Snapshot.decode(archive, did, curve, public)
+
+  defp snapshot_reader(%{read_block: reader}), do: reader
+  defp snapshot_reader(%{blocks: blocks}), do: &Map.fetch(blocks, &1)
+  defp snapshot_cids(%{block_cids: cids}), do: cids
+  defp snapshot_cids(%{blocks: blocks}), do: Map.keys(blocks)
+
+  defp replace_import_commit(%{read_block: reader} = snapshot, commit, rev) do
+    cids = [commit.cid | Enum.reject(snapshot.block_cids, &(&1 == snapshot.head))]
+    read = fn cid -> if cid == commit.cid, do: {:ok, commit.bytes}, else: reader.(cid) end
+    %{snapshot | head: commit.cid, rev: rev, block_cids: cids, read_block: read}
+  end
+
+  defp replace_import_commit(snapshot, commit, rev) do
+    blocks = snapshot.blocks |> Map.delete(snapshot.head) |> Map.put(commit.cid, commit.bytes)
+    %{snapshot | head: commit.cid, rev: rev, blocks: blocks}
+  end
 
   def create(did, %SigningKey{} = key) do
     with true <- Syntax.did?(did),

@@ -22,8 +22,17 @@ defmodule Atoll.Blobs.References do
   def import!(did, records, blocks, rev) do
     prior = Repo.all(from r in Reference, where: r.did == ^did, select: r.cid)
     Repo.delete_all(from r in Reference, where: r.did == ^did)
-    for {path, cid} <- records, do: insert_record!(did, path, Map.fetch!(blocks, cid), rev, true)
+    for {path, cid} <- records, do: insert_record!(did, path, read_block!(blocks, cid), rev, true)
     withdraw!(did, prior)
+  end
+
+  defp read_block!(blocks, cid) when is_map(blocks), do: Map.fetch!(blocks, cid)
+
+  defp read_block!(reader, cid) when is_function(reader, 1) do
+    case reader.(cid) do
+      {:ok, bytes} -> bytes
+      _ -> Repo.rollback(:invalid_snapshot)
+    end
   end
 
   defp insert_record!(did, path, bytes, rev, allow_missing) do
