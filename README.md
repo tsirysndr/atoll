@@ -20,6 +20,7 @@ Checked items are implemented in this repository. Unchecked items are remaining 
 - [x] Validated runtime server DID and advertised domain configuration (development defaults to `did:web:localhost`).
 - [x] Configured hostname-based server DID document publication with a stable service key.
 - [x] XRPC route/NSID validation and method checks before body parsing, including protocol errors for unsupported methods.
+- [x] Public-origin XRPC CORS headers and route-aware browser preflight responses.
 - [ ] Complete XRPC parameter validation and protocol error handling for framework failures.
 - [ ] Lexicon-based record validation.
 
@@ -30,8 +31,20 @@ method and otherwise return `405 MethodNotAllowed` with an `Allow` header, befor
 body parsing or method override. These errors are JSON with `error` and `message`
 and are not cached. HTTP HEAD responses omit the body. Percent-encoded route
 spellings receive the same checks, including repository subscriptions. This does
-not yet provide general Lexicon parameter validation, CORS preflight support, or
-XRPC conversion of every framework exception.
+not yet provide general Lexicon parameter validation or XRPC conversion of every
+framework exception.
+
+Browser clients can call XRPC from any origin using explicit authorization
+headers. Responses include `Access-Control-Allow-Origin: *`; cookie credentials
+are not enabled. Valid OPTIONS preflights for implemented routes return 204 before
+body parsing and authentication, permit only the route's declared method, and
+advertise a 600-second browser preflight cache lifetime. Actual requests retain
+all endpoint authentication and rate limits. Allowed request headers are `Accept`,
+`Accept-Language`, `Authorization`, `Content-Type`, `Atproto-Proxy`, and
+`Atproto-Accept-Labelers` (the latter two do not imply proxy implementation).
+Clients can read repository revision, content labeler, retry/rate-limit, and
+WWW-Authenticate response headers. Unsupported methods or request headers fail
+preflight; ordinary OPTIONS requests without preflight headers remain 405.
 
 ### Content identifiers and encoding
 

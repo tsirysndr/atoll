@@ -7,9 +7,14 @@ defmodule AtollWeb.XRPCRequestPlug do
 
   def call(conn, _opts) do
     case Enum.map(conn.path_info, &URI.decode/1) do
-      ["xrpc", nsid] -> validate(conn, nsid)
-      ["xrpc" | _] -> error(conn, 400, "InvalidRequest", "Invalid XRPC path.")
-      _ -> conn
+      ["xrpc", nsid] ->
+        validate(AtollWeb.XRPCCORS.headers(conn), nsid)
+
+      ["xrpc" | _] ->
+        error(AtollWeb.XRPCCORS.headers(conn), 400, "InvalidRequest", "Invalid XRPC path.")
+
+      _ ->
+        conn
     end
   end
 
@@ -23,9 +28,13 @@ defmodule AtollWeb.XRPCRequestPlug do
           conn
 
         method ->
-          conn
-          |> put_resp_header("allow", method)
-          |> error(405, "MethodNotAllowed", "Unsupported request method.")
+          if AtollWeb.XRPCCORS.preflight?(conn) do
+            AtollWeb.XRPCCORS.preflight(conn, method)
+          else
+            conn
+            |> put_resp_header("allow", method)
+            |> error(405, "MethodNotAllowed", "Unsupported request method.")
+          end
       end
     else
       error(conn, 400, "InvalidRequest", "Invalid XRPC method identifier.")
