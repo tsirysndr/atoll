@@ -4,6 +4,11 @@ defmodule AtollWeb.AdminAccountController do
   plug AtollWeb.AdminAuth
   action_fallback AtollWeb.XRPCFallback
 
+  def send_email(conn, _) do
+    with {:ok, result} <- Atoll.Accounts.AdminMessage.deliver(conn.body_params),
+         do: json(conn, result)
+  end
+
   def delete(conn, _) do
     with {:ok, _} <- Atoll.Accounts.Deletion.admin_delete(conn.body_params),
          do: send_resp(conn, 200, "")

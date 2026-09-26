@@ -3,6 +3,7 @@ defmodule AtollWeb.AdminRequestPlug do
   import Plug.Conn
 
   @paths [
+    "/xrpc/com.atproto.admin.sendEmail",
     "/xrpc/com.atproto.server.createInviteCode",
     "/xrpc/com.atproto.server.createInviteCodes",
     "/xrpc/com.atproto.admin.disableInviteCodes",

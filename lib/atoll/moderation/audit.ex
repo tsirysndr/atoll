@@ -4,6 +4,20 @@ defmodule Atoll.Moderation.Audit do
   alias Atoll.{Repo, Syntax}
   alias Atoll.Moderation.AuditEntry
 
+  @doc "Tracks email attempts without retaining addresses, subjects or message bodies."
+  def email_delivery!(params, id, before_status, after_status) do
+    did = params["recipientDid"]
+
+    insert!(
+      "com.atproto.admin.sendEmail",
+      did,
+      %{"$type" => "com.atproto.admin.defs#repoRef", "did" => did},
+      params |> Map.take(["recipientDid", "senderDid", "comment"]) |> Map.put("messageId", id),
+      %{status: before_status},
+      %{status: after_status}
+    )
+  end
+
   @doc "Append inside the moderation transaction, after taking the event lock. Never records credentials."
   def append!(did, subject, requested, before_state, after_state) do
     insert!(

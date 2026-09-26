@@ -706,6 +706,7 @@ events. The `[:atoll, :identity, :refresh]` telemetry event reports a count and
 - [x] Audited operator password replacement with session, app-password, and pending-code revocation.
 - [x] Transactional audit history for account invite enable/disable decisions and private reason changes.
 - [x] Audited operator account deletion with durable shared-safe blob cleanup.
+- [x] Operator account messages through the configurable email Worker, with attempt/outcome history.
 - [ ] Remaining administrative account controls and audit coverage for other operator actions.
 - [ ] Production configuration, HTTPS deployment, and signing-key protection.
 - [ ] Database and blob backup / restore workflow.
@@ -2193,3 +2194,41 @@ Scheduling is per process, without a database lease or leader election. Enable i
 on one instance of a multi-node PDS to avoid duplicate periodic announcements.
 Tests mock all outbound requests; enabling this setting in a running deployment
 makes real network requests.
+
+
+### Operator email messages
+
+`POST com.atproto.admin.sendEmail` uses the existing admin Basic authentication,
+60-request/five-minute client-IP budget, 16 KiB JSON body limit, and `no-store`
+responses. Its pinned upstream Lexicon requires `recipientDid`, `senderDid`, and
+`content`; `subject` and `comment` are optional. The recipient must be a local
+account with a stored email address. Active, deactivated, suspended, and taken-down
+accounts can receive operator messages. A missing account returns `NotFound`;
+a missing email returns `InvalidEmail`.
+
+Atoll sends plain text through `Atoll.Email.deliver/3` using
+`ATOLL_EMAIL_WORKER_URL` and `ATOLL_EMAIL_WORKER_TOKEN`, just like every other
+email feature. Only the stored recipient email, subject, and content reach the
+Worker. The Worker controls the sender address and delivery provider. `senderDid`
+is an operator-supplied audit attribution, not proof of DID control or an email
+From override. `comment` is private review context and is never sent in the email.
+The default subject is `Message from your PDS operator`. Local bounds are 1–12000
+UTF-8 bytes for content, 1–200 for a supplied subject (no control characters), and
+0–2000 for a supplied comment, subject to the total JSON body limit.
+
+Before delivery, Atoll stores a `prepared` audit entry with an opaque message ID,
+recipient/sender DIDs, and optional private comment. It does not store the email
+address, subject, body, Worker secret, or response body in this history. Delivery
+runs after the preparation transaction releases its locks, using the captured
+address; a concurrent address change or account deletion cannot recall that
+message. A second entry with the same message ID records `accepted`, `rejected`,
+`unavailable`, or `not_configured`. These entries use the existing private
+`mix atoll.moderation.history` export and survive account deletion.
+
+A successful response is `{ "sent": true }`, meaning Worker acceptance, not
+confirmed inbox delivery. Worker failures return a generic 503. A crash or an
+outcome-audit failure can leave only the prepared entry, even if delivery occurred;
+this is an unknown outcome, not evidence that nothing was sent. There is no
+automatic retry or durable outbox. Each new API call gets a new message ID, so an
+operator retry after an ambiguous failure may send a duplicate. Tests use mocked
+Worker requests and send no actual email.
