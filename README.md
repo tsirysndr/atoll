@@ -128,7 +128,8 @@ Raw CID support and generic block storage are implemented; the ATProto blob API 
 - [x] Commit CARs with full MSTs, changed records, prior roots, and operation metadata; oversized commits fall back to commit-only sync messages.
 - [ ] Compact inductive commit proofs (event encoding currently includes the complete MST).
 - [x] Internal `Atoll.Identity.Updates.refresh/2`: resolves hosted identities, verifies claimed handles, and atomically records changed observations with durable identity events.
-- [ ] Automatic identity refresh scheduling and authenticated identity-management endpoints.
+- [x] Opt-in supervised identity refresh scheduling, with one task at a time, timeouts, sweep retries, and outcome telemetry.
+- [ ] Authenticated identity-management endpoints and distributed refresh coordination.
 - [ ] Relay discovery / crawl requests and federation interoperability tests.
 - [ ] Service authentication and request proxying to AppViews and other services.
 
@@ -147,7 +148,17 @@ and federation interoperability testing remain pending.
 Identity refreshes announce changes in the resolved handle, signing key, or PDS
 endpoint. Unverified handles are emitted as `handle.invalid`; failed DID lookups
 preserve the previous observation. Refreshes do not rotate the repository's
-pinned signing key, move accounts, or run automatically yet.
+pinned signing key or move accounts.
+
+Set `ATOLL_IDENTITY_REFRESH_ENABLED=true` before starting Atoll to enable automatic
+refreshes. The worker starts after one second, waits one second between identities,
+and waits five minutes after each complete sweep. Each refresh has a 20-second
+deadline; failures are retried on the next sweep. All hosted identities, including
+inactive ones, are visited in DID order. The worker runs independently per node;
+enable it on one application instance until distributed coordination exists.
+Restarts begin a new sweep, and unchanged observations do not produce duplicate
+events. The `[:atoll, :identity, :refresh]` telemetry event reports a count and
+`published`, `unchanged`, `failed`, or `timeout` outcome.
 
 ### Operations
 

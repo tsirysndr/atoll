@@ -6,7 +6,8 @@ defmodule Atoll.Identity.Updates do
   atomically stores the observation and emits an identity event. A failed DID
   lookup leaves the previous observation intact. Unverified handles are reported
   as handle.invalid. Observations do not change repository keys or hosting status.
-  Callers authorize refreshes; periodic refresh and identity mutation APIs are pending.
+  Callers authorize refreshes; an opt-in worker schedules periodic refreshes.
+  Authenticated identity mutation APIs are pending.
   """
   import Ecto.Query
   alias Atoll.{CBOR, Repo, Repositories}

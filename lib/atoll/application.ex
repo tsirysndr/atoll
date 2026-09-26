@@ -12,8 +12,6 @@ defmodule Atoll.Application do
       Atoll.Repo,
       {DNSCluster, query: Application.get_env(:atoll, :dns_cluster_query) || :ignore},
       {Phoenix.PubSub, name: Atoll.PubSub},
-      # Start a worker by calling: Atoll.Worker.start_link(arg)
-      # {Atoll.Worker, arg},
       # Start to serve requests, typically the last entry
       AtollWeb.Endpoint
     ]
@@ -21,7 +19,18 @@ defmodule Atoll.Application do
     # See https://elixir.hexdocs.pm/Supervisor.html
     # for other strategies and supported options
     opts = [strategy: :one_for_one, name: Atoll.Supervisor]
-    Supervisor.start_link(children, opts)
+
+    refresh_children =
+      if Application.get_env(:atoll, :identity_refresh_enabled, false) do
+        [
+          {Task.Supervisor, name: Atoll.Identity.TaskSupervisor},
+          {Atoll.Identity.RefreshWorker, []}
+        ]
+      else
+        []
+      end
+
+    Supervisor.start_link(children ++ refresh_children, opts)
   end
 
   # Tell Phoenix to update the endpoint configuration

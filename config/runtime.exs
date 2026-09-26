@@ -1,5 +1,11 @@
 import Config
 
+case System.get_env("ATOLL_IDENTITY_REFRESH_ENABLED", "false") do
+  "true" -> config :atoll, :identity_refresh_enabled, true
+  "false" -> config :atoll, :identity_refresh_enabled, false
+  _ -> raise "ATOLL_IDENTITY_REFRESH_ENABLED must be true or false"
+end
+
 if encoded = System.get_env("ATOLL_KEY_ENCRYPTION_KEY") do
   case Base.decode64(encoded) do
     {:ok, <<_::binary-size(32)>> = key} -> config :atoll, :key_encryption_key, key

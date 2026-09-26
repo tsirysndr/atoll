@@ -21,6 +21,7 @@ defmodule AtollWeb.Telemetry do
 
   def metrics do
     [
+      sum("atoll.identity.refresh.count", tags: [:result]),
       # Phoenix Metrics
       summary("phoenix.endpoint.start.system_time",
         unit: {:native, :millisecond}
