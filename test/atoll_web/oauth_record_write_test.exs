@@ -11,7 +11,9 @@ defmodule AtollWeb.OAuthRecordWriteTest do
           :oauth_transport_options,
           :key_encryption_key,
           :network_lexicons_enabled,
-          :lexicon_resolution_options
+          :lexicon_resolution_options,
+          :blob_storage,
+          :blob_quota
         ] do
       prior = Application.fetch_env(:atoll, name)
 
@@ -317,6 +319,137 @@ defmodule AtollWeb.OAuthRecordWriteTest do
              "error" => "invalid_dpop_proof"
            }
   end
+
+  test "OAuth uploads preserve raw bytes and staged visibility, then records publish them", c do
+    bytes = <<0, 255, 128>>
+    result = upload_blob(c, bytes)
+    blob = json_response(result, 200)["blob"]
+    cid = Atoll.CID.create(bytes, :raw)
+    assert blob["ref"]["$link"] == Atoll.CID.to_base32(cid)
+    assert blob["size"] == 3
+    assert get_resp_header(result, "dpop-nonce") != []
+    assert get_resp_header(result, "cache-control") == ["no-store"]
+    assert {:ok, %{bytes: ^bytes}} = Atoll.Blobs.get_staged(c.did, cid)
+    assert {:error, :blob_not_found} = Atoll.Blobs.get_public(c.did, cid)
+    params = put_in(body(c, "media"), ["record", "blob"], blob)
+    assert write(c, "putRecord", params) |> json_response(200)
+    assert {:ok, %{bytes: ^bytes}} = Atoll.Blobs.get_public(c.did, cid)
+  end
+
+  test "upload authorization precedes size validation and consumes failed request proofs", c do
+    conn = put_req_header(c.conn, "content-length", "5242881")
+
+    assert upload_blob(%{c | conn: conn}, "x", "bad") |> json_response(401) ==
+             %{"error" => "use_dpop_nonce"}
+
+    signed = write_proof(c, "uploadBlob")
+    assert upload_blob(%{c | conn: conn}, "x", signed).status == 413
+
+    assert upload_blob(c, "x", signed) |> json_response(401) ==
+             %{"error" => "invalid_dpop_proof"}
+
+    Repo.update_all(AccessToken, set: [scope: "atproto transition:email"])
+
+    assert upload_blob(%{c | conn: conn}, "x") |> json_response(403) ==
+             %{"error" => "insufficient_scope"}
+
+    assert Repo.aggregate(Atoll.Blobs.Blob, :count) == 0
+  end
+
+  test "upload credentials cannot authorize records and recheck revocation after body reads", c do
+    for change <- [:scope, :revoked] do
+      # Exercise the actual pre-parser plug, then change authorization before the controller.
+      conn =
+        Plug.Test.conn(:post, "/xrpc/com.atproto.repo.uploadBlob", "private upload")
+        |> put_req_header("authorization", "DPoP " <> c.tokens["access_token"])
+        |> put_req_header("dpop", write_proof(c, "uploadBlob"))
+        |> AtollWeb.BlobUploadPlug.call([])
+
+      refute conn.halted
+      credential = conn.private.atoll_blob_upload.token
+      assert {:error, :invalid_token} = Resource.recheck(credential, :put)
+
+      assert {:error, :invalid_token} =
+               Atoll.Repositories.Writes.write(credential, :put, body(c, "wrong-method"))
+
+      expected =
+        case change do
+          :scope ->
+            Repo.update_all(AccessToken, set: [scope: "atproto"])
+            {403, "insufficient_scope"}
+
+          :revoked ->
+            Repo.delete_all(Session)
+            {401, "invalid_token"}
+        end
+
+      {status, error} = expected
+
+      assert AtollWeb.BlobController.upload(conn, %{}) |> json_response(status) == %{
+               "error" => error
+             }
+
+      assert Repo.aggregate(Atoll.Blobs.Blob, :count) == 0
+      Repo.update_all(AccessToken, set: [scope: "atproto transition:generic"])
+    end
+  end
+
+  test "OAuth blob quotas and S3 failures retain existing storage guarantees", c do
+    Application.put_env(:atoll, :blob_quota, max_bytes: 1)
+    assert upload_blob(c, "too large").status == 400
+    Application.put_env(:atoll, :blob_quota, max_bytes: 100)
+    parent = self()
+
+    config = [
+      backend: :s3,
+      s3: [
+        endpoint: "https://s3.example.com",
+        bucket: "test-bucket",
+        region: "us-east-1",
+        access_key_id: "test",
+        secret_access_key: "secret",
+        request:
+          Req.new(
+            plug: fn conn ->
+              send(parent, {:s3_upload, conn.method})
+              Plug.Conn.send_resp(conn, 503, "unavailable")
+            end
+          )
+      ]
+    ]
+
+    Application.put_env(:atoll, :blob_storage, config)
+    signed = write_proof(c, "uploadBlob")
+    assert upload_blob(c, "bytes", signed).status == 503
+    assert_received {:s3_upload, "PUT"}
+    assert Repo.aggregate(Atoll.Blobs.Blob, :count) == 0
+
+    assert upload_blob(c, "bytes", signed) |> json_response(401) ==
+             %{"error" => "invalid_dpop_proof"}
+
+    config =
+      put_in(
+        config,
+        [:s3, :request],
+        Req.new(
+          plug: fn conn ->
+            Plug.Conn.send_resp(conn, 200, "")
+          end
+        )
+      )
+
+    Application.put_env(:atoll, :blob_storage, config)
+    assert upload_blob(c, "bytes") |> json_response(200)
+    assert Repo.one!(Atoll.Blobs.Blob).backend == :s3
+  end
+
+  defp upload_blob(c, bytes, signed \\ nil),
+    do:
+      c.conn
+      |> put_req_header("authorization", "DPoP " <> c.tokens["access_token"])
+      |> put_req_header("dpop", signed || write_proof(c, "uploadBlob"))
+      |> put_req_header("content-type", "application/octet-stream")
+      |> post("/xrpc/com.atproto.repo.uploadBlob", bytes)
 
   defp body(c, key),
     do: %{

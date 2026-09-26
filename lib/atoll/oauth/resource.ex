@@ -1,6 +1,6 @@
 defmodule Atoll.OAuth.Resource do
   @moduledoc """
-  DPoP-bound OAuth reads and process-bound credentials for record writes.
+  DPoP-bound OAuth reads and process-bound credentials for repository writes.
   Proof admission commits before request parsing and mutation transactions;
   account, source session, OAuth session and access-token locks protect the callback.
   The reader is trusted server code and must not perform mutations or network IO.
@@ -20,7 +20,8 @@ defmodule Atoll.OAuth.Resource do
     create: "createRecord",
     put: "putRecord",
     delete: "deleteRecord",
-    batch: "applyWrites"
+    batch: "applyWrites",
+    upload_blob: "uploadBlob"
   }
 
   @doc "Admit a POST proof and issue a process/method-bound internal credential, valid for 30 seconds."

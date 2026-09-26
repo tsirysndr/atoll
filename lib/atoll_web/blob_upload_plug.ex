@@ -16,8 +16,7 @@ defmodule AtollWeb.BlobUploadPlug do
 
   defp upload(%{method: "POST"} = conn) do
     with :ok <- limit(conn),
-         {:ok, token} <- AtollWeb.BearerToken.get(conn),
-         {:ok, _} <- Sessions.authenticate_session(token),
+         {:ok, token} <- authorize(conn),
          :ok <- encoding(conn),
          {:ok, mime} <- mime(conn),
          {:ok, length} <- content_length(conn),
@@ -29,6 +28,9 @@ defmodule AtollWeb.BlobUploadPlug do
         fail(conn, {:error, :content_length_mismatch})
       end
     else
+      {:error, {:oauth, reason}} ->
+        AtollWeb.OAuthResource.error(conn, reason)
+
       {:error, reason, conn} ->
         fail(conn, {:error, reason})
 
@@ -51,6 +53,19 @@ defmodule AtollWeb.BlobUploadPlug do
       Jason.encode!(%{error: "MethodNotAllowed", message: "Use POST to upload a blob."})
     )
     |> halt()
+  end
+
+  defp authorize(conn) do
+    if AtollWeb.OAuthResource.attempt?(conn) do
+      case AtollWeb.OAuthResource.prepare_write(conn) do
+        {:ok, credential} -> {:ok, credential}
+        {:error, reason} -> {:error, {:oauth, reason}}
+      end
+    else
+      with {:ok, token} <- AtollWeb.BearerToken.get(conn),
+           {:ok, _} <- Sessions.authenticate_session(token),
+           do: {:ok, token}
+    end
   end
 
   defp limit(conn) do

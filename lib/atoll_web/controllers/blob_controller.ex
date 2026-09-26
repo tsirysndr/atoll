@@ -6,6 +6,15 @@ defmodule AtollWeb.BlobController do
   def upload(%{private: %{atoll_blob_upload: upload}} = conn, _params) do
     with {:ok, blob} <- Blobs.stage_authenticated(upload.token, upload.bytes, upload.mime) do
       json(conn, %{blob: blob})
+    else
+      {:error, reason} = error
+      when reason in [:invalid_token, :insufficient_scope, :oauth_resource_store_unavailable] ->
+        if match?(%Atoll.OAuth.WriteCredential{}, upload.token),
+          do: AtollWeb.OAuthResource.error(conn, reason),
+          else: error
+
+      error ->
+        error
     end
   end
 

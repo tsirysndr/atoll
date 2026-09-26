@@ -400,7 +400,8 @@ mutation. Deletes and empty batches need no record schema, even with `validate: 
 - [x] Configurable periodic confidential-client key checks, including idle sessions, with bounded revocation and sweep progress after failures.
 - [x] OAuth resource read guard and DPoP `getSession`, with per-access-token email scope enforcement.
 - [x] DPoP repository create/put/delete/applyWrites with transitional generic scope and transactional authorization rechecks.
-- [ ] OAuth authorization for blob writes, service auth, exports, and remaining resource routes.
+- [x] DPoP blob uploads with transitional generic scope, pre-body proof admission, and transactional authorization rechecks.
+- [ ] OAuth authorization for service auth, exports, and remaining resource routes.
 - [x] Localhost virtual public-client metadata, loopback callback matching, and flow integration without metadata network requests.
 - [ ] OAuth nonce challenges and proof admission integrated into remaining authorization/resource server routes.
 - [ ] ATProto OAuth authorization and resource server support.
@@ -4808,7 +4809,7 @@ token, whose scope is stored explicitly; the replacement refresh token retains
 the original grant. Omitting scope uses the original grant. The migration
 backfills existing access-token scopes from their sessions before enforcing a
 non-null column. Resource authorization must enforce the access token's scope;
-`getSession` and repository record writes now do so; blob writes and other
+`getSession`, repository record writes, and blob uploads now do so; other
 resource integrations remain pending.
 
 On refresh, a valid current confidential key set with the bound key removed or
@@ -5022,5 +5023,28 @@ Tests cover all four methods, foreign-repository denial, schema and swap failure
 batch rollback, proof replay after failures, body limits, session revocation and
 scope narrowing during schema lookup, and rejection of altered, expired,
 wrong-operation, or foreign-process internal credentials. Fine-grained repository
-permissions beyond the transitional generic scope remain pending, as do OAuth
-blob upload and the other resource integrations listed above.
+permissions beyond the transitional generic scope remain pending, as do the
+remaining resource integrations listed above. OAuth blob uploads are described below.
+
+### DPoP blob uploads
+
+`POST /xrpc/com.atproto.repo.uploadBlob` accepts DPoP-bound OAuth access tokens
+with `atproto transition:generic`. Proof admission and scope checks run before
+reading the raw request body. An admitted proof remains consumed when size,
+metadata, quota, or storage checks fail. Missing generic scope returns the OAuth
+`insufficient_scope` error with HTTP 403; invalid or revoked access returns 401.
+
+Uploads use the same signed, process-bound, 30-second internal credential as
+record writes, bound specifically to `uploadBlob`. After reading the body, the
+storage path rechecks the credential and then rechecks current authorization
+under the repository write lock, holding account/session/access locks through
+storage commit. Revocation, scope narrowing, and inactive accounts block uploads.
+Record-write credentials cannot authorize blob uploads or vice versa.
+
+The existing raw-body size/time limits, MIME detection, per-account quotas,
+staged visibility, and PostgreSQL/S3 storage behavior apply to OAuth uploads.
+Tests cover raw bytes, publication through an OAuth record write, pre-body proof
+validation, failure replay, revocation and scope changes between the upload plug
+and controller, quotas, and mocked S3 success/failure. These additions do not
+change the opt-in MinIO integration tests. Fine-grained blob permissions remain
+pending along with the broader permissions system.
