@@ -173,7 +173,7 @@ record Lexicons or grant access to account data.
 - [x] Existing-DID migration provisioning with source-key verification and destination-key signing.
 - [x] Internal durable encrypted signing-key reservations, transactional claims, and bounded master-key rewrapping.
 - [x] Public `reserveSigningKey` endpoint and DID-bound reserved-key selection during migration account creation.
-- [ ] Anonymous reserved-key selection through signed `plcOp` account creation.
+- [x] Anonymous reserved-key selection through signed `plcOp` migration account creation, with durable publication recovery.
 - [x] Chunked repository exports with lazy record-body reads.
 - [x] Streamed HTTP imports with private staging and atomic publication.
 - [ ] Bounded-memory repository metadata traversal.
@@ -901,7 +901,7 @@ handle, a password, and a one-use service JWT for this PDS and the createAccount
 method. Email is optional. It creates a deactivated account and installs the signing
 key reserved for that DID, or generates a new encrypted key when none was reserved.
 `getRecommendedDidCredentials` returns that key and this PDS endpoint;
-Migration PLC rotation keys and authenticated update submission remain pending. Before activation,
+PLC authority-key custody is managed separately from repository signing keys. Before activation,
 imports may use the source key pinned during provisioning: Atoll verifies the CAR,
 re-signs its tree with the destination key, and tracks source revisions to reject
 rollback. Exact retries are idempotent. After updating the public DID document,
@@ -2249,11 +2249,38 @@ the reservation claim and service-token consumption. An unreadable reservation
 fails instead of silently substituting a different key. Accounts without a
 DID-bound reservation retain the existing generated-key migration flow.
 
-Anonymous reservations return distinct public keys and retain encrypted custody,
-but their selection through signed `plcOp` account creation is not implemented yet;
-use the DID-bound form for the supported migration flow. Publishing a DID update
-before account provisioning can invalidate the source service JWT, so provision
-and transfer the account before changing its public signing key and PDS service.
+Anonymous reservations return distinct public keys and retain encrypted custody.
+To select one, include a signed `plcOp` successor in `createAccount` for an existing
+PLC DID. This path still requires the source account's service JWT, password,
+verified handle, and an invite when configured. It verifies fresh PLC history,
+checks that the service JWT's signing key matches that history, and verifies the
+successor's predecessor CID and authorized rotation-key signature. The operation
+must advertise the requested handle, this PDS service, and the reserved key. A
+DID-bound reservation can also be selected this way, but cannot be claimed by a
+different DID. `did:web`, tombstones, genesis operations, and keys outside local
+reserved custody are rejected for this path.
+
+The account, encrypted destination key, source import key, credentials, invite use,
+service-token consumption, and exact PLC journal entry commit together before any
+directory POST. Atoll then uses the authenticated `submitPlcOperation` workflow to
+publish and verify the operation. Success returns a session for the still-deactivated
+account; repository/blob transfer and explicit activation remain separate steps.
+
+If publication or final reconciliation fails after that commit, the response is
+`503 MigrationPublicationPending`: **the account already exists**. Log in using
+the supplied DID/password and submit the exact original operation through
+`com.atproto.identity.submitPlcOperation`. Do not repeat `createAccount` or generate
+a different operation. The reserved key has become account custody and the source
+service token has been consumed; neither is undone after possible external
+publication. Directory conflicts may require operator reconciliation. Validation
+or provisioning failures before the commit retain the reservation and service
+token for retry. Sessions minted before an unsuccessful publication response are
+not returned and remain subject to the normal session expiration/cleanup policy.
+
+Without `plcOp`, reserve with a DID and provision/transfer the account before changing
+its public signing key and PDS service. Publishing the DID update first can
+invalidate the source service JWT. `createAccount` retains its 4 KiB JSON body limit,
+including the optional operation; this does not add entryway or passwordless signup.
 
 `reserve/1` accepts an optional DID and returns only the public `did:key`. Repeating
 a DID reservation returns the same usable key; reservations without a DID create

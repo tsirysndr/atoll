@@ -32,6 +32,7 @@ defmodule AtollWeb.AccountMigrationControllerTest do
           :key_encryption_key,
           :identity_resolution_options,
           :reserved_signing_key_limit,
+          :plc_submission_options,
           :invite_code_required
         ],
         &{&1, Application.fetch_env(:atoll, &1)}
@@ -132,6 +133,109 @@ defmodule AtollWeb.AccountMigrationControllerTest do
     assert {:ok, _} = Commit.verify(blocks[root], @did, new_key.curve, new_key.public)
     assert upload(auth, archive) |> json_response(400)
     assert {:ok, %{did: @did}} = Sessions.authenticate(pair["accessJwt"])
+  end
+
+  test "signed PLC migration consumes anonymous custody and journals before publication", c do
+    migration = plc_migration(c)
+    token = service_token(c.source, migration.did)
+
+    pair =
+      create(c, %{did: migration.did, plcOp: migration.operation}, token) |> json_response(200)
+
+    assert pair["active"] == false
+    assert pair["did"] == migration.did
+    {:ok, installed} = KeyVault.fetch(migration.did)
+    assert {:ok, public} = Multikey.to_did_key(installed.curve, installed.public)
+    assert public == migration.public
+    refute Repo.get(Atoll.Accounts.ReservedSigningKey, public)
+    row = Repo.get_by!(Atoll.Identity.PLC.Update, did: migration.did)
+    assert row.operation == migration.operation
+    assert row.confirmed_at && row.completed_at
+    assert Repo.get!(Profile, migration.did).import_public_key == c.source.public
+    assert Repo.get!(Atoll.Repositories.Head, migration.did).status == :deactivated
+    assert Agent.get(migration.state, & &1.posts) == 1
+
+    assert create(c, %{did: migration.did, plcOp: migration.operation}, token)
+           |> json_response(401)
+  end
+
+  test "publication failure keeps account and exact journal recoverable through ordinary login",
+       c do
+    migration = plc_migration(c)
+    Agent.update(migration.state, &%{&1 | fail: true})
+
+    result =
+      create(
+        c,
+        %{did: migration.did, plcOp: migration.operation},
+        service_token(c.source, migration.did)
+      )
+
+    assert json_response(result, 503)["error"] == "MigrationPublicationPending"
+    assert Repo.get!(Atoll.Repositories.Head, migration.did).status == :deactivated
+    row = Repo.get_by!(Atoll.Identity.PLC.Update, did: migration.did)
+    assert row.operation == migration.operation
+    assert is_nil(row.confirmed_at)
+    assert is_nil(row.completed_at)
+    refute Repo.get(Atoll.Accounts.ReservedSigningKey, migration.public)
+    {:ok, pair} = Sessions.create(migration.did, @password)
+    Agent.update(migration.state, &%{&1 | fail: false})
+
+    assert c.conn
+           |> bearer(pair.access_jwt)
+           |> put_req_header("content-type", "application/json")
+           |> post("/xrpc/com.atproto.identity.submitPlcOperation", %{
+             operation: migration.operation
+           })
+           |> response(200) == ""
+
+    assert Repo.get_by!(Atoll.Identity.PLC.Update, did: migration.did).completed_at
+  end
+
+  test "invalid migration successor cannot consume reservation or service authorization", c do
+    migration = plc_migration(c)
+    token = service_token(c.source, migration.did)
+    other = SigningKey.generate()
+
+    {:ok, forged} =
+      Atoll.Identity.PLC.Operation.sign(Map.delete(migration.operation, "sig"), other)
+
+    for operation <- [
+          forged,
+          put_in(migration.operation, ["alsoKnownAs"], ["at://other.example.com"])
+        ] do
+      assert create(c, %{did: migration.did, plcOp: operation}, token) |> json_response(400)
+      assert Repo.get(Atoll.Accounts.ReservedSigningKey, migration.public)
+      refute Repo.get(Atoll.Repositories.Head, migration.did)
+      assert Repo.aggregate(ServiceTokenUse, :count) == 0
+      assert Repo.aggregate(Atoll.Identity.PLC.Update, :count) == 0
+    end
+
+    assert Agent.get(migration.state, & &1.posts) == 0
+  end
+
+  test "signed migration cannot claim another DID reservation or a key outside local custody",
+       c do
+    migration = plc_migration(c)
+    bound = reserve(c, %{did: "did:web:other-reserved.example.com"}) |> json_response(200)
+    {:ok, unknown} = Multikey.to_did_key(:k256, SigningKey.generate().public)
+    token = service_token(c.source, migration.did)
+
+    for public <- [bound["signingKey"], unknown] do
+      unsigned =
+        migration.operation
+        |> Map.delete("sig")
+        |> put_in(["verificationMethods", "atproto"], public)
+
+      {:ok, operation} = Atoll.Identity.PLC.Operation.sign(unsigned, migration.rotation)
+      assert create(c, %{did: migration.did, plcOp: operation}, token) |> json_response(503)
+      refute Repo.get(Atoll.Repositories.Head, migration.did)
+      assert Repo.aggregate(ServiceTokenUse, :count) == 0
+      assert Repo.get(Atoll.Accounts.ReservedSigningKey, migration.public)
+      assert Repo.get(Atoll.Accounts.ReservedSigningKey, bound["signingKey"])
+    end
+
+    assert Agent.get(migration.state, & &1.posts) == 0
   end
 
   test "public reservations validate inputs, enforce capacity and preserve DID retries", c do
@@ -305,6 +409,78 @@ defmodule AtollWeb.AccountMigrationControllerTest do
     {:ok, %{blocks: blocks}} = CAR.decode(archive)
     {:ok, bad} = CAR.encode([commit.cid, commit.cid], blocks)
     assert upload(bearer(c.conn, pair["accessJwt"]), bad) |> json_response(400)
+  end
+
+  defp plc_migration(c) do
+    alias Atoll.Identity.PLC.Operation
+    rotation = SigningKey.generate()
+    {:ok, source} = Multikey.to_did_key(c.source.curve, c.source.public)
+    {:ok, authority} = Multikey.to_did_key(rotation.curve, rotation.public)
+
+    {:ok, genesis} =
+      Operation.create_atproto(
+        source,
+        @handle,
+        "https://old-pds.example.com",
+        [authority],
+        rotation
+      )
+
+    public = reserve(c, %{}) |> json_response(200) |> Map.fetch!("signingKey")
+    {:ok, unsigned} = Operation.successor(genesis.operation)
+
+    unsigned =
+      unsigned
+      |> put_in(["verificationMethods", "atproto"], public)
+      |> put_in(["services", "atproto_pds", "endpoint"], AtollWeb.Endpoint.url())
+
+    {:ok, operation} = Operation.sign(unsigned, rotation)
+    {:ok, cid} = Operation.cid(operation)
+
+    entry = fn op, cid, date ->
+      %{
+        "did" => genesis.did,
+        "operation" => op,
+        "cid" => cid,
+        "nullified" => false,
+        "createdAt" => date
+      }
+    end
+
+    old = entry.(genesis.operation, genesis.cid, "2026-01-01T00:00:00Z")
+    next = entry.(operation, cid, "2026-01-02T00:00:00Z")
+    state = start_supervised!({Agent, fn -> %{published: false, posts: 0, fail: false} end})
+    configure(document(genesis.did, @handle, c.source, "https://old-pds.example.com"))
+    Application.put_env(:atoll, :plc_submission_options, plug: {Req.Test, __MODULE__})
+
+    Req.Test.stub(__MODULE__, fn conn ->
+      current = Agent.get(state, & &1)
+
+      cond do
+        conn.method == "POST" ->
+          # Publication must occur after durable custody and journal commit.
+          refute Repo.in_transaction?()
+          assert Repo.get_by!(Atoll.Identity.PLC.Update, did: genesis.did).operation == operation
+          assert Repo.get!(Atoll.Repositories.Head, genesis.did).status == :deactivated
+          {:ok, body, conn} = Plug.Conn.read_body(conn)
+          assert Jason.decode!(body) == operation
+
+          if current.fail do
+            Plug.Conn.send_resp(conn, 503, "unavailable")
+          else
+            Agent.update(state, &%{&1 | published: true, posts: &1.posts + 1})
+            Req.Test.json(conn, %{})
+          end
+
+        String.ends_with?(conn.request_path, "/log/audit") ->
+          Req.Test.json(conn, if(current.published, do: [old, next], else: [old]))
+
+        String.ends_with?(conn.request_path, "/log/last") ->
+          Req.Test.json(conn, if(current.published, do: operation, else: genesis.operation))
+      end
+    end)
+
+    %{did: genesis.did, operation: operation, public: public, state: state, rotation: rotation}
   end
 
   defp input, do: %{did: @did, handle: @handle, email: "Owner@Example.COM", password: @password}

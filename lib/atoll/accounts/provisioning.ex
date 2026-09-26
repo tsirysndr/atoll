@@ -7,7 +7,8 @@ defmodule Atoll.Accounts.Provisioning do
   @method "com.atproto.server.createAccount"
 
   def import_account(token, params) do
-    with {:ok, input} <- input(params),
+    with false <- Repo.in_transaction?(),
+         {:ok, input} <- input(params),
          :ok <- Invites.validate_new(input.invite),
          {:ok, hash} <- Credentials.hash(input.password) do
       opts =
@@ -16,75 +17,112 @@ defmodule Atoll.Accounts.Provisioning do
 
       audience = Application.fetch_env!(:atoll, :pds) |> Keyword.fetch!(:did)
 
-      Repo.transaction(fn ->
-        # Consume the token within this transaction so any provisioning failure permits retry.
-        verified = unwrap!(authorize(token, audience, opts))
-        if verified.claims["iss"] != input.did, do: Repo.rollback(:forbidden)
-        identity = unwrap!(Document.parse(verified.document, input.did))
+      result =
+        Repo.transaction(fn ->
+          # Consume the token within this transaction so any provisioning failure permits retry.
+          verified = unwrap!(authorize(token, audience, opts))
+          if verified.claims["iss"] != input.did, do: Repo.rollback(:forbidden)
+          identity = unwrap!(Document.parse(verified.document, input.did))
 
-        unless identity.claimed_handle == input.handle and
-                 Handle.resolve(input.handle, opts) == {:ok, input.did},
-               do: Repo.rollback(:unverified_handle)
+          unless identity.claimed_handle == input.handle and
+                   Handle.resolve(input.handle, opts) == {:ok, input.did},
+                 do: Repo.rollback(:unverified_handle)
 
-        Events.lock!()
-        if Repo.get(Head, input.did), do: Repo.rollback(:account_exists)
+          migration =
+            unwrap!(
+              Atoll.Accounts.MigrationOperation.prepare(input, verified, submission_opts(opts))
+            )
 
-        if Atoll.Identity.HandleChanges.claimed?(input.handle),
-          do: Repo.rollback(:handle_not_available)
+          Events.lock!()
+          if Repo.get(Head, input.did), do: Repo.rollback(:account_exists)
 
-        if input.email && Repo.get_by(Profile, email: input.email),
-          do: Repo.rollback(:email_not_available)
+          if Atoll.Identity.HandleChanges.claimed?(input.handle),
+            do: Repo.rollback(:handle_not_available)
 
-        case Atoll.Accounts.SigningKeyReservations.claim_for_did!(input.did) do
-          nil ->
-            unwrap!(Repositories.create_managed(input.did))
+          if input.email && Repo.get_by(Profile, email: input.email),
+            do: Repo.rollback(:email_not_available)
 
-          key ->
-            unwrap!(Repositories.create(input.did, key))
-            unwrap!(Atoll.KeyVault.store(input.did, key))
-        end
+          reserved =
+            if migration,
+              do: Atoll.Accounts.SigningKeyReservations.claim!(input.did, migration.public_key),
+              else: Atoll.Accounts.SigningKeyReservations.claim_for_did!(input.did)
 
-        unwrap!(Repositories.set_status(input.did, :deactivated))
+          case reserved do
+            nil ->
+              unwrap!(Repositories.create_managed(input.did))
 
-        changeset =
-          Ecto.Changeset.change(%Profile{
+            key ->
+              unwrap!(Repositories.create(input.did, key))
+              unwrap!(Atoll.KeyVault.store(input.did, key))
+          end
+
+          unwrap!(Repositories.set_status(input.did, :deactivated))
+
+          changeset =
+            Ecto.Changeset.change(%Profile{
+              did: input.did,
+              handle: input.handle,
+              email: input.email,
+              import_curve: verified.signing_key.curve,
+              import_public_key: verified.signing_key.public
+            })
+            |> Ecto.Changeset.unique_constraint(:handle)
+            |> Ecto.Changeset.unique_constraint(:email)
+
+          case Repo.insert(changeset, log: false) do
+            {:ok, _} ->
+              :ok
+
+            {:error, changeset} ->
+              if Keyword.has_key?(changeset.errors, :handle),
+                do: Repo.rollback(:handle_not_available),
+                else: Repo.rollback(:email_not_available)
+          end
+
+          unwrap!(Credentials.store_hash(input.did, hash))
+          Invites.consume!(input.did, input.invite)
+
+          if migration,
+            do:
+              unwrap!(
+                Atoll.Identity.PLC.Updates.stage(input.did, migration.audit, input.operation)
+              )
+
+          pair = unwrap!(Sessions.create_for_account(input.did))
+
+          %{
             did: input.did,
             handle: input.handle,
-            email: input.email,
-            import_curve: verified.signing_key.curve,
-            import_public_key: verified.signing_key.public
-          })
-          |> Ecto.Changeset.unique_constraint(:handle)
-          |> Ecto.Changeset.unique_constraint(:email)
+            accessJwt: pair.access_jwt,
+            refreshJwt: pair.refresh_jwt,
+            active: false,
+            status: "deactivated"
+          }
+        end)
 
-        case Repo.insert(changeset, log: false) do
-          {:ok, _} ->
-            :ok
+      case result do
+        {:ok, account} when not is_nil(input.operation) ->
+          case Atoll.Identity.PLC.Submission.submit(
+                 account.accessJwt,
+                 %{"operation" => input.operation},
+                 submission_opts(opts)
+               ) do
+            {:ok, _} -> {:ok, account}
+            {:error, _} -> {:error, :migration_publication_pending}
+          end
 
-          {:error, changeset} ->
-            if Keyword.has_key?(changeset.errors, :handle),
-              do: Repo.rollback(:handle_not_available),
-              else: Repo.rollback(:email_not_available)
-        end
-
-        unwrap!(Credentials.store_hash(input.did, hash))
-        Invites.consume!(input.did, input.invite)
-        pair = unwrap!(Sessions.create_for_account(input.did))
-
-        %{
-          did: input.did,
-          handle: input.handle,
-          accessJwt: pair.access_jwt,
-          refreshJwt: pair.refresh_jwt,
-          active: false,
-          status: "deactivated"
-        }
-      end)
+        result ->
+          result
+      end
     else
+      true -> {:error, :plc_update_inside_transaction}
       {:error, :invalid_credentials} -> {:error, :invalid_password}
       error -> error
     end
   end
+
+  defp submission_opts(opts),
+    do: Keyword.merge(opts, Application.get_env(:atoll, :plc_submission_options, []))
 
   # Accept only this specific PDS service reference or the explicit legacy bare audience.
   defp authorize(token, audience, opts) do
@@ -98,9 +136,11 @@ defmodule Atoll.Accounts.Provisioning do
   end
 
   defp input(%{"did" => did, "handle" => handle, "password" => password} = params) do
-    with true <- Map.keys(params) -- ["did", "handle", "password", "email", "inviteCode"] == [],
+    with true <-
+           Map.keys(params) -- ["did", "handle", "password", "email", "inviteCode", "plcOp"] == [],
          true <- Syntax.did?(did),
          true <- Syntax.handle?(handle),
+         true <- not Map.has_key?(params, "plcOp") or is_map(params["plcOp"]),
          {:ok, email} <- email(params["email"]) do
       {:ok,
        %{
@@ -108,7 +148,8 @@ defmodule Atoll.Accounts.Provisioning do
          handle: String.downcase(handle),
          password: password,
          email: email,
-         invite: params["inviteCode"]
+         invite: params["inviteCode"],
+         operation: params["plcOp"]
        }}
     else
       _ -> {:error, :invalid_request}
