@@ -155,6 +155,7 @@ The same `validate: true` restriction applies to batch requests.
 - [x] Service-authenticated `createAccount` for migration of an existing DID.
 - [x] Authenticated recommended DID credentials for the destination signing key and service.
 - [x] Email-authorized account deletion with credential/key removal, blob cleanup, and a deleted-account event.
+- [x] Internal PLC operation signing, genesis DID derivation, and predecessor signature checks.
 - [ ] Fresh DID signup.
 - [x] Internal DID-scoped password credentials with salted Argon2id hashes, bounded input, redacted inspection, and duplicate protection.
 - [x] Shared configurable Cloudflare Worker email delivery client.
@@ -961,3 +962,23 @@ endpoint, path-based DID, localhost DID, or non-web DID returns 404 here. Those
 identities are not automatically provisioned by this endpoint; externally managed
 DIDs still need their own publication mechanism. DNS, TLS certificates, deployment,
 and service-key rotation coordination remain operator responsibilities.
+
+
+### PLC operation primitives
+
+`Atoll.Identity.PLC.Operation` constructs signed ATProto genesis operations using
+separate repository signing and PLC rotation keys. It derives the DID and operation
+CID from canonical signed DAG-CBOR, verifies modern and legacy genesis operations,
+and checks update/tombstone signatures against an already-trusted predecessor.
+Both secp256k1 and P-256 rotation keys are supported. Signature encodings must be
+canonical unpadded base64url with low-S compact ECDSA values. Signed operations
+are limited to 7500 bytes; current regular operations require 1–5 distinct rotation
+keys. Legacy operations can be verified but are not generated.
+
+Tests use the PLC project's pinned interoperability fixtures (with provenance and
+license in `test/fixtures/plc`) to check exact DIDs, CIDs, signatures, and malformed
+signature rejection. These primitives do not validate recovery windows or audit-log
+nullification, and are not yet used for public signup or registry submission.
+Persist a signed genesis operation before attempting registration: signing it again
+can produce different bytes and therefore a different DID. Full audit validation,
+registration delivery/reconciliation, and fresh-account provisioning remain pending.
