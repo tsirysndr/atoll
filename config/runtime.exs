@@ -1,5 +1,18 @@
 import Config
 
+nonnegative_integer = fn name, default ->
+  value = System.get_env(name, default)
+
+  case Integer.parse(value) do
+    {number, ""} when number >= 0 -> number
+    _ -> raise "#{name} must be a nonnegative integer"
+  end
+end
+
+config :atoll, :blob_quota,
+  max_bytes: nonnegative_integer.("ATOLL_BLOB_MAX_ACCOUNT_BYTES", "1073741824"),
+  max_count: nonnegative_integer.("ATOLL_BLOB_MAX_ACCOUNT_COUNT", "10000")
+
 case System.get_env("ATOLL_BLOB_CLEANUP_ENABLED", "false") do
   "true" -> config :atoll, :blob_cleanup_enabled, config_env() != :test
   "false" -> config :atoll, :blob_cleanup_enabled, false

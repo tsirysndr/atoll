@@ -115,6 +115,64 @@ defmodule Atoll.BlobsTest do
     assert Repo.aggregate(Blob, :count) == 0
   end
 
+  test "byte quotas allow exact capacity, deduplicate ownership, and isolate accounts" do
+    opts = @pg ++ [quota: [max_bytes: 3, max_count: 10]]
+    assert {:ok, blob} = Blobs.stage(@did, "abc", "text/plain", opts)
+    assert Blobs.stage(@did, "d", "text/plain", opts) == {:error, :blob_quota_exceeded}
+    assert Storage.get_block(CID.create("d", :raw)) == {:error, :not_found}
+
+    lowered = @pg ++ [quota: [max_bytes: 0, max_count: 0]]
+    assert Blobs.stage(@did, "abc", "text/plain", lowered) == {:ok, blob}
+    other = "did:plc:quotaother"
+    {:ok, _} = Repositories.create(other, SigningKey.generate())
+    assert {:ok, _} = Blobs.stage(other, "abc", "text/plain", opts)
+    assert Blobs.stage(other, "d", "text/plain", opts) == {:error, :blob_quota_exceeded}
+  end
+
+  test "count quotas include empty blobs and reject invalid limits" do
+    opts = @pg ++ [quota: [max_bytes: 100, max_count: 1]]
+    assert {:ok, _} = Blobs.stage(@did, "", "text/plain", opts)
+    assert Blobs.stage(@did, "x", "text/plain", opts) == {:error, :blob_quota_exceeded}
+
+    for quota <- [[max_bytes: -1], [max_count: "1"], [max_bytes: nil]] do
+      assert Blobs.stage(@did, "x", "text/plain", @pg ++ [quota: quota]) ==
+               {:error, :invalid_blob_quota}
+    end
+  end
+
+  test "quotas combine backends and reject excess before S3 PUT" do
+    request = Req.new(plug: fn conn -> Plug.Conn.send_resp(conn, 200, "") end)
+    opts = s3(request) ++ [quota: [max_bytes: 3]]
+    assert {:ok, _} = Blobs.stage(@did, "ab", "text/plain", opts)
+    assert {:ok, _} = Blobs.stage(@did, "c", "text/plain", @pg ++ [quota: [max_bytes: 3]])
+    never_called = Req.new(plug: fn _conn -> flunk("quota rejection must precede S3 PUT") end)
+
+    assert Blobs.stage(@did, "d", "text/plain", s3(never_called) ++ [quota: [max_bytes: 3]]) ==
+             {:error, :blob_quota_exceeded}
+
+    assert Repo.aggregate(Blob, :count) == 2
+  end
+
+  test "expiration and last-reference removal release quota before physical cleanup" do
+    opts = @pg ++ [quota: [max_bytes: 3, max_count: 1]]
+    assert {:ok, _} = Blobs.stage(@did, "old", "text/plain", opts)
+    old = DateTime.add(DateTime.utc_now(), -172_800, :second)
+    Repo.update_all(from(b in Blob, where: b.did == @did), set: [staged_at: old])
+    assert Atoll.Blobs.Cleanup.expire_staged() == {:ok, 1}
+    assert {:ok, _} = Blobs.stage(@did, "new", "text/plain", opts)
+
+    key = SigningKey.generate()
+    other = "did:plc:quotareferenced"
+    {:ok, _} = Repositories.create(other, key)
+    {:ok, blob} = Blobs.stage(other, "ref", "text/plain", opts)
+    path = "com.example.record/one"
+    record = %{"$type" => "com.example.record", "blob" => blob}
+    {:ok, _} = Repositories.apply_writes(other, [{:put, path, record}], key)
+    assert Blobs.stage(other, "x", "text/plain", opts) == {:error, :blob_quota_exceeded}
+    {:ok, _} = Repositories.apply_writes(other, [{:delete, path}], key)
+    assert {:ok, _} = Blobs.stage(other, "yes", "text/plain", opts)
+  end
+
   test "S3 reads reject corrupt bytes and oversized responses" do
     opts = s3(Req.new(plug: fn conn -> Plug.Conn.send_resp(conn, 200, "") end))
     assert {:ok, _} = Blobs.stage(@did, "original", "text/plain", opts)

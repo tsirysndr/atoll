@@ -111,7 +111,8 @@ record Lexicons or grant access to account data.
 - [x] Internal staged-blob expiration with a 24-hour default grace period and a one-hour minimum.
 - [x] Durable cleanup queue for withdrawn/expired blob ownership, shared-owner checks, PostgreSQL/S3 deletion, and retryable S3 failures.
 - [x] Opt-in supervised cleanup scheduling with bounded batches, task deadlines, failure recovery, and outcome telemetry.
-- [ ] Untracked-object inventory and storage quotas.
+- [x] Transactional per-account blob byte and object-count quotas across both storage backends.
+- [ ] Untracked-object inventory.
 
 Staged blobs are private until referenced by a current record with matching
 metadata. Imports may reference missing blobs; matching uploads make those blobs
@@ -151,10 +152,21 @@ are never transformed. MIME syntax validation does not inspect media contents.
 Existing PostgreSQL blobs remain readable when S3 is selected. Moving existing
 S3 objects to another endpoint, bucket, or backend requires a separate migration;
 retain their original S3 configuration until that is complete.
+
+`ATOLL_BLOB_MAX_ACCOUNT_BYTES` defaults to 1073741824 (1 GiB), and
+`ATOLL_BLOB_MAX_ACCOUNT_COUNT` defaults to 10000. Both accept nonnegative integers;
+zero prevents new ownership that would exceed that limit. Each account's unique
+staged and referenced blobs count toward both limits, including empty blobs toward
+the count. Shared bytes count separately for each owner. Checks run under the
+repository write lock before any storage write and return `:blob_quota_exceeded`.
+Re-uploading an owned CID remains allowed after lowering limits. Expiration or
+last-reference removal releases logical quota immediately, before physical cleanup.
+These limits do not cap repository blocks, retained revisions, or orphaned bytes.
+
 Uploads and cleanup share the repository write lock, including the S3 request,
 to prevent publication racing with object deletion. Slow S3 operations therefore
 delay other writes. A successful PUT followed by database failure can still leave
-an untracked object. Inventory-based orphan discovery, quotas, multipart uploads,
+an untracked object. Inventory-based orphan discovery, multipart uploads,
 and broader provider interoperability tests remain pending. The standard tests use a mocked S3 transport;
 the optional Docker suite exercises a real MinIO server.
 

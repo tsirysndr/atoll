@@ -7,7 +7,8 @@ defmodule Atoll.Blobs do
   record reference with matching metadata and an active repository.
   MIME validation checks syntax only, not file contents. The local size limit is
   5 MiB per blob. Expiration and queued cleanup have an opt-in scheduler;
-  streaming, quotas, and discovery of untracked orphan objects remain pending.
+  account quotas include staged and referenced ownership across both backends.
+  Streaming and discovery of untracked orphan objects remain pending.
   """
   import Ecto.Query
   alias Atoll.{CID, Repo, Repositories, Storage}
@@ -26,6 +27,7 @@ defmodule Atoll.Blobs do
       Repo.transaction(fn ->
         Events.lock!()
         active_head!(did, "FOR UPDATE")
+        check_quota!(did, cid, byte_size(bytes), opts)
 
         backend =
           case prepare_backend(did, cid, bytes, storage(opts)) do
@@ -130,6 +132,29 @@ defmodule Atoll.Blobs do
   defp storage(opts),
     do:
       Keyword.get(opts, :storage, Application.get_env(:atoll, :blob_storage, backend: :postgres))
+
+  defp check_quota!(did, cid, size, opts) do
+    limits = Keyword.get(opts, :quota, Application.get_env(:atoll, :blob_quota, []))
+    max_bytes = Keyword.get(limits, :max_bytes, 1_073_741_824)
+    max_count = Keyword.get(limits, :max_count, 10_000)
+
+    unless is_integer(max_bytes) and max_bytes >= 0 and
+             is_integer(max_count) and max_count >= 0,
+           do: Repo.rollback(:invalid_blob_quota)
+
+    # Renewing existing ownership consumes no additional space, even after a limit decrease.
+    unless Repo.exists?(from b in Blob, where: b.did == ^did and b.cid == ^cid) do
+      {count, bytes} =
+        Repo.one(
+          from b in Blob,
+            where: b.did == ^did,
+            select: {count(b.cid), type(coalesce(sum(b.size), 0), :integer)}
+        )
+
+      if count + 1 > max_count or bytes + size > max_bytes,
+        do: Repo.rollback(:blob_quota_exceeded)
+    end
+  end
 
   defp prepare_backend(did, cid, bytes, config) do
     case Repo.get_by(Blob, did: did, cid: cid) do
