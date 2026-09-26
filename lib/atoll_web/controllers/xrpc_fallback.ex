@@ -1,6 +1,24 @@
 defmodule AtollWeb.XRPCFallback do
   use AtollWeb, :controller
 
+  def call(conn, {:error, :blob_too_large}),
+    do: error(conn, 413, "BlobTooLarge", "Blob exceeds the 5 MiB limit.")
+
+  def call(conn, {:error, :blob_quota_exceeded}),
+    do: error(conn, 400, "BlobQuotaExceeded", "Account blob quota exceeded.")
+
+  def call(conn, {:error, reason}) when reason in [:invalid_mime_type, :content_length_mismatch],
+    do: error(conn, 400, "InvalidRequest", "Invalid blob media type or content length.")
+
+  def call(conn, {:error, :blob_storage_unavailable}),
+    do: error(conn, 503, "ServiceUnavailable", "Blob storage is unavailable.")
+
+  def call(conn, {:error, :upload_timeout}),
+    do: error(conn, 408, "RequestTimeout", "Blob upload timed out.")
+
+  def call(conn, {:error, :upload_rate_limited}),
+    do: error(conn, 429, "RateLimitExceeded", "Too many blob uploads.")
+
   def call(conn, {:error, reason}) when reason in [:auth_required, :invalid_credentials],
     do: error(conn, 401, "AuthRequired", "Authentication required or credentials incorrect.")
 

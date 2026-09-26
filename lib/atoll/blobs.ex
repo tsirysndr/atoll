@@ -16,6 +16,25 @@ defmodule Atoll.Blobs do
   alias Atoll.Repositories.{Events, Head}
   @max_size 5 * 1024 * 1024
 
+  @doc "Stages an upload authorized by a live access token, with authorization held through commit."
+  def stage_authenticated(token, bytes, content_type, opts \\ []) do
+    with {:ok, claims} <- Atoll.Accounts.Tokens.verify(token, :access) do
+      Repo.transaction(fn ->
+        Events.lock!()
+        # Acquire the write lock before the session lock to avoid a lock upgrade
+        # deadlock with refresh, which takes a head share lock before its session lock.
+        active_head!(claims["sub"], "FOR UPDATE")
+
+        with {:ok, %{did: did}} <- Atoll.Accounts.Sessions.authenticate(token),
+             {:ok, blob} <- stage(did, bytes, content_type, opts) do
+          blob
+        else
+          {:error, reason} -> Repo.rollback(reason)
+        end
+      end)
+    end
+  end
+
   @doc "Stage bytes for an active hosted repository and return ATProto JSON blob metadata."
   def stage(did, bytes, content_type, opts \\ [])
 

@@ -3,6 +3,14 @@ defmodule AtollWeb.BlobController do
   alias Atoll.{Blobs, CID, Syntax, TID}
   action_fallback AtollWeb.XRPCFallback
 
+  def upload(%{private: %{atoll_blob_upload: upload}} = conn, _params) do
+    with {:ok, blob} <- Blobs.stage_authenticated(upload.token, upload.bytes, upload.mime) do
+      json(conn, %{blob: blob})
+    end
+  end
+
+  def upload(_conn, _params), do: {:error, :auth_required}
+
   def get_blob(conn, params) do
     with true <- Syntax.did?(params["did"]),
          {:ok, cid} <- raw_cid(params["cid"]),

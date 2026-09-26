@@ -185,7 +185,8 @@ again inside the write transaction; token verification alone is not write permis
 - [x] Internal account-scoped blob staging with MIME syntax validation, a 5 MiB size limit, and optional content-length checks.
 - [x] PostgreSQL and S3-compatible byte storage, with per-blob backend metadata and verified reads.
 - [x] Docker MinIO integration tests for signed storage operations, access isolation, and failure handling.
-- [ ] Authenticated blob upload endpoint and media-content validation.
+- [x] Authenticated `com.atproto.repo.uploadBlob` with bounded raw-body reads, transactional session rechecks, and per-IP rate limiting.
+- [ ] Media-content sniffing and Lexicon-specific media validation.
 - [x] Atomic nested record-reference tracking, ownership/metadata checks on writes, and withdrawal when the last reference is removed.
 - [x] Public `com.atproto.sync.getBlob` and paginated `listBlobs`, with `since` filtering, repository status checks, and restrictive content headers.
 - [x] Internal staged-blob expiration with a 24-hour default grace period and a one-hour minimum.
@@ -199,7 +200,22 @@ metadata. Imports may reference missing blobs; matching uploads make those blobs
 available. Removing the last reference removes account ownership and public
 access and queues physical byte cleanup. Existing records predating
 the reference-index migration need to be rewritten or imported in a newer
-snapshot before their blobs become public. Authenticated uploads remain pending.
+snapshot before their blobs become public.
+
+Upload raw bytes with `POST /xrpc/com.atproto.repo.uploadBlob`, an access JWT in
+`Authorization: Bearer <accessJwt>`, and a concrete `Content-Type` without
+parameters (defaults to `application/octet-stream` when absent). The JSON response
+contains `blob`. JSON and other media bodies are stored verbatim, not parsed.
+Ownership always comes from the access token. The session is checked before
+reading, then checked and locked again inside the storage transaction.
+
+Uploads accept at most 5 MiB, with or without Content-Length, and verify a supplied
+length. Reads use 64 KiB chunks, a five-second per-read timeout and a thirty-second
+total read budget; the bounded body is assembled in memory before storage.
+Compressed request bodies are rejected. Uploads have a separate limit of 60
+attempts per direct peer IP per five minutes, using the same bounded per-node
+limiter as sessions. Byte/count quotas cover both PostgreSQL and S3 uploads.
+Media types are syntax-checked only; bytes are not inspected or transformed.
 
 ### Blob storage configuration
 
@@ -335,7 +351,8 @@ events. The `[:atoll, :identity, :refresh]` telemetry event reports a count and
 
 - [x] `mix precommit` checks compilation warnings, unused dependency locks, formatting, and tests.
 - [x] GitHub Actions runs checks and the Docker MinIO integration suite on every push (also available manually).
-- [ ] Rate limiting and request / upload size limits.
+- [x] Session and blob-upload rate limits and bounded request bodies.
+- [ ] General API rate limits, distributed limits, and trusted-proxy client IP handling.
 - [ ] Administrative account controls and takedowns.
 - [ ] Production configuration, HTTPS deployment, and signing-key protection.
 - [ ] Database and blob backup / restore workflow.

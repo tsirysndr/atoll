@@ -48,21 +48,7 @@ defmodule AtollWeb.SessionController do
 
   defp credentials(_), do: {:error, :invalid_request}
 
-  defp bearer(conn) do
-    case get_req_header(conn, "authorization") do
-      [] ->
-        {:error, :auth_required}
-
-      [value] when byte_size(value) <= 8200 ->
-        case Regex.run(~r/\ABearer ([A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)\z/i, value) do
-          [_, token] -> {:ok, token}
-          _ -> {:error, :invalid_token}
-        end
-
-      _ ->
-        {:error, :invalid_token}
-    end
-  end
+  defp bearer(conn), do: AtollWeb.BearerToken.get(conn)
 
   defp session_response(pair) do
     Map.merge(identity(pair.did), %{accessJwt: pair.access_jwt, refreshJwt: pair.refresh_jwt})
