@@ -67,7 +67,7 @@ defmodule Atoll.OAuth.ClientMetadataTest do
           nil,
           "",
           "http://app.example.com/meta",
-          "http://localhost",
+          "http://localhost:80",
           @id <> "#fragment",
           "https://app.example.com:443/meta",
           "https://user@app.example.com/meta",

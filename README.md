@@ -400,7 +400,7 @@ mutation. Deletes and empty batches need no record schema, even with `validate: 
 - [x] Configurable periodic confidential-client key checks, including idle sessions, with bounded revocation and sweep progress after failures.
 - [x] OAuth resource read guard and DPoP `getSession`, with per-access-token email scope enforcement.
 - [ ] OAuth authorization for repository/blob writes, service auth, exports, and remaining resource routes.
-- [ ] Localhost virtual client metadata.
+- [x] Localhost virtual public-client metadata, loopback callback matching, and flow integration without metadata network requests.
 - [ ] OAuth nonce challenges and proof admission integrated into remaining authorization/resource server routes.
 - [ ] ATProto OAuth authorization and resource server support.
 - [x] Live-session and repository ownership checks for blob uploads and single/batch record writes.
@@ -4453,7 +4453,8 @@ destinations, preserves the original hostname for HTTP and TLS, refuses redirect
 and compressed responses, and requires HTTP 200 with `application/json`. Response
 bodies are capped at 64 KiB; duplicate JSON members and nesting beyond 16 levels
 are rejected. DNS/connect timeouts are three seconds and the HTTP request timeout
-is five seconds. There is no metadata cache or fallback to stale data.
+is five seconds. There is no metadata cache or fallback to stale data. The
+localhost virtual-client exception below synthesizes metadata without networking.
 
 The returned document must exactly identify the requested client ID, declare
 `atproto`, require DPoP, and declare the authorization-code flow. Refresh-token
@@ -4462,7 +4463,8 @@ ports. URLs must use ASCII serialization (including punycode hostnames and
 percent-encoded non-ASCII paths). Web callbacks require HTTPS; native callbacks
 require the client's HTTPS origin or its reversed-domain custom scheme. Explicit
 default HTTPS callback ports are rejected. `redirect_allowed?/2` compares the
-entire callback exactly, including any query. `scopes_allowed?/2` requires
+entire callback exactly, including any query, except for virtual localhost
+clients where only the loopback port is ignored. `scopes_allowed?/2` requires
 `atproto` and checks that every requested scope was declared; this does not grant
 permissions or replace consent and endpoint scope enforcement.
 
@@ -4474,8 +4476,8 @@ to 32 key objects. These declarations are **not verified client authentication**
 the `ClientKeys` loader below adds key validation and remote JWKS retrieval, while
 the assertion guard below adds signature, replay, and supplied key-binding checks.
 The code exchange below persists session bindings. Metadata branding is untrusted
-and must not be displayed as verified application identity. The optional localhost
-virtual-client flow and browser authorization remain pending.
+and must not be displayed as verified application identity. Localhost virtual
+clients are supported as described below; browser authorization remains pending.
 
 The declaration rules follow the
 [ATProto OAuth client profile](https://atproto.com/specs/oauth#clients).
@@ -4932,3 +4934,47 @@ Tests cover retained/removed/replaced keys, cascades, fetch failures, pagination
 public/expired sessions, metadata-time binding changes and deletion, refresh
 rotation during fetch, one-task scheduling, timeouts, shutdown, and cursor reset.
 This supplies the periodic retrieval required by the [ATProto confidential-client profile](https://atproto.com/specs/oauth#confidential-client-authentication).
+
+
+### Localhost OAuth clients
+
+Atoll accepts the virtual client IDs `http://localhost` and `http://localhost/`,
+optionally with a query. `Atoll.OAuth.LocalhostClient` generates a public native
+client declaration with `none` client authentication, mandatory DPoP, authorization
+code and refresh grants, and default scope `atproto`. No DNS or HTTP request is
+made to fetch this metadata, including on approval, token exchange, or refresh.
+It is supported in production as well as development and is independent of the
+`did:web:localhost` resolver setting.
+
+The client ID must have the literal authority `localhost`, no explicit port
+(including `:80`), no credentials or fragment, and an absent or root path. Optional
+query parameters are one `scope` and up to 32 distinct `redirect_uri` values.
+For example:
+
+```text
+http://localhost?redirect_uri=http%3A%2F%2F127.0.0.1%2Fcallback&scope=atproto+transition%3Ageneric
+```
+
+That declaration permits a PAR callback such as
+`http://127.0.0.1:3000/callback`. Without a declared callback, the defaults are
+`http://127.0.0.1/` and `http://[::1]/`. Matching ignores only the port; host, path,
+and query must match. Empty URL paths match `/`. Callback hosts must be literal
+`127.0.0.1` or `[::1]`, not `localhost`, aliases, other loopback representations,
+or public/private network addresses. Callback ports must be 1–65,535. Credentials,
+fragments, backslashes, malformed percent encodings, and dot path segments are
+rejected. Unknown query fields, duplicate scope fields (including encoded names),
+invalid scopes, invalid UTF-8, and URLs over 2 KiB are rejected as well.
+
+The full original client ID remains the identifier: changing its query or adding
+a slash does not preserve an existing grant's client binding. After PAR accepts
+a callback, code exchange must present that exact callback including its port;
+registration-time port flexibility cannot redirect an already issued code.
+Ordinary HTTPS client metadata retains exact callback matching, and client
+metadata extensions cannot opt it into localhost rules. Localhost clients cannot
+authenticate with confidential-client assertions.
+
+Tests cover safe defaults, repeated callbacks, scope parsing, ambiguous IDs and
+queries, loopback restrictions, and a flow through HTTP PAR, internal account
+approval, HTTP code exchange, refresh, and DPoP `getSession` with all metadata
+network access prohibited. Browser login/consent remains unfinished. The behavior
+implements the [ATProto localhost client profile](https://atproto.com/specs/oauth#localhost-client-development).

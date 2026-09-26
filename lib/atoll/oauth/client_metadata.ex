@@ -1,13 +1,18 @@
 defmodule Atoll.OAuth.ClientMetadata do
   @moduledoc """
-  Fresh, bounded OAuth client metadata retrieval and declaration validation.
+  Fresh, bounded OAuth client metadata retrieval, localhost synthesis, and declaration validation.
   Metadata is untrusted branding, not client authentication or consent. Embedded
   and remote JWKS declarations require ClientKeys validation and JWT verification.
   Transport options are trusted configuration, never request parameters.
   """
   alias Atoll.Identity.Resolver
 
-  def fetch(client_id, opts \\ []) do
+  def fetch(client_id, opts \\ [])
+
+  def fetch("http://" <> _ = client_id, _opts),
+    do: Atoll.OAuth.LocalhostClient.metadata(client_id)
+
+  def fetch(client_id, opts) do
     with {:ok, uri} <- https_url(client_id),
          true <- authority(client_id) == authority_host(uri),
          {:ok, body} <- Resolver.fetch_oauth_document(client_id, opts),
@@ -19,7 +24,10 @@ defmodule Atoll.OAuth.ClientMetadata do
     end
   end
 
-  @doc "Exact matching of a requested redirect against an already validated metadata declaration."
+  @doc "Matches validated callback declarations; virtual localhost clients ignore only loopback ports."
+  def redirect_allowed?(%{"client_id" => "http://" <> _ = client_id}, uri),
+    do: Atoll.OAuth.LocalhostClient.redirect_allowed?(client_id, uri)
+
   def redirect_allowed?(%{"redirect_uris" => uris}, uri) when is_list(uris) and is_binary(uri),
     do: uri in uris
 
