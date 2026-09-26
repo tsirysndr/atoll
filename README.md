@@ -357,7 +357,8 @@ mutation. Deletes and empty batches need no record schema, even with `validate: 
 - [x] Bounded operator cleanup of expired signup reservations with no recorded PLC submission.
 - [x] Opt-in supervised scheduling of bounded unsubmitted-signup cleanup with telemetry.
 - [x] Operator resume of exact pending signup registrations without password input or session issuance.
-- [ ] Self-service custom-domain DID reservation, phone verification, and background signup retries/divergent-identity reconciliation.
+- [x] Opt-in automatic signup retries with database leases, durable delay and activation fencing.
+- [ ] Self-service custom-domain DID reservation, phone verification, and divergent-identity signup reconciliation.
 - [x] Internal DID-scoped password credentials with salted Argon2id hashes, bounded input, redacted inspection, and duplicate protection.
 - [x] Shared configurable Cloudflare Worker email delivery client.
 - [x] `requestPlcOperationSignature` email authorization with atomic single-use challenge consumption.
@@ -1330,8 +1331,7 @@ create requests return an account-exists error; use login if the success respons
 was lost. Failed session creation leaves the confirmed reservation deactivated and
 resumable. Attempted registrations remain retained for reconciliation. The
 operator cleanup command below can remove old reservations never submitted by
-Atoll. Optional scheduled cleanup is described below; background registration
-retries remain pending. No configuration in this change enables signup
+Atoll. Optional scheduled cleanup and registration retries are described below. No configuration in this change enables signup
 on the running deployment or submits live registrations.
 
 
@@ -3986,8 +3986,8 @@ success `selected` and `deleted` counts. Metadata contains `result` (`ok`, `fail
 or `timeout`) and `more`. DIDs, handles, credentials and cutoff strings are excluded.
 Automatic startup is suppressed in tests; worker tests use supervised isolated
 instances, explicit timer delivery and mocked failures. Exact pending signup
-resume is described below; divergent directory identities and automatic registration
-retries remain separate unfinished work.
+resume and automatic retries are described below; divergent directory identities
+remain separate unfinished work.
 
 
 ### Operator resume of a pending signup
@@ -4021,6 +4021,53 @@ is created, and session-signing configuration is not required for this operation
 The owner logs in through the normal session endpoint afterward. Completed retries
 only report current local status, without a network request, repeated audit, or
 reactivating an account subsequently deactivated or suspended. That read-only
-result does not assert fresh directory compatibility. Automated retry scheduling
-and reconciliation when the directory has advanced away from the stored genesis
-remain unfinished.
+result does not assert fresh directory compatibility. Automatic scheduling is
+described below. Reconciliation when the directory has advanced away from the
+stored genesis remains unfinished.
+
+
+### Automatic signup retries
+
+Enable retries of interrupted signup publication/activation explicitly:
+
+```sh
+export ATOLL_SIGNUP_RETRY_ENABLED=true
+export ATOLL_SIGNUP_RETRY_INTERVAL_SECONDS=30
+export ATOLL_SIGNUP_RETRY_DELAY_SECONDS=300
+```
+
+Disabled by default, independently of new-signup admission. Each instance starts
+checking after 60 seconds and runs one registration at a time, with the configured
+interval after each run. Interval bounds are 1–3600 seconds; delay bounds are
+60–86400 seconds. The first automatic attempt waits at least the delay after the
+recorded submission start. Subsequent attempts use a persisted next-attempt time.
+Only incomplete, deactivated registrations explicitly eligible for retry are
+selected. Untouched custom-domain reservations and unconfirmed legacy rows with
+unknown publication history are excluded. A real genesis submission sets retry
+eligibility before POST; migration only marks already-confirmed legacy rows
+eligible. Operators can explicitly resume other legacy rows after review.
+
+A PostgreSQL claim locks one due registration with `SKIP LOCKED`, installs a random
+60-second lease token, and advances its next-attempt time before network work.
+Candidates are ordered by their stored retry time or initial submission time,
+then DID. Failing accounts are deferred so other reservations can proceed; task
+crashes and restarts retain that delay. Separate instances coordinate through
+these rows. No database transaction is held during DNS, HTTPS or PLC requests.
+
+The task uses the exact operator-resume workflow, including custom-handle checks,
+credential/profile rechecks, unchanged genesis, encrypted custody, and atomic
+activation/audit. It creates no sessions and sends no email. Both preflight and
+activation check the token against database time under account locks, so expired
+or replaced workers cannot activate an account. A 45-second task deadline cancels
+stalled runs. Remote publication cannot be atomically fenced: overlapping manual
+retries or an expired task can submit the same immutable genesis more than once;
+local completion remains guarded and does not generate a replacement identity.
+
+Telemetry `[:atoll, :accounts, :signup_retry]` contains `runs`, plus `attempted`,
+`completed`, and `failed` counts when the coordinator returns normally. Metadata
+`result` is `ok`, `failed`, or `timeout`; no DID or credential is included. `ok`
+means the retry coordinator finished, so inspect its `failed` count for account
+failures. Completion audit uses actor `system`. Response loss can outlive a committed
+activation; telemetry is not an exactly-once ledger. Automatic startup is disabled
+in tests. Directory divergence remains an operator reconciliation case rather
+than an automatic identity rewrite.

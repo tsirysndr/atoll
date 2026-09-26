@@ -105,7 +105,8 @@ defmodule Atoll.Application do
         account_cleanup_children ++
         relay_children ++
         retention_children ++
-        Atoll.Accounts.SignupCleanupWorker.children(),
+        Atoll.Accounts.SignupCleanupWorker.children() ++
+        Atoll.Accounts.SignupRetryWorker.children(),
       opts
     )
   end

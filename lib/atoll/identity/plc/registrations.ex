@@ -115,9 +115,12 @@ defmodule Atoll.Identity.PLC.Registrations do
       unless current && current.cid == row.cid && current.operation == row.operation,
         do: Repo.rollback(:registration_not_found)
 
-      unless current.submission_started_at do
+      unless current.submission_started_at && current.retry_eligible do
         current
-        |> Ecto.Changeset.change(submission_started_at: DateTime.utc_now())
+        |> Ecto.Changeset.change(
+          submission_started_at: current.submission_started_at || DateTime.utc_now(),
+          retry_eligible: true
+        )
         |> Repo.update!(log: false)
       end
 

@@ -59,8 +59,8 @@ defmodule Atoll.Moderation.Audit do
     )
   end
 
-  @doc "Records operator completion of a pending signup without issuing a session."
-  def signup_resume!(did, cid) do
+  @doc "Records trusted completion of a pending signup without issuing a session."
+  def signup_resume!(did, cid, actor) do
     insert!(
       "atoll.accounts.resumeSignup",
       did,
@@ -68,7 +68,7 @@ defmodule Atoll.Moderation.Audit do
       %{genesisCid: cid},
       %{completed: false},
       %{completed: true, active: true},
-      "operator"
+      actor
     )
   end
 

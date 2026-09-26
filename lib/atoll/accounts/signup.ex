@@ -26,7 +26,8 @@ defmodule Atoll.Accounts.Signup do
   @doc "Operator resume of an exact stored signup, without password input or session issuance."
   def resume_registration(did, expected_cid, opts \\ []) do
     with false <- Repo.in_transaction?(),
-         {:ok, snapshot} <- resume_snapshot(did, expected_cid) do
+         {:ok, snapshot} <-
+           resume_snapshot(did, expected_cid, Keyword.get(opts, :signup_retry_token)) do
       case snapshot do
         {:completed, result} ->
           {:ok, result}
@@ -43,7 +44,7 @@ defmodule Atoll.Accounts.Signup do
     end
   end
 
-  defp resume_snapshot(did, expected_cid) do
+  defp resume_snapshot(did, expected_cid, retry_token) do
     Repo.transaction(fn ->
       Events.lock!()
 
@@ -65,6 +66,7 @@ defmodule Atoll.Accounts.Signup do
          }}
       else
         head!(did)
+        if retry_token, do: Atoll.Accounts.SignupRetries.assert_current!(did, retry_token)
 
         credential =
           Repo.get(Atoll.Accounts.Credential, did, log: false) ||
@@ -92,7 +94,13 @@ defmodule Atoll.Accounts.Signup do
           invite: invite
         }
 
-        proof = %{did: did, cid: row.cid, digest: :crypto.hash(:sha256, credential.password_hash)}
+        proof = %{
+          did: did,
+          cid: row.cid,
+          digest: :crypto.hash(:sha256, credential.password_hash),
+          retry_token: retry_token
+        }
+
         validate_retry!(input, did, proof.digest)
         {:pending, input, proof}
       end
@@ -285,6 +293,10 @@ defmodule Atoll.Accounts.Signup do
     Repo.transaction(fn ->
       Events.lock!()
       head!(proof.did)
+
+      if Map.get(proof, :retry_token),
+        do: Atoll.Accounts.SignupRetries.assert_current!(proof.did, proof.retry_token)
+
       registration = validate_retry!(input, proof.did, proof.digest)
 
       unless registration.cid == Map.get(proof, :cid, registration.cid),
@@ -305,7 +317,12 @@ defmodule Atoll.Accounts.Signup do
         pair = unwrap!(Sessions.create_for_account(proof.did))
         Map.merge(result, %{accessJwt: pair.access_jwt, refreshJwt: pair.refresh_jwt})
       else
-        Atoll.Moderation.Audit.signup_resume!(proof.did, registration.cid)
+        Atoll.Moderation.Audit.signup_resume!(
+          proof.did,
+          registration.cid,
+          if(Map.get(proof, :retry_token), do: "system", else: "operator")
+        )
+
         Map.put(result, :result, :completed)
       end
     end)

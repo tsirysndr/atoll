@@ -20,6 +20,7 @@ defmodule AtollWeb.SignupControllerTest do
         [
           :pds,
           :signup_enabled,
+          :signup_retry,
           :custom_domain_signup_enabled,
           :identity_resolution_options,
           :session_signing_key,
@@ -47,6 +48,7 @@ defmodule AtollWeb.SignupControllerTest do
     )
 
     Application.put_env(:atoll, :signup_enabled, true)
+    Application.put_env(:atoll, :signup_retry, enabled: false, delay_seconds: 300)
     Application.put_env(:atoll, :custom_domain_signup_enabled, false)
     Application.put_env(:atoll, :invite_code_required, false)
     Application.put_env(:atoll, :session_max_count, 100)
@@ -66,6 +68,88 @@ defmodule AtollWeb.SignupControllerTest do
     end)
 
     :ok
+  end
+
+  test "durable signup retry claims skip unsubmitted reservations and fairly defer failures" do
+    alias Atoll.Accounts.SignupRetries
+    unsubmitted = cleanup_reservation("never-submitted", 0)
+    legacy = cleanup_reservation("unknown-legacy", 0)
+
+    Repo.get!(Registration, legacy.did)
+    |> Ecto.Changeset.change(submission_started_at: DateTime.utc_now())
+    |> Repo.update!()
+
+    recent = attempted_reservation("retry-recent")
+
+    Repo.get!(Registration, recent.did)
+    |> Ecto.Changeset.change(submission_started_at: DateTime.utc_now())
+    |> Repo.update!()
+
+    first = attempted_reservation("retry-first")
+    second = attempted_reservation("retry-second")
+    assert {:ok, claim1} = SignupRetries.claim()
+    assert claim1.did == first.did
+    assert {:ok, claim2} = SignupRetries.claim()
+    assert claim2.did == second.did
+    assert {:ok, nil} = SignupRetries.claim()
+    refute Repo.get!(Registration, unsubmitted.did).retry_token
+    row = Repo.get!(Registration, first.did)
+    assert DateTime.compare(row.retry_next_at, DateTime.utc_now()) == :gt
+    refute inspect(row, limit: :infinity) =~ "retry_token:"
+    past = DateTime.add(DateTime.utc_now(), -1, :second)
+
+    row
+    |> Ecto.Changeset.change(retry_next_at: past, retry_leased_until: past)
+    |> Repo.update!(log: false)
+
+    assert {:ok, next} = SignupRetries.claim()
+    assert next.did == first.did
+    refute next.token == claim1.token
+
+    assert {:error, :stale_signup_retry} =
+             Repo.transaction(fn -> SignupRetries.assert_current!(first.did, claim1.token) end)
+  end
+
+  test "automatic signup retry activates without sessions and records system audit", _ do
+    alias Atoll.Accounts.SignupRetries
+    reservation = attempted_reservation("retry-success")
+    row = Repo.get!(Registration, reservation.did)
+    opts = [plug: {Req.Test, __MODULE__}, txt_lookup: fn _ -> [["did=" <> row.did]] end]
+    accept_registration(row.operation)
+    assert {:ok, %{attempted: 1, completed: 1, failed: 0}} = SignupRetries.run_next(opts)
+    assert Repo.get!(Registration, row.did).completed_at
+    assert Repo.aggregate(Session, :count) == 0
+
+    assert Enum.any?(
+             Repo.all(Atoll.Moderation.AuditEntry),
+             &(&1.operation == "atoll.accounts.resumeSignup" and &1.actor == "system")
+           )
+
+    assert {:ok, %{attempted: 0}} = SignupRetries.run_next(opts)
+  end
+
+  test "lost retry lease prevents activation after directory confirmation", _ do
+    alias Atoll.Accounts.SignupRetries
+    reservation = attempted_reservation("retry-expired")
+    row = Repo.get!(Registration, reservation.did)
+    opts = [plug: {Req.Test, __MODULE__}, txt_lookup: fn _ -> [["did=" <> row.did]] end]
+
+    Req.Test.expect(__MODULE__, fn conn ->
+      Repo.get!(Registration, row.did)
+      |> Ecto.Changeset.change(retry_leased_until: DateTime.add(DateTime.utc_now(), -1, :second))
+      |> Repo.update!(log: false)
+
+      Req.Test.expect(__MODULE__, &Req.Test.json(&1, row.operation))
+      Plug.Conn.send_resp(conn, 200, "")
+    end)
+
+    assert {:ok, %{attempted: 1, completed: 0, failed: 1}} = SignupRetries.run_next(opts)
+    pending = Repo.get!(Registration, row.did)
+    assert pending.confirmed_at
+    refute pending.completed_at
+    assert Repo.get!(Head, row.did).status == :deactivated
+    assert Repo.aggregate(Session, :count) == 0
+    assert {:ok, nil} = SignupRetries.claim()
   end
 
   test "operator resumes the exact pending signup without admission or session keys" do
@@ -199,6 +283,7 @@ defmodule AtollWeb.SignupControllerTest do
     assert {:error, _} = Registrations.submit(old.did, plug: {Req.Test, __MODULE__})
     attempted = Repo.get!(Registration, old.did)
     assert attempted.submission_started_at
+    assert attempted.retry_eligible
     refute attempted.confirmed_at
     assert {:ok, %{selected: 0}} = SignupCleanup.batch()
     accept_registration(original.operation)
@@ -563,6 +648,19 @@ defmodule AtollWeb.SignupControllerTest do
              get(%{build_conn() | host: @params["handle"]}, "/.well-known/atproto-did"),
              200
            ) == result["did"]
+  end
+
+  defp attempted_reservation(label) do
+    reservation = cleanup_reservation(label, 0)
+
+    Repo.get!(Registration, reservation.did)
+    |> Ecto.Changeset.change(
+      submission_started_at: DateTime.add(DateTime.utc_now(), -301, :second),
+      retry_eligible: true
+    )
+    |> Repo.update!()
+
+    reservation
   end
 
   defp cleanup_reservation(label, age_days) do

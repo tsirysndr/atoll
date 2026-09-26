@@ -145,6 +145,12 @@ config :atoll, :blob_quota,
   max_bytes: nonnegative_integer.("ATOLL_BLOB_MAX_ACCOUNT_BYTES", "1073741824"),
   max_count: nonnegative_integer.("ATOLL_BLOB_MAX_ACCOUNT_COUNT", "10000")
 
+signup_retry = Atoll.Accounts.SignupRetries.config_from_env!(System.get_env())
+
+config :atoll,
+       :signup_retry,
+       Keyword.put(signup_retry, :enabled, signup_retry[:enabled] and config_env() != :test)
+
 signup_cleanup = Atoll.Accounts.SignupCleanup.config_from_env!(System.get_env())
 
 config :atoll,
