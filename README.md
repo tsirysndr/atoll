@@ -28,7 +28,8 @@ Checked items are implemented in this repository. Unchecked items are remaining 
 - [x] Required, optimistic, and skipped record validation for all 19 Bluesky record Lexicons in the pinned upstream revision.
 - [x] Configurable local custom record Lexicons with bounded startup validation.
 - [x] Exact DNS Lexicon namespace delegation with fresh DID/key/PDS resolution.
-- [ ] Authenticated Lexicon schema fetching, dependency resolution, and validation integration.
+- [x] Bounded Lexicon schema retrieval from the delegated HTTPS PDS with URI/CID checks.
+- [ ] Lexicon dependency resolution and validation integration.
 
 XRPC routing uses the [HTTP API specification](https://atproto.com/specs/xrpc).
 Malformed paths return `400 InvalidRequest`; valid but unimplemented method NSIDs
@@ -2968,5 +2969,21 @@ repository signing key and PDS endpoint through the existing protected resolver.
 The account handle need not match the namespace: DNS delegation establishes that
 binding. This trusts the configured/system DNS resolution path; it does not add
 DNSSEC validation. Discovering a repository does not yet authenticate a schema.
-Bounded schema retrieval, content/proof validation, dependency resolution, and
-integration with custom-record validation remain pending. Tests use mock DNS/HTTP.
+Tests use mock DNS/HTTP.
+
+`Atoll.Lexicon.Fetcher.fetch/2` performs that discovery and fetches
+`com.atproto.repo.getRecord` from the resolved HTTPS PDS. It pins a public IP while
+preserving TLS hostname verification and the Host header, including nondefault
+ports. It sends no account credentials, follows no redirects, performs no automatic
+retries, and accepts at most 256 KiB of uncompressed response JSON. Duplicate JSON
+keys and nesting deeper than 64 levels are rejected.
+
+The returned URI must exactly match the delegated DID, schema collection, and
+normalized NSID. The value must declare the schema record type, Lexicon version 1,
+matching `id`, and nonempty named definitions. Its canonical DAG-CBOR SHA-256 CID
+must match the response CID. Success returns the document and its DID/URI/CID
+provenance without installing it. This trusts DNS, DID resolution, and the named
+PDS's authenticated HTTPS response; CID integrity is not a signed repository
+inclusion proof or a freshness guarantee. Full schema-language checking,
+dependency resolution, signed inclusion proofs, and integration with record
+validation remain pending. The existing operator-loaded catalog is unchanged.

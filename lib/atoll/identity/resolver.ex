@@ -134,6 +134,34 @@ defmodule Atoll.Identity.Resolver do
     end
   end
 
+  @doc "Fetch a public Lexicon record from an HTTPS PDS using the resolver's bounded, pinned transport."
+  def fetch_lexicon(pds, did, nsid, opts \\ []) do
+    with true <- is_binary(pds) and Syntax.did?(did) and Syntax.nsid?(nsid),
+         {:ok,
+          %URI{
+            scheme: "https",
+            host: host,
+            port: port,
+            path: path,
+            userinfo: nil,
+            query: nil,
+            fragment: nil
+          } = uri} <- URI.new(pds),
+         true <- is_binary(host) and host != "" and port in 1..65535 and path in [nil, "", "/"] do
+      query = URI.encode_query(repo: did, collection: "com.atproto.lexicon.schema", rkey: nsid)
+      url = URI.to_string(%{uri | path: "/xrpc/com.atproto.repo.getRecord", query: query})
+
+      case fetch(url, opts, 262_144) do
+        {:ok, body} -> {:ok, body}
+        {:error, :did_document_too_large} -> {:error, :lexicon_too_large}
+        {:error, :did_not_found} -> {:error, :lexicon_not_found}
+        {:error, reason} -> {:error, reason}
+      end
+    else
+      _ -> {:error, :invalid_lexicon_endpoint}
+    end
+  end
+
   defp fetch(url, opts, max_bytes \\ @max_bytes, redirects \\ 0) do
     uri = URI.parse(url)
     lookup = Keyword.get(opts, :lookup, &lookup/1)
@@ -142,7 +170,13 @@ defmodule Atoll.Identity.Resolver do
       uri.scheme == "http" and uri.host == "localhost" and Atoll.Identity.Localhost.enabled?()
 
     destination = if local?, do: {:ok, {127, 0, 0, 1}}, else: lookup.(uri.host)
-    authority = if local? and uri.port != 80, do: "localhost:#{uri.port}", else: uri.host
+
+    host = if String.contains?(uri.host, ":"), do: "[#{uri.host}]", else: uri.host
+
+    authority =
+      if uri.port != URI.default_port(uri.scheme),
+        do: "#{host}:#{uri.port}",
+        else: host
 
     with {:ok, address} <- destination,
          true <- public_address?(address) or (local? and address == {127, 0, 0, 1}) do
