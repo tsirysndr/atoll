@@ -72,13 +72,21 @@ record Lexicons or grant access to account data.
 - [x] PostgreSQL repository heads and atomic record, tree, and commit updates with optional head compare-and-swap.
 - [x] Internal record create, put, delete, and read operations with collection/type checks (not Lexicon validation).
 - [x] Public `getRecord` and paginated `listRecords` for repository DIDs or bidirectionally verified handles and current record versions.
-- [ ] Historical CID versions for record reads.
+- [x] Historical CID versions for record reads, verified against retained signed revisions and the exact record path.
 - [ ] Record writes and deletion (`createRecord`, `putRecord`, `deleteRecord`, `applyWrites`).
 - [x] `com.atproto.repo.describeRepo` with resolved DID document, current collections, and bidirectional handle status.
 - [x] In-memory CARv1 encoding and decoding with block verification and resource limits.
 - [x] Consistent repository CAR export through the internal storage API.
 - [x] Internal complete CAR import for existing repositories, with pinned-key verification, expected-head checks, and atomic replacement.
 - [ ] Authenticated `com.atproto.repo.importRepo`, new-account migration, and streaming large transfers.
+
+`com.atproto.repo.getRecord` returns the current record unless `cid` selects a
+retained version, including versions of subsequently deleted records. Historical
+reads require an active repository and verify the signed commit and canonical MST;
+an arbitrary stored block is not sufficient. This initial implementation scans
+candidate retained revisions and loads one snapshot at a time, so histories with
+many revisions or large repositories can be expensive. A dedicated version index
+and history retention policy remain pending.
 
 ### Identity, accounts, and authentication
 

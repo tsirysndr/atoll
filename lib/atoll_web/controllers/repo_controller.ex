@@ -16,8 +16,7 @@ defmodule AtollWeb.RepoController do
          true <- Syntax.record_key?(params["rkey"]),
          {:ok, requested_cid} <- optional_cid(params["cid"]),
          {:ok, did} <- repository_did(params["repo"]),
-         {:ok, record} <- fetch_record(did, params),
-         :ok <- matches_cid(record.cid, requested_cid) do
+         {:ok, record} <- fetch_record(did, params, requested_cid) do
       json(conn, public_record(record))
     else
       false -> {:error, :invalid_request}
@@ -80,16 +79,13 @@ defmodule AtollWeb.RepoController do
     end
   end
 
-  defp fetch_record(did, params) do
-    case Repositories.get_record(did, params["collection"] <> "/" <> params["rkey"]) do
+  defp fetch_record(did, params, cid) do
+    case Repositories.get_record(did, params["collection"] <> "/" <> params["rkey"], cid) do
       {:error, :not_found} -> {:error, :record_not_found}
       result -> result
     end
   end
 
-  defp matches_cid(_, nil), do: :ok
-  defp matches_cid(cid, cid), do: :ok
-  defp matches_cid(_, _), do: {:error, :record_not_found}
   defp optional_cid(nil), do: {:ok, nil}
 
   defp optional_cid(value) do

@@ -231,16 +231,62 @@ defmodule Atoll.Repositories do
     with {:ok, _} <- get_active_head(did), do: read_record(did, path)
   end
 
+  @doc "Reads a record version proven to belong to this path in a retained signed revision."
+  def get_record(did, path, nil), do: get_record(did, path)
+
+  def get_record(did, path, cid) do
+    with true <- Syntax.repo_path?(path),
+         {:ok, %{codec: :dag_cbor}} <- CID.decode(cid) do
+      Repo.transaction(fn ->
+        head = locked_head!(did, "FOR SHARE")
+
+        # Block membership alone is insufficient: a CID could belong to another path.
+        revisions =
+          from r in Revision,
+            where: r.did == ^did and ^cid in r.blocks,
+            order_by: [desc: r.rev]
+
+        found? =
+          revisions
+          |> Repo.stream(max_rows: 1)
+          |> Enum.any?(fn revision ->
+            with {:ok, commit} <-
+                   Commit.verify(block!(revision.head), did, head.curve, head.public_key),
+                 true <- commit["rev"] == revision.rev,
+                 blocks = Map.new(revision.blocks, &{&1, block!(&1)}),
+                 {:ok, tree} <- MST.load(commit["data"].cid, blocks) do
+              Map.get(tree.records, path) == cid
+            else
+              _ -> Repo.rollback(:invalid_repository)
+            end
+          end)
+
+        unless found?, do: Repo.rollback(:not_found)
+
+        case record_value(did, path, cid) do
+          {:ok, record} -> record
+          {:error, reason} -> Repo.rollback(reason)
+        end
+      end)
+    else
+      _ -> {:error, :invalid_request}
+    end
+  end
+
   defp read_record(did, path) do
     case Repo.get_by(Record, did: did, path: path) do
       nil ->
         {:error, :not_found}
 
       record ->
-        with {:ok, value} <- Storage.get_node(record.cid),
-             {:ok, json} <- DataModel.to_json(value) do
-          {:ok, %{uri: "at://" <> did <> "/" <> path, cid: record.cid, value: json}}
-        end
+        record_value(did, path, record.cid)
+    end
+  end
+
+  defp record_value(did, path, cid) do
+    with {:ok, value} <- Storage.get_node(cid),
+         {:ok, json} <- DataModel.to_json(value) do
+      {:ok, %{uri: "at://" <> did <> "/" <> path, cid: cid, value: json}}
     end
   end
 

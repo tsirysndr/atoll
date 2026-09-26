@@ -55,6 +55,68 @@ defmodule AtollWeb.RepoControllerTest do
     assert texts(second) == ["z", "~"]
   end
 
+  test "CID selects a retained version after updates and deletion", %{conn: conn, key: key} do
+    params = %{repo: @did, collection: @collection, rkey: "a"}
+    original = conn |> get(@get, params) |> json_response(200)
+    selected = Map.put(params, :cid, original["cid"])
+    path = @collection <> "/a"
+    changed = %{"$type" => @collection, "text" => "changed"}
+    {:ok, _} = Repositories.apply_writes(@did, [{:put, path, changed}], key)
+    assert conn |> get(@get, selected) |> json_response(200) == original
+
+    assert conn |> get(@get, params) |> json_response(200) |> get_in(["value", "text"]) ==
+             "changed"
+
+    {:ok, _} = Repositories.apply_writes(@did, [{:delete, path}], key)
+    assert conn |> get(@get, selected) |> json_response(200) == original
+    assert %{"error" => "RecordNotFound"} = conn |> get(@get, params) |> json_response(400)
+    {:ok, _} = Repositories.set_status(@did, :deactivated)
+    assert %{"error" => "RepoDeactivated"} = conn |> get(@get, selected) |> json_response(400)
+  end
+
+  test "version reads reject other paths, other accounts, and unreferenced blocks", %{conn: conn} do
+    params = %{repo: @did, collection: @collection, rkey: "a"}
+    original = conn |> get(@get, params) |> json_response(200)
+
+    assert %{"error" => "RecordNotFound"} =
+             conn
+             |> get(@get, Map.merge(params, %{rkey: "B", cid: original["cid"]}))
+             |> json_response(400)
+
+    other = "did:plc:historyother"
+    {:ok, _} = Repositories.create(other, SigningKey.generate())
+
+    assert %{"error" => "RecordNotFound"} =
+             conn
+             |> get(@get, Map.merge(params, %{repo: other, cid: original["cid"]}))
+             |> json_response(400)
+
+    {:ok, unused} = Atoll.Storage.put_node(%{"$type" => @collection, "text" => "unused"})
+
+    assert %{"error" => "RecordNotFound"} =
+             conn
+             |> get(@get, Map.put(params, :cid, CID.to_base32(unused)))
+             |> json_response(400)
+  end
+
+  test "historical reads fail closed when retained commit bytes are corrupted", %{
+    conn: conn,
+    key: key,
+    head: head
+  } do
+    params = %{repo: @did, collection: @collection, rkey: "a"}
+    original = conn |> get(@get, params) |> json_response(200)
+    {:ok, _} = Repositories.apply_writes(@did, [{:delete, @collection <> "/a"}], key)
+    import Ecto.Query
+
+    Atoll.Repo.update_all(from(b in Atoll.Storage.Block, where: b.cid == ^head.head),
+      set: [data: "corrupted"]
+    )
+
+    assert %{"error" => "InternalServerError"} =
+             conn |> get(@get, Map.put(params, :cid, original["cid"])) |> json_response(500)
+  end
+
   test "scopes lists to repository and collection", %{conn: conn} do
     assert %{"records" => []} =
              conn
