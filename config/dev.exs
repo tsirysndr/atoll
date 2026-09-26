@@ -24,7 +24,8 @@ config :atoll, AtollWeb.Endpoint,
   http: [ip: {127, 0, 0, 1}],
   check_origin: false,
   code_reloader: true,
-  debug_errors: true,
+  # Keep API failures in the same sanitized JSON format as production.
+  debug_errors: false,
   secret_key_base: "9thh53AEEiK1f4+g62XIHSgk74eNsHcZY9Uf07leOCETBdiCeLGfBHdUIkd4OFtS",
   watchers: []
 

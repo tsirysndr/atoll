@@ -21,7 +21,8 @@ Checked items are implemented in this repository. Unchecked items are remaining 
 - [x] Configured hostname-based server DID document publication with a stable service key.
 - [x] XRPC route/NSID validation and method checks before body parsing, including protocol errors for unsupported methods.
 - [x] Public-origin XRPC CORS headers and route-aware browser preflight responses.
-- [ ] Complete XRPC parameter validation and protocol error handling for framework failures.
+- [x] Sanitized XRPC JSON responses for framework exceptions, including malformed requests and unexpected server failures.
+- [ ] Complete XRPC parameter validation.
 - [ ] Lexicon-based record validation.
 
 XRPC routing uses the [HTTP API specification](https://atproto.com/specs/xrpc).
@@ -30,9 +31,13 @@ return `501 MethodNotImplemented`. Implemented routes require their declared HTT
 method and otherwise return `405 MethodNotAllowed` with an `Allow` header, before
 body parsing or method override. These errors are JSON with `error` and `message`
 and are not cached. HTTP HEAD responses omit the body. Percent-encoded route
-spellings receive the same checks, including repository subscriptions. This does
-not yet provide general Lexicon parameter validation or XRPC conversion of every
-framework exception.
+spellings receive the same checks, including repository subscriptions. General Lexicon parameter validation remains pending.
+Framework failures rendered by Phoenix also use the XRPC error shape, with
+standard HTTP descriptions rather than exception details or stack traces. This
+applies in development as well as production; errors still propagate through
+Phoenix for server-side reporting. Non-XRPC routes retain their existing error
+format. Failures rejected by the HTTP adapter before reaching Phoenix and errors
+after a response or WebSocket upgrade has begun are outside this JSON renderer.
 
 Browser clients can call XRPC from any origin using explicit authorization
 headers. Responses include `Access-Control-Allow-Origin: *`; cookie credentials
