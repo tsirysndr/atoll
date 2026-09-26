@@ -1,5 +1,9 @@
 import Config
 
+config :atoll,
+       :network_lexicons_enabled,
+       Atoll.Lexicon.WriteValidation.enabled_from_env!(System.get_env("ATOLL_NETWORK_LEXICONS"))
+
 if directory = System.get_env("ATOLL_LEXICON_DIRECTORY") do
   config :atoll, :record_lexicons, Atoll.Lexicon.Loader.load!(directory)
 end

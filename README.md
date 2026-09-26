@@ -30,7 +30,7 @@ Checked items are implemented in this repository. Unchecked items are remaining 
 - [x] Exact DNS Lexicon namespace delegation with fresh DID/key/PDS resolution.
 - [x] Bounded Lexicon schema retrieval from the delegated HTTPS PDS with URI/CID checks.
 - [x] Bounded remote record-Lexicon dependency catalogs with schema/reference validation.
-- [ ] Network Lexicon integration with record-write validation.
+- [x] Opt-in network Lexicon integration with record-write validation.
 
 XRPC routing uses the [HTTP API specification](https://atproto.com/specs/xrpc).
 Malformed paths return `400 InvalidRequest`; valid but unimplemented method NSIDs
@@ -146,7 +146,7 @@ record Lexicons or grant access to account data.
 - [x] Authenticated atomic `applyWrites` batches with ordered results and commit compare-and-swap.
 - [x] DID or bidirectionally verified handle addressing for single and batch record writes.
 - [x] Local custom record Lexicon loading alongside 19 pinned Bluesky record schemas.
-- [ ] Authenticated network resolution of custom record Lexicons.
+- [x] Authenticated HTTPS/DID/DNS network resolution of supported custom record Lexicons.
 - [x] `com.atproto.repo.describeRepo` with resolved DID document, current collections, and bidirectional handle status.
 - [x] In-memory CARv1 encoding and decoding with block verification and resource limits.
 - [x] Consistent repository CAR export through the internal storage API.
@@ -251,8 +251,10 @@ configuration, the equivalent setting is `config :atoll, :record_lexicons,
 Atoll.Lexicon.Loader.load!(directory)`.
 
 Only load schemas you trust as the operator. Local configuration does not authenticate
-the NSID owner's authority or expose new XRPC endpoints. Authenticated network
-Lexicon discovery remains unimplemented.
+the NSID owner's authority or expose new XRPC endpoints. To enable network discovery
+for unknown collections, set `ATOLL_NETWORK_LEXICONS=true` (default: `false`).
+Only literal `true` and `false` are accepted. Network schemas use DNS namespace
+delegation and the delegated DID's HTTPS PDS; see Lexicon namespace discovery below.
 
 Blob schema checks use the declared MIME type and size; the repository independently
 requires ownership and matching stored metadata. Profile images allow PNG/JPEG up
@@ -2985,8 +2987,7 @@ matching `id`, and nonempty named definitions. Its canonical DAG-CBOR SHA-256 CI
 must match the response CID. Success returns the document and its DID/URI/CID
 provenance without installing it. This trusts DNS, DID resolution, and the named
 PDS's authenticated HTTPS response; CID integrity is not a signed repository
-inclusion proof or a freshness guarantee. Signed inclusion proofs and integration
-with record validation remain pending. The existing operator-loaded catalog is unchanged.
+inclusion proof or a freshness guarantee. Signed inclusion proofs remain pending.
 
 `Atoll.Lexicon.Catalog.resolve/2` follows external references through the same
 independent discovery/fetch process for each namespace. It supports the record
@@ -3003,6 +3004,20 @@ re-encoded schema JSON, in addition to the fetcher's per-response limit. A
 the completed catalog. An in-flight DNS/HTTP operation retains its individual
 timeout, so this is not a hard 30-second cancellation deadline. Results contain
 the validated catalog plus DID/URI/CID provenance for each remote document; no
-global configuration, cache, or database state changes. These catalogs are not
-yet used by repository writes. Transport/clock options are trusted test hooks,
-never request parameters.
+global configuration, cache, or database state changes. Transport/clock options
+are trusted test hooks, never request parameters.
+
+With `ATOLL_NETWORK_LEXICONS=true`, authenticated create/put/applyWrites requests
+resolve unknown collections before opening the write transaction. A batch shares
+one catalog budget across its collections and dependencies. Bundled and
+operator-configured schemas retain precedence. `validate: false` skips discovery;
+known local collections and delete operations also need no network lookup.
+Required validation rejects unavailable or unsupported remote catalogs. Optimistic
+validation proceeds with `unknown` status when catalog resolution fails, while
+still enforcing known local schemas. A successfully resolved record schema is
+enforced in either mode, and invalid records are rejected before mutation.
+Catalog resolution is all-or-nothing: a failed batch dependency discards the
+remote catalog for that request. Authorization is checked before discovery and
+again under the repository lock, so session revocation during lookup prevents the
+write. The remote catalog is a per-request snapshot; no schema cache is installed.
+Internal write APIs and CAR import retain their existing data-integrity policy.

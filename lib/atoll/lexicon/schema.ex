@@ -31,11 +31,16 @@ defmodule Atoll.Lexicon.Schema do
     for {nsid, doc} <- @documents, get_in(doc, ["defs", "main", "type"]) == "procedure", do: nsid
   end
 
-  def record(collection, rkey, value, mode) when mode in [true, false, :optimistic] do
+  def record(collection, rkey, value, mode, remote \\ %{})
+
+  def record(collection, rkey, value, mode, remote) when mode in [true, false, :optimistic] do
     if mode == false do
       {:ok, "unknown"}
     else
-      documents = Map.merge(Application.get_env(:atoll, :record_lexicons, %{}), @documents)
+      documents =
+        remote
+        |> Map.merge(Application.get_env(:atoll, :record_lexicons, %{}))
+        |> Map.merge(@documents)
 
       case get_in(documents, [collection, "defs", "main"]) do
         %{"type" => "record", "key" => key, "record" => schema} ->
@@ -53,7 +58,7 @@ defmodule Atoll.Lexicon.Schema do
     end
   end
 
-  def record(_, _, _, _), do: {:error, :invalid_request}
+  def record(_, _, _, _, _), do: {:error, :invalid_request}
   defp record_key?(nil, "tid"), do: true
   defp record_key?(key, "tid"), do: TID.valid?(key)
   defp record_key?(key, "literal:" <> literal), do: key == literal

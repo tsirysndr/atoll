@@ -11,7 +11,11 @@ defmodule Atoll.Lexicon.Catalog do
   @duration_ms 30_000
 
   def resolve(nsid, opts \\ []) do
-    with {:ok, target} <- Authority.name(nsid) do
+    resolve_many([nsid], opts)
+  end
+
+  def resolve_many(nsids, opts \\ []) when is_list(nsids) and length(nsids) <= 200 do
+    with {:ok, names} <- names(nsids) do
       clock = Keyword.get(opts, :clock, fn -> System.monotonic_time(:millisecond) end)
 
       state = %{
@@ -23,7 +27,20 @@ defmodule Atoll.Lexicon.Catalog do
         deadline: clock.() + @duration_ms
       }
 
-      walk([target.nsid], state, opts)
+      walk(names, state, opts)
+    end
+  end
+
+  defp names(nsids) do
+    Enum.reduce_while(nsids, {:ok, []}, fn nsid, {:ok, acc} ->
+      case Authority.name(nsid) do
+        {:ok, target} -> {:cont, {:ok, [target.nsid | acc]}}
+        error -> {:halt, error}
+      end
+    end)
+    |> case do
+      {:ok, names} -> {:ok, names |> Enum.reverse() |> Enum.uniq()}
+      error -> error
     end
   end
 

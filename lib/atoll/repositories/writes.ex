@@ -9,10 +9,13 @@ defmodule Atoll.Repositories.Writes do
   def batch(token, body) when is_map(body) do
     with {:ok, claims} <- Tokens.verify(token, :access),
          :ok <- batch_parameters(body),
+         {:ok, _} <- batch_operations(Map.put(body, "validate", false), %{}),
          {:ok, commit} <- swap(body, "swapCommit", false),
-         {:ok, writes} <- batch_operations(body),
          {:ok, did} <- repository_did(body["repo"]),
-         true <- did == claims["sub"] do
+         true <- did == claims["sub"],
+         {:ok, _} <- Sessions.authenticate(token),
+         {:ok, catalog} <- Atoll.Lexicon.WriteValidation.catalog(body, :batch),
+         {:ok, writes} <- batch_operations(body, catalog) do
       Repo.transaction(fn ->
         did = claims["sub"]
         head = authorize!(token, did)
@@ -94,7 +97,7 @@ defmodule Atoll.Repositories.Writes do
     end
   end
 
-  defp batch_operations(body) do
+  defp batch_operations(body, catalog) do
     Enum.reduce_while(body["writes"], {:ok, []}, fn value, {:ok, acc} ->
       action =
         case value do
@@ -114,7 +117,7 @@ defmodule Atoll.Repositories.Writes do
           :ok ->
             params = Map.put(params, "validate", Map.get(body, "validate", :optimistic))
 
-            case record_validation(action, params) do
+            case record_validation(action, params, catalog) do
               {:ok, status} -> {:cont, {:ok, [{action, value, status} | acc]}}
               error -> {:halt, error}
             end
@@ -148,11 +151,13 @@ defmodule Atoll.Repositories.Writes do
   def write(token, action, body) when action in [:create, :put, :delete] and is_map(body) do
     with {:ok, claims} <- Tokens.verify(token, :access),
          :ok <- parameters(action, body),
-         {:ok, validation} <- record_validation(action, body),
          {:ok, commit} <- swap(body, "swapCommit", false),
          {:ok, record} <- record_swap(action, body),
          {:ok, did} <- repository_did(body["repo"]),
-         true <- did == claims["sub"] do
+         true <- did == claims["sub"],
+         {:ok, _} <- Sessions.authenticate(token),
+         {:ok, catalog} <- Atoll.Lexicon.WriteValidation.catalog(body, action),
+         {:ok, validation} <- record_validation(action, body, catalog) do
       Repo.transaction(fn ->
         did = claims["sub"]
         head = authorize!(token, did)
@@ -229,14 +234,15 @@ defmodule Atoll.Repositories.Writes do
     end
   end
 
-  defp record_validation(:delete, _), do: {:ok, nil}
+  defp record_validation(:delete, _, _), do: {:ok, nil}
 
-  defp record_validation(_, body) do
+  defp record_validation(_, body, catalog) do
     Atoll.Lexicon.Schema.record(
       body["collection"],
       body["rkey"],
       body["record"],
-      Map.get(body, "validate", :optimistic)
+      Map.get(body, "validate", :optimistic),
+      catalog
     )
   end
 

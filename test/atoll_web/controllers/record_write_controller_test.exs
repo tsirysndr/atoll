@@ -8,7 +8,13 @@ defmodule AtollWeb.RecordWriteControllerTest do
 
   setup %{conn: conn} do
     old =
-      for key <- [:session_signing_key, :key_encryption_key, :identity_resolution_options],
+      for key <- [
+            :session_signing_key,
+            :key_encryption_key,
+            :identity_resolution_options,
+            :network_lexicons_enabled,
+            :lexicon_resolution_options
+          ],
           do: {key, Application.fetch_env(:atoll, key)}
 
     on_exit(fn ->
@@ -663,6 +669,106 @@ defmodule AtollWeb.RecordWriteControllerTest do
              |> json_response(401)
 
     assert Repositories.get_head(@did) == {:ok, c.head}
+  end
+
+  test "network schemas validate single and batch writes with one catalog fetch", c do
+    configure_network()
+
+    assert %{"validationStatus" => "valid"} =
+             request(c, "putRecord", body("remote", %{"record" => @record, "validate" => true}))
+             |> json_response(200)
+
+    assert_receive :schema_fetch
+
+    assert %{"results" => results} =
+             request(c, "applyWrites", %{
+               "repo" => @did,
+               "validate" => true,
+               "writes" => [operation("create", "batch-one"), operation("create", "batch-two")]
+             })
+             |> json_response(200)
+
+    assert Enum.all?(results, &(&1["validationStatus"] == "valid"))
+    assert_receive :schema_fetch
+    refute_receive :schema_fetch
+
+    bad = Map.put(@record, "text", 42)
+
+    assert %{"error" => "InvalidRequest"} =
+             request(c, "putRecord", body("invalid", %{"record" => bad})) |> json_response(400)
+
+    assert {:error, :not_found} = Repositories.get_record(@did, @collection <> "/invalid")
+  end
+
+  test "network failure follows validation mode and explicit skip never fetches", c do
+    Application.put_env(:atoll, :network_lexicons_enabled, true)
+
+    Application.put_env(:atoll, :lexicon_resolution_options,
+      fetch: fn _, _ ->
+        send(self(), :unavailable_fetch)
+        {:error, :lexicon_not_found}
+      end
+    )
+
+    assert %{"validationStatus" => "unknown"} =
+             request(c, "putRecord", body("optimistic", %{"record" => @record}))
+             |> json_response(200)
+
+    assert_receive :unavailable_fetch
+
+    assert %{"error" => "InvalidRequest"} =
+             request(c, "putRecord", body("required", %{"record" => @record, "validate" => true}))
+             |> json_response(400)
+
+    assert_receive :unavailable_fetch
+
+    assert %{"validationStatus" => "unknown"} =
+             request(c, "putRecord", body("skipped", %{"record" => @record, "validate" => false}))
+             |> json_response(200)
+
+    refute_receive :unavailable_fetch
+  end
+
+  test "session revocation during schema retrieval prevents mutation", c do
+    configure_network(fn ->
+      assert {:ok, _} = Sessions.revoke(c.pair.refresh_jwt)
+    end)
+
+    assert %{"error" => "InvalidToken"} =
+             request(c, "putRecord", body("revoked", %{"record" => @record, "validate" => true}))
+             |> json_response(401)
+
+    assert Repositories.get_head(@did) == {:ok, c.head}
+  end
+
+  defp configure_network(before_fetch \\ fn -> :ok end) do
+    Application.put_env(:atoll, :network_lexicons_enabled, true)
+
+    Application.put_env(:atoll, :lexicon_resolution_options,
+      fetch: fn @collection, _ ->
+        before_fetch.()
+        send(self(), :schema_fetch)
+
+        document = %{
+          "$type" => "com.atproto.lexicon.schema",
+          "lexicon" => 1,
+          "id" => @collection,
+          "defs" => %{
+            "main" => %{
+              "type" => "record",
+              "key" => "any",
+              "record" => %{
+                "type" => "object",
+                "required" => ["text"],
+                "properties" => %{"text" => %{"type" => "string"}}
+              }
+            }
+          }
+        }
+
+        {:ok, %{nsid: @collection, document: document, did: @did, uri: "test", cid: "test"}}
+      end
+    )
   end
 
   defp configure_handle(c, did \\ @did, claimed \\ "alice.example.com") do
