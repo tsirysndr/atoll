@@ -10,6 +10,10 @@ defmodule Atoll.Application do
     children = [
       AtollWeb.Telemetry,
       Atoll.Repo,
+      {DynamicSupervisor,
+       name: Atoll.CAR.StageSupervisor,
+       strategy: :one_for_one,
+       max_children: Application.get_env(:atoll, :import_concurrency, 16)},
       Atoll.Accounts.SessionLimiter,
       {Atoll.Identity.Cache,
        name: Atoll.Identity.Cache,

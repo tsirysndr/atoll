@@ -3,7 +3,7 @@ defmodule Atoll.CAR.Stage do
   Request-scoped disk staging for validated CAR blocks. No public storage writes.
   The callback must finish using the stage before returning; its file is then
   closed and removed even on exceptions. Roots and the CID/offset index remain
-  in memory, while record bodies stay on disk. Process/host crashes may leave
+  in memory, while record bodies stay on disk. VM/host crashes may leave
   private temporary files for operational cleanup.
   """
   alias Atoll.{CID, CAR.Decoder}
@@ -46,31 +46,17 @@ defmodule Atoll.CAR.Stage do
 
   defp with_file(opts, callback) do
     parent = Keyword.get(opts, :directory, System.tmp_dir!())
-    name = "atoll-car-" <> Base.url_encode64(:crypto.strong_rand_bytes(18), padding: false)
-    directory = Path.join(parent, name)
 
-    case File.mkdir(directory) do
-      :ok ->
+    case Atoll.CAR.StageLease.open(parent) do
+      {:ok, lease, io} ->
         try do
-          with :ok <- File.chmod(directory, 0o700),
-               {:ok, result} <-
-                 File.open(
-                   Path.join(directory, "blocks"),
-                   [:read, :write, :binary, :exclusive],
-                   fn io ->
-                     callback.(io)
-                   end
-                 ) do
-            result
-          else
-            _ -> {:error, :car_staging_unavailable}
-          end
+          callback.(io)
         after
-          File.rm_rf(directory)
+          Atoll.CAR.StageLease.close(lease)
         end
 
-      _ ->
-        {:error, :car_staging_unavailable}
+      error ->
+        error
     end
   end
 

@@ -158,6 +158,7 @@ record Lexicons or grant access to account data.
 - [ ] Bounded-memory repository metadata traversal.
 - [x] Incremental CARv1 decoding with bounded framing buffers and verified block callbacks.
 - [x] Request-scoped private disk staging for incrementally validated CAR blocks.
+- [x] Supervised staging cleanup on request exit and configurable per-node concurrency admission.
 - [x] Signed repository snapshot validation over staged block readers without collecting record bodies.
 - [x] Transactional staged snapshot publication with migration re-signing and quota rollback.
 - [x] Lazy CARv1 encoding with per-block validation and upstream cancellation cleanup.
@@ -863,7 +864,7 @@ Blob bytes must be transferred separately. Record bodies are read individually
 from private staging during validation and atomic publication; repository metadata
 and the reconstructed MST still scale in memory with the record count. Normal
 completion, malformed input, read errors, and publication failures close and remove
-the staging files. A hard process/host crash may leave private files behind; monitor
+the staging files. A VM/host crash may leave private files behind; monitor
 temporary-disk capacity and clean stale files operationally.
 
 For migration, `createAccount` requires an existing DID, a bidirectionally verified
@@ -3188,7 +3189,7 @@ No data is inserted into public block storage. Disk/creation failures produce a
 staging error. Callers can choose a trusted `directory` and decoder byte/block
 limits; defaults use the system temporary directory and the decoder's 1 GiB /
 1,000,000-section limits. These options must not come from client request input.
-A process or host crash can leave private temporary files behind, so operational
+A VM or host crash can leave private temporary files behind, so operational
 stale-file cleanup and disk-capacity planning remain necessary when operating public
 streaming imports. This stage validates transport integrity only;
 repository signatures, complete MST membership, account authorization, and quotas
@@ -3223,3 +3224,17 @@ staged publication, unreachable-block exclusion, quota rollback including blob
 references, and cross-curve migration re-signing/retries. Public HTTP imports now use a stateful bounded reader with
 `Stage.with_reader/4`, retaining the updated connection through completion or
 failure. Tests include an HTTP upload larger than 64 MiB with duplicate sections.
+
+
+Staging files are owned by temporary supervised lease processes that monitor their
+request owner. If the request crashes or is killed, the lease closes the file and
+removes its private directory. Normal completion explicitly releases the lease;
+it is not restarted after owner termination. `ATOLL_IMPORT_CONCURRENCY` sets the
+maximum simultaneous staging leases per node (default 16, range 1–64). Admission
+failure maps to HTTP 503 before reading the body. This bounds concurrent staging
+reservations locally; it is independent of Redis/PostgreSQL request budgets and
+does not reserve actual free disk space. With the 1 GiB per-upload cap, plan disk
+capacity for the configured concurrency as well as metadata and filesystem overhead.
+VM/host crashes or abrupt termination of a lease itself still require stale-file
+cleanup. Tests kill a request process and await lease termination to verify cleanup,
+and verify rejection/re-admission at the concurrency limit without sleeps.

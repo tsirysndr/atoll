@@ -1,6 +1,10 @@
 import Config
 
 config :atoll,
+       :import_concurrency,
+       Atoll.CAR.StageLease.limit_from_env!(System.get_env("ATOLL_IMPORT_CONCURRENCY"))
+
+config :atoll,
        :network_lexicons_enabled,
        Atoll.Lexicon.WriteValidation.enabled_from_env!(System.get_env("ATOLL_NETWORK_LEXICONS"))
 
