@@ -5,6 +5,10 @@ config :atoll, :email_worker, Atoll.Email.Config.parse!(System.get_env())
 server = Atoll.ServerConfig.parse!(System.get_env(), config_env() == :prod)
 config :atoll, :pds, server.pds
 
+if key = Atoll.Identity.Server.key_from_env!(System.get_env("ATOLL_PDS_SIGNING_KEY")) do
+  config :atoll, :server_identity_key, key
+end
+
 case Integer.parse(System.get_env("ATOLL_SESSION_MAX_COUNT", "100")) do
   {limit, ""} when limit in 0..1000 -> config :atoll, :session_max_count, limit
   _ -> raise "ATOLL_SESSION_MAX_COUNT must be an integer from 0 to 1000"

@@ -7,6 +7,7 @@ defmodule AtollWeb.Router do
 
   scope "/", AtollWeb do
     get "/", HomeController, :show
+    get "/.well-known/did.json", ServerController, :identity
   end
 
   scope "/api", AtollWeb do

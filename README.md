@@ -18,7 +18,7 @@ Checked items are implemented in this repository. Unchecked items are remaining 
 - [x] `GET /xrpc/com.atproto.server.describeServer` with configurable `did` and `availableUserDomains`.
 - [x] Controller test for unauthenticated server description.
 - [x] Validated runtime server DID and advertised domain configuration (development defaults to `did:web:localhost`).
-- [ ] Public server DID document publication and identity provisioning.
+- [x] Configured hostname-based server DID document publication with a stable service key.
 - [ ] General XRPC request validation and protocol error responses.
 - [ ] Lexicon-based record validation.
 
@@ -546,7 +546,8 @@ handle domains unless configured. `PHX_HOST` must be a DNS hostname without a
 scheme, port, or path and sets Phoenix's public HTTPS URL on port 443. Existing
 production database and secret-key configuration is still required.
 
-These settings advertise metadata; they do not publish a DID document, provision
+These settings advertise metadata; the DID endpoint additionally requires a stable
+server signing key and matching HTTPS public hostname. They do not provision
 DNS, implement signup, or verify domain ownership. `describeServer` also reports
 the enforced `blobUploadLimit` of 5,242,880 bytes. The server DID is the session JWT
 audience, so changing it invalidates existing session tokens.
@@ -935,3 +936,28 @@ available. Unowned blocks and raw blob bytes do not count toward repository quot
 Usage currently scans and deduplicates retained revision inventories; incremental
 accounting is future performance work. Internal inventory is available through
 `Atoll.Repositories.Quota.usage/1`.
+
+
+### Public server DID document
+
+`GET /.well-known/did.json` publishes the server service identity when
+`ATOLL_PDS_DID=did:web:<hostname>` matches the configured HTTPS endpoint hostname
+and the request host. Set `ATOLL_PDS_SIGNING_KEY` to a base64-encoded 32-byte
+secp256k1 private key. Generate it once, store it in your deployment secret store,
+and reuse it across restarts. For example, generate a key locally with:
+
+```sh
+mix run --no-start -e 'key = Atoll.SigningKey.generate(); IO.puts(Base.encode64(key.private))'
+```
+
+This service key is separate from session JWT signing, account repository keys,
+and the key-vault encryption key. The document exposes only its Multikey public
+key, the configured DID, and the `#atproto_pds` service URL. It uses
+`application/did+ld+json`, allows public cross-origin reads, and caches for five
+minutes. No request header can override the configured endpoint or key.
+
+Missing key configuration returns an uncached 503. A hostname mismatch, non-HTTPS
+endpoint, path-based DID, localhost DID, or non-web DID returns 404 here. Those
+identities are not automatically provisioned by this endpoint; externally managed
+DIDs still need their own publication mechanism. DNS, TLS certificates, deployment,
+and service-key rotation coordination remain operator responsibilities.
