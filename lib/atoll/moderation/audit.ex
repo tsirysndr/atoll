@@ -59,6 +59,19 @@ defmodule Atoll.Moderation.Audit do
     )
   end
 
+  @doc "Records why an unsubmitted signup reservation was selected for operator deletion."
+  def signup_cleanup!(row, cutoff) do
+    insert!(
+      "atoll.accounts.cleanupSignups",
+      row.did,
+      %{kind: "signup", did: row.did},
+      %{genesisCid: row.cid, cutoff: DateTime.to_iso8601(cutoff)},
+      %{reserved: true, submissionStarted: false},
+      %{reserved: false},
+      "operator"
+    )
+  end
+
   @doc "Records an operator custom-domain signup reservation without credentials or email."
   def signup_reservation!(did, handle, genesis_cid) do
     insert!(

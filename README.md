@@ -354,7 +354,8 @@ mutation. Deletes and empty batches need no record schema, even with `validate: 
 - [x] Opt-in interval invite allocation with confirmed-email eligibility and an unused-code cap.
 - [x] Operator enable/disable controls for future account invite allocation, separate from existing-code revocation.
 - [x] Opt-in custom-domain signup through operator DID reservation and verified `createAccount` completion.
-- [ ] Self-service custom-domain DID reservation, phone verification, and abandoned signup reservation cleanup.
+- [x] Bounded operator cleanup of expired signup reservations with no recorded PLC submission.
+- [ ] Self-service custom-domain DID reservation, phone verification, and automated signup cleanup/reconciliation.
 - [x] Internal DID-scoped password credentials with salted Argon2id hashes, bounded input, redacted inspection, and duplicate protection.
 - [x] Shared configurable Cloudflare Worker email delivery client.
 - [x] `requestPlcOperationSignature` email authorization with atomic single-use challenge consumption.
@@ -1325,8 +1326,9 @@ or reservation details cannot take over a pending account. A concurrent password
 reset invalidates an in-flight signup proof. Once signup is complete, further
 create requests return an account-exists error; use login if the success response
 was lost. Failed session creation leaves the confirmed reservation deactivated and
-resumable. Pending reservations are retained indefinitely; automated cleanup and
-background retries remain pending. No configuration in this change enables signup
+resumable. Attempted registrations remain retained for reconciliation. The
+operator cleanup command below can remove old reservations never submitted by
+Atoll; automated cleanup and background retries remain pending. No configuration in this change enables signup
 on the running deployment or submits live registrations.
 
 
@@ -3896,4 +3898,47 @@ stays deactivated with no session until a valid retry. Normalized profile detail
 password proof, invite and recovery key must still match; publication/session
 failures retain the exact journal for retry. No configuration is enabled on the
 running deployment by adding this feature. Self-service custom-domain reservation,
-phone verification, and abandoned-reservation cleanup remain unfinished.
+phone verification, and automated reservation cleanup remain unfinished. Bounded
+operator cleanup of unsubmitted reservations is described below.
+
+
+### Cleaning up unsubmitted signup reservations
+
+Preview old signup reservations before applying a bounded cleanup page:
+
+```sh
+mix atoll.accounts.cleanup_signups --older-than-days 7 --limit 100
+mix atoll.accounts.cleanup_signups --older-than-days 7 --limit 100 --apply
+```
+
+The command defaults to dry-run, seven days since reservation creation, and a
+100-account limit. Allowed bounds are 1–3650 days and 1–100 accounts. Output contains
+the cutoff, selected DIDs, selected/deleted counts, dry-run mode, and `more`.
+Repeat applied pages while `more` is true. Preview always returns the first page
+without advancing or changing state. Age is based on creation, not last retry;
+review the selected DIDs before deleting reservations still awaiting DNS setup.
+
+Only deactivated reservations with no PLC submission marker, confirmation, or
+signup completion are eligible. Before any genesis POST, Atoll now commits a
+`submission_started_at` marker under the same event/account locks used by cleanup.
+If cleanup wins first, submission stops because the reservation no longer exists.
+If publication wins first, cleanup skips it—even after timeout, rejection, crash,
+or missing readback. The first marker persists across retries. This records an
+Atoll attempt, not proof of directory acceptance or rejection.
+
+The migration conservatively marks **all existing registrations** as protected,
+using confirmation time when available and migration time otherwise. Those
+legacy markers do not establish an actual historical submission time. Complete
+the upgrade on every writer before applying cleanup; older application versions
+do not write the marker. This workflow cannot detect a signed genesis published
+outside Atoll. Attempted and legacy registrations require separate reconciliation
+and are never automatically inferred safe to delete from a 404 response.
+
+Each applied page commits atomically. Cleanup records its age/eligibility decision
+and uses the audited account-deletion path: local profile, credentials, vaults,
+registration and other account-owned rows are removed, old stream events are
+withdrawn, a deleted-account event is emitted, and owned blob bytes are queued for
+physical cleanup. Audit history remains. Invite uses are not refunded. Database
+lock/statement timeouts roll back the page for retry. No PLC request or email is
+sent. Scheduled cleanup and reconciliation of attempted/ambiguous reservations
+remain unfinished.

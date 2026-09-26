@@ -68,6 +68,100 @@ defmodule AtollWeb.SignupControllerTest do
     :ok
   end
 
+  test "signup cleanup previews and deletes only expired unsubmitted reservations" do
+    alias Atoll.Accounts.SignupCleanup
+    old = cleanup_reservation("old", 8)
+    recent = cleanup_reservation("recent", 0)
+    assert {:ok, %{dids: [did], selected: 1, deleted: 0, dry_run: true}} = SignupCleanup.batch()
+    assert did == old.did
+    assert Repo.get!(Registration, old.did)
+    seq = Atoll.Repositories.Events.latest_seq()
+    assert {:ok, %{deleted: 1, more: false}} = SignupCleanup.batch(7, 100, false)
+    refute Repo.get(Registration, old.did)
+    refute Repo.get(Profile, old.did)
+    refute Repo.get(Head, old.did)
+    assert {:error, _} = KeyVault.fetch(old.did)
+    assert Repo.get!(Registration, recent.did)
+    assert {:ok, [%{kind: :account, did: ^did}]} = Atoll.Repositories.Events.list_after(seq)
+    audits = Repo.all(Atoll.Moderation.AuditEntry)
+
+    assert Enum.any?(
+             audits,
+             &(&1.operation == "atoll.accounts.cleanupSignups" and &1.did == old.did)
+           )
+
+    assert {:ok, %{deleted: 0}} = SignupCleanup.batch(7, 100, false)
+  end
+
+  test "submission marker protects cleanup before the first POST and survives ambiguous failure" do
+    alias Atoll.Accounts.SignupCleanup
+    old = cleanup_reservation("attempted", 8)
+    original = Repo.get!(Registration, old.did)
+    refute original.submission_started_at
+
+    Req.Test.expect(__MODULE__, fn conn ->
+      assert conn.method == "POST"
+      assert Repo.get!(Registration, old.did).submission_started_at
+      assert {:ok, %{deleted: 0}} = SignupCleanup.batch(7, 100, false)
+      Req.Test.transport_error(conn, :timeout)
+    end)
+
+    Req.Test.expect(__MODULE__, &Plug.Conn.send_resp(&1, 404, ""))
+    assert {:error, _} = Registrations.submit(old.did, plug: {Req.Test, __MODULE__})
+    attempted = Repo.get!(Registration, old.did)
+    assert attempted.submission_started_at
+    refute attempted.confirmed_at
+    assert {:ok, %{selected: 0}} = SignupCleanup.batch()
+    accept_registration(original.operation)
+    assert {:ok, _} = Registrations.submit(old.did, plug: {Req.Test, __MODULE__})
+
+    assert Repo.get!(Registration, old.did).submission_started_at ==
+             attempted.submission_started_at
+  end
+
+  test "cleanup skips confirmed and non-deactivated reservations even without a submission marker" do
+    confirmed = cleanup_reservation("confirmed", 8)
+    active = cleanup_reservation("active", 8)
+
+    Repo.get!(Registration, confirmed.did)
+    |> Ecto.Changeset.change(confirmed_at: DateTime.utc_now())
+    |> Repo.update!()
+
+    assert {:ok, _} = Atoll.Repositories.set_status(active.did, :active)
+    assert {:ok, %{selected: 0, deleted: 0}} = Atoll.Accounts.SignupCleanup.batch(7, 100, false)
+    assert Repo.get!(Head, confirmed.did)
+    assert Repo.get!(Head, active.did)
+  end
+
+  test "cleanup CLI defaults to preview and bounds each applied page" do
+    cleanup_reservation("first", 8)
+    cleanup_reservation("second", 8)
+
+    output =
+      ExUnit.CaptureIO.capture_io(fn ->
+        Mix.Tasks.Atoll.Accounts.CleanupSignups.run(["--limit", "1"])
+      end)
+
+    assert %{"dry_run" => true, "deleted" => 0, "more" => true} = Jason.decode!(output)
+
+    output =
+      ExUnit.CaptureIO.capture_io(fn ->
+        Mix.Tasks.Atoll.Accounts.CleanupSignups.run(["--limit", "1", "--apply"])
+      end)
+
+    assert %{"dry_run" => false, "deleted" => 1, "more" => true} = Jason.decode!(output)
+    assert Repo.aggregate(Registration, :count) == 1
+
+    for args <- [
+          ["--limit", "0"],
+          ["--older-than-days", "0"],
+          ["--limit", "1", "--limit", "2"],
+          ["--unknown"]
+        ] do
+      assert_raise Mix.Error, fn -> Mix.Tasks.Atoll.Accounts.CleanupSignups.run(args) end
+    end
+  end
+
   test "custom signup reservation is opt-in and createAccount cannot allocate it" do
     params = Map.put(@params, "handle", "alice.example.com")
     assert {:error, :unsupported_domain} = Signup.reserve_custom(params)
@@ -380,6 +474,26 @@ defmodule AtollWeb.SignupControllerTest do
              get(%{build_conn() | host: @params["handle"]}, "/.well-known/atproto-did"),
              200
            ) == result["did"]
+  end
+
+  defp cleanup_reservation(label, age_days) do
+    Application.put_env(:atoll, :custom_domain_signup_enabled, true)
+
+    params =
+      Map.merge(@params, %{
+        "handle" => label <> ".example.com",
+        "email" => label <> "@example.com"
+      })
+
+    {:ok, reservation} = Signup.reserve_custom(params)
+
+    Repo.get!(Registration, reservation.did)
+    |> Ecto.Changeset.change(
+      inserted_at: DateTime.add(DateTime.utc_now(), -age_days * 86_400, :second)
+    )
+    |> Repo.update!()
+
+    reservation
   end
 
   defp request(params),

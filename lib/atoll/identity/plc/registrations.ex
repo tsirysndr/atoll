@@ -90,6 +90,7 @@ defmodule Atoll.Identity.PLC.Registrations do
                {:ok, _} <- KeyVault.fetch(did),
                {:ok, master} <- master_key(),
                {:ok, _} <- decrypt(row, master),
+               {:ok, _} <- begin_submission(row),
                :ok <- Client.submit_genesis(did, row.operation, opts) do
             confirm(row)
           else
@@ -98,6 +99,30 @@ defmodule Atoll.Identity.PLC.Registrations do
           end
       end
     end
+  end
+
+  defp begin_submission(row) do
+    # Commit before network I/O. Cleanup takes the same locks, so either it wins
+    # before this fence (and no POST follows), or the reservation is protected.
+    Repo.transaction(fn ->
+      Events.lock!()
+
+      unless Repo.one(from h in Head, where: h.did == ^row.did, lock: "FOR UPDATE"),
+        do: Repo.rollback(:registration_not_found)
+
+      current = Repo.get(Registration, row.did, log: false)
+
+      unless current && current.cid == row.cid && current.operation == row.operation,
+        do: Repo.rollback(:registration_not_found)
+
+      unless current.submission_started_at do
+        current
+        |> Ecto.Changeset.change(submission_started_at: DateTime.utc_now())
+        |> Repo.update!(log: false)
+      end
+
+      :ok
+    end)
   end
 
   @doc "Loads the retained PLC rotation key for internal identity operations."
