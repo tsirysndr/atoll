@@ -1,5 +1,32 @@
 import Config
 
+case System.get_env("ATOLL_BLOB_STORAGE", "postgres") do
+  "postgres" ->
+    config :atoll, :blob_storage, backend: :postgres
+
+  "s3" ->
+    required = fn name ->
+      case System.get_env(name) do
+        value when is_binary(value) and value != "" -> value
+        _ -> raise "#{name} is required for S3 blob storage"
+      end
+    end
+
+    config :atoll, :blob_storage,
+      backend: :s3,
+      s3: [
+        endpoint: required.("ATOLL_S3_ENDPOINT"),
+        bucket: required.("ATOLL_S3_BUCKET"),
+        region: System.get_env("ATOLL_S3_REGION", "us-east-1"),
+        access_key_id: required.("ATOLL_S3_ACCESS_KEY_ID"),
+        secret_access_key: required.("ATOLL_S3_SECRET_ACCESS_KEY"),
+        session_token: System.get_env("ATOLL_S3_SESSION_TOKEN")
+      ]
+
+  _ ->
+    raise "ATOLL_BLOB_STORAGE must be postgres or s3"
+end
+
 case System.get_env("ATOLL_IDENTITY_REFRESH_ENABLED", "false") do
   "true" -> config :atoll, :identity_refresh_enabled, true
   "false" -> config :atoll, :identity_refresh_enabled, false

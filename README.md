@@ -102,12 +102,49 @@ record Lexicons or grant access to account data.
 
 ### Blobs
 
-- [ ] Blob upload with MIME type and size validation.
-- [ ] Account-scoped blob metadata and record references.
+- [x] Internal account-scoped blob staging with MIME syntax validation, a 5 MiB size limit, and optional content-length checks.
+- [x] PostgreSQL and S3-compatible byte storage, with per-blob backend metadata and verified reads.
+- [ ] Authenticated blob upload endpoint and media-content validation.
+- [ ] Record references and promotion of staged blobs to public availability.
 - [ ] Blob retrieval and listing.
 - [ ] Blob lifecycle management and cleanup.
 
-Raw CID support and generic block storage are implemented; the ATProto blob API is not.
+Staged blobs are internal only. Public ATProto blob endpoints remain pending.
+
+### Blob storage configuration
+
+`ATOLL_BLOB_STORAGE` defaults to `postgres`. Set it to `s3` to store new blob
+bytes in an S3-compatible bucket while retaining ownership, MIME type, size,
+and backend metadata in PostgreSQL. Repository commits and MST blocks remain
+in PostgreSQL. S3 uses signed, path-style requests and fixed object keys
+`blobs/<base32-CID>`; the bucket must already exist and remain private.
+
+| Variable | Purpose |
+| --- | --- |
+| `ATOLL_S3_ENDPOINT` | Service origin, such as `https://s3.us-east-1.amazonaws.com` or `http://localhost:9000` for local MinIO |
+| `ATOLL_S3_BUCKET` | Existing bucket name |
+| `ATOLL_S3_REGION` | Signing region; defaults to `us-east-1` |
+| `ATOLL_S3_ACCESS_KEY_ID` | Access key with object PUT/GET permission |
+| `ATOLL_S3_SECRET_ACCESS_KEY` | Secret key, supplied outside version control |
+| `ATOLL_S3_SESSION_TOKEN` | Optional temporary-credential token |
+
+Trusted internal callers can use:
+
+```elixir
+{:ok, blob} = Atoll.Blobs.stage(did, bytes, "image/png", content_length: byte_size(bytes))
+{:ok, cid} = Atoll.CID.from_base32(blob["ref"]["$link"])
+Atoll.Blobs.get_staged(did, cid)
+```
+
+The first MIME declaration for an account/CID is retained on repeat staging;
+declarations must be concrete `type/subtype` values without parameters. Bytes
+are never transformed. MIME syntax validation does not inspect media contents.
+Existing PostgreSQL blobs remain readable when S3 is selected. Moving existing
+S3 objects to another endpoint, bucket, or backend requires a separate migration;
+retain their original S3 configuration until that is complete.
+S3 PUT happens before the metadata transaction, so database failure can leave an
+unreferenced object. Cleanup, quotas, multipart uploads, and live-provider
+interoperability tests remain pending. The current tests use a mocked S3 transport.
 
 ### Synchronization and federation
 
