@@ -89,6 +89,8 @@ defmodule Atoll.Accounts.EmailUpdate do
               email_confirmed_at: nil,
               email_confirmation_digest: nil,
               email_confirmation_expires_at: nil,
+              plc_signature_digest: nil,
+              plc_signature_expires_at: nil,
               email_update_digest: nil,
               email_update_expires_at: nil
             )
@@ -102,6 +104,8 @@ defmodule Atoll.Accounts.EmailUpdate do
           # Consume valid authorization even if the normalized address did not change.
           profile
           |> Ecto.Changeset.change(
+            plc_signature_digest: nil,
+            plc_signature_expires_at: nil,
             email_update_digest: nil,
             email_update_expires_at: nil,
             email_auth_factor: factor,

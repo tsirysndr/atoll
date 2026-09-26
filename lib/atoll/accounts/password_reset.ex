@@ -126,6 +126,8 @@ defmodule Atoll.Accounts.PasswordReset do
           auth_factor_expires_at: nil,
           password_reset_digest: nil,
           password_reset_expires_at: nil,
+          plc_signature_digest: nil,
+          plc_signature_expires_at: nil,
           email_update_digest: nil,
           email_update_expires_at: nil,
           email_confirmation_digest: nil,

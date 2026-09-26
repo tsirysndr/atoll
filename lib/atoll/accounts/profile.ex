@@ -7,6 +7,9 @@ defmodule Atoll.Accounts.Profile do
     field :invites_disabled, :boolean, default: false
     field :invite_control_note, :string, redact: true
     field :invites_updated_at, :utc_datetime_usec
+    field :plc_signature_digest, :binary, redact: true
+    field :plc_signature_expires_at, :integer
+    field :plc_signature_requested_at, :integer
     field :email, :string, redact: true
     field :email_confirmed_at, :utc_datetime_usec
     field :password_reset_digest, :binary, redact: true

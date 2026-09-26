@@ -70,6 +70,15 @@ defmodule AtollWeb.XRPCFallback do
   def call(conn, {:error, :invalid_auth_factor}),
     do: error(conn, 401, "AuthRequired", "Invalid or expired authentication factor.")
 
+  def call(conn, {:error, :email_unconfirmed}),
+    do:
+      error(
+        conn,
+        400,
+        "InvalidRequest",
+        "Confirm the current email before authorizing an identity change."
+      )
+
   def call(conn, {:error, :email_factor_unconfirmed}),
     do:
       error(

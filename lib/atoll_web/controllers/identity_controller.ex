@@ -1,6 +1,19 @@
 defmodule AtollWeb.IdentityController do
   use AtollWeb, :controller
 
+  def request_signature(conn, _) do
+    with {:ok, token} <- AtollWeb.BearerToken.get(conn),
+         :ok <- Atoll.Identity.PLC.SignatureChallenges.request(token) do
+      send_resp(conn, 200, "")
+    else
+      {:error, :unsupported_did_method} ->
+        AtollWeb.XRPCFallback.call(conn, {:error, :invalid_request})
+
+      error ->
+        AtollWeb.XRPCFallback.call(conn, error)
+    end
+  end
+
   def update_handle(conn, params) do
     opts =
       Application.get_env(:atoll, :identity_resolution_options, [])

@@ -323,6 +323,8 @@ mutation. Deletes and empty batches need no record schema, even with `validate: 
 - [ ] Custom-domain signup, phone verification, and abandoned signup reservation cleanup.
 - [x] Internal DID-scoped password credentials with salted Argon2id hashes, bounded input, redacted inspection, and duplicate protection.
 - [x] Shared configurable Cloudflare Worker email delivery client.
+- [x] `requestPlcOperationSignature` email authorization with atomic single-use challenge consumption.
+- [ ] Email-authorized public PLC operation signing and submission workflows.
 - [x] Email confirmation requests and one-use confirmation through the Worker.
 - [x] Email updates authorized through the current confirmed address using the Worker.
 - [x] Email-based password reset through the Worker with atomic session revocation.
@@ -2769,3 +2771,27 @@ Tests cover upstream legacy fixtures and a signed legacy-to-modern handle change
 through the journal and atomic local completion. Fresh signup still creates modern
 operations. Installing retained rotation keys for imported legacy accounts and public
 external-signing workflows remain pending; no key is inferred from public history.
+
+
+### PLC signing authorization email
+
+`POST /xrpc/com.atproto.identity.requestPlcOperationSignature` takes a full access
+token and no body. It requires a PLC account with a confirmed email, and sends the
+code exclusively through the configured Cloudflare email Worker. Active and
+user-deactivated accounts can request it; app passwords, suspended/taken-down
+accounts, and unsupported DID methods cannot. The endpoint returns empty HTTP 200
+only after Worker acceptance. A persistent one-minute cooldown limits issuance.
+
+Migration `20260926160604` adds a redacted purpose/DID/address-bound SHA-256 digest,
+expiry, and request timestamp to the account profile. Codes contain 192 bits of
+randomness and expire after 15 minutes. A new request replaces the previous code.
+Worker failure leaves the cooldown and pending challenge intact; there is no
+automatic retry or SMTP fallback. Email changes, password resets, and operator
+password/email changes invalidate these challenges alongside existing account codes.
+
+`SignatureChallenges.consume!/2` is the internal signing-transaction boundary: it
+rechecks full-session authorization and confirmed email, verifies expiry and the
+digest, and clears the token atomically. Signing failure must roll back the same
+transaction, preserving the authorization for retry. This increment implements
+issuance and consumption; the public `signPlcOperation` and `submitPlcOperation`
+workflows remain pending. Requesting a code does not sign or submit a PLC operation.

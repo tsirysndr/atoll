@@ -46,6 +46,8 @@ defmodule Atoll.Accounts.AdminEmail do
         email_confirmation_digest: nil,
         email_confirmation_expires_at: nil,
         email_confirmation_requested_at: nil,
+        plc_signature_digest: nil,
+        plc_signature_expires_at: nil,
         email_update_digest: nil,
         email_update_expires_at: nil,
         email_update_requested_at: nil,

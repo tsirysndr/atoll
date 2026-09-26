@@ -3,6 +3,7 @@ defmodule AtollWeb.SessionRequestPlug do
   import Plug.Conn
   @prefix "/xrpc/com.atproto.server."
   @procedures [
+    "/xrpc/com.atproto.identity.requestPlcOperationSignature",
     "/xrpc/com.atproto.identity.updateHandle",
     "/xrpc/com.atproto.identity.refreshIdentity",
     @prefix <> "requestAccountDelete",
