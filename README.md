@@ -104,6 +104,7 @@ record Lexicons or grant access to account data.
 
 - [x] Internal account-scoped blob staging with MIME syntax validation, a 5 MiB size limit, and optional content-length checks.
 - [x] PostgreSQL and S3-compatible byte storage, with per-blob backend metadata and verified reads.
+- [x] Docker MinIO integration tests for signed storage operations, access isolation, and failure handling.
 - [ ] Authenticated blob upload endpoint and media-content validation.
 - [ ] Record references and promotion of staged blobs to public availability.
 - [ ] Blob retrieval and listing.
@@ -143,8 +144,9 @@ Existing PostgreSQL blobs remain readable when S3 is selected. Moving existing
 S3 objects to another endpoint, bucket, or backend requires a separate migration;
 retain their original S3 configuration until that is complete.
 S3 PUT happens before the metadata transaction, so database failure can leave an
-unreferenced object. Cleanup, quotas, multipart uploads, and live-provider
-interoperability tests remain pending. The current tests use a mocked S3 transport.
+unreferenced object. Cleanup, quotas, multipart uploads, and broader provider
+interoperability tests remain pending. The standard tests use a mocked S3 transport;
+the optional Docker suite exercises a real MinIO server.
 
 ### Synchronization and federation
 
@@ -277,6 +279,25 @@ mix precommit
 ```
 
 The test alias creates the test database and applies pending migrations. Database tests use Ecto's SQL sandbox to roll back their changes.
+
+### MinIO integration tests
+
+With Docker running and the local test PostgreSQL database available:
+
+```sh
+bash scripts/test_minio.sh
+```
+
+The script builds a test image from MinIO's pinned
+`RELEASE.2025-09-07T16-13-09Z` source release, starts a disposable container on a
+random localhost port, waits for readiness, and runs the `minio`-tagged tests.
+The first build downloads Go dependencies and can take several minutes; Docker
+caches the image for subsequent runs. Test credentials are fixed and only used
+in this loopback-bound container. Objects live in temporary memory-backed storage;
+the container is stopped and removed on exit. No production S3 credentials or
+buckets are used. The tests cover SigV4 uploads and downloads, the 5 MiB boundary,
+private buckets, account ownership, invalid credentials, missing buckets, and
+corrupt or missing objects. These tests are excluded from `mix precommit`.
 
 ## Protocol references
 
