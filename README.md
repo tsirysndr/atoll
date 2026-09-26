@@ -152,7 +152,8 @@ The same `validate: true` restriction applies to batch requests.
 - [ ] Email verification, password changes, and account recovery.
 - [x] Internal password session creation, scoped HS256 JWT verification, single-use refresh rotation, and persistent revocation.
 - [x] Public DID/password session creation, refresh, inspection, and revocation endpoints, with bounded requests and per-node rate limits.
-- [ ] Handle/email login, authentication factors, and restricted sessions for inactive accounts.
+- [x] Bidirectionally verified handle/password login with normalized handles and DID-bound sessions.
+- [ ] Email login, authentication factors, and restricted sessions for inactive accounts.
 - [ ] App passwords.
 - [ ] ATProto OAuth authorization and resource server support.
 - [x] Live-session and repository ownership checks for blob uploads and single/batch record writes.
@@ -172,7 +173,7 @@ with random salts and the library's default work factors (64 MiB memory, three
 iterations, four lanes). Only test configuration reduces the work factors.
 Building this dependency requires a C compiler and `make`. Hashes are redacted
 from schema inspection, and credential insertion disables query logging.
-Email/handle login, password changes, and recovery remain pending.
+Email login, password changes, and recovery remain pending.
 
 ### Sessions
 
@@ -189,15 +190,23 @@ These internal APIs also back the following public XRPC routes:
 
 | Method | Route | Authentication / input |
 | --- | --- | --- |
-| POST | `/xrpc/com.atproto.server.createSession` | JSON `identifier` (hosted DID) and `password` |
+| POST | `/xrpc/com.atproto.server.createSession` | JSON `identifier` (hosted DID or verified handle) and `password` |
 | GET | `/xrpc/com.atproto.server.getSession` | `Authorization: Bearer <accessJwt>` |
 | POST | `/xrpc/com.atproto.server.refreshSession` | `Authorization: Bearer <refreshJwt>` |
 | POST | `/xrpc/com.atproto.server.deleteSession` | `Authorization: Bearer <refreshJwt>` |
 
 Creation and refresh return `did`, `handle`, `active`, `accessJwt`, and `refreshJwt`.
-The handle comes from the last verified identity observation, or `handle.invalid`
-if none exists; login does not perform identity refresh. Session inspection omits
-tokens. Deletion returns an empty 200 response. Credentials must be in the JSON
+Handle login normalizes the identifier and freshly verifies its forward lookup
+and the DID document's handle claim before checking that DID's password. A
+forward-only alias cannot log in. Unresolvable handles, unhosted identities, and
+incorrect passwords receive the same `AuthRequired` response. Credentials are
+never forwarded to identity-resolution services. DID login bypasses resolution.
+
+A handle-login response includes the freshly verified handle. DID login, session
+inspection, and refresh use the last persisted identity observation, or
+`handle.invalid` if none exists. Login does not update that observation or publish
+identity events; the identity refresh workflow maintains it. Session inspection
+omits tokens. Deletion returns an empty 200 response. Credentials must be in the JSON
 body, and tokens must be in a single Authorization header; query parameters cannot
 supply them. Session responses and errors use `Cache-Control: no-store`.
 

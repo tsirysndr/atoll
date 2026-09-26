@@ -4,9 +4,11 @@ defmodule AtollWeb.SessionController do
   action_fallback AtollWeb.SessionFallback
 
   def create(conn, _params) do
-    with {:ok, did, password} <- credentials(conn.body_params),
+    with {:ok, identifier, password} <- credentials(conn.body_params),
+         {:ok, did, handle} <- login_identity(identifier),
          {:ok, pair} <- Sessions.create(did, password) do
-      json(conn, session_response(pair))
+      result = session_response(pair)
+      json(conn, if(handle, do: Map.put(result, :handle, handle), else: result))
     end
   end
 
@@ -37,16 +39,30 @@ defmodule AtollWeb.SessionController do
     end
   end
 
-  defp credentials(%{"identifier" => did, "password" => password} = body)
-       when is_binary(did) and is_binary(password) do
-    if Atoll.Syntax.did?(did) and byte_size(password) in 8..1024 and String.valid?(password) and
+  defp credentials(%{"identifier" => identifier, "password" => password} = body)
+       when is_binary(identifier) and is_binary(password) do
+    if (Atoll.Syntax.did?(identifier) or Atoll.Syntax.handle?(identifier)) and
+         byte_size(password) in 8..1024 and String.valid?(password) and
          Map.get(body, "allowTakendown", false) == false and
          not Map.has_key?(body, "authFactorToken"),
-       do: {:ok, did, password},
+       do: {:ok, identifier, password},
        else: {:error, :invalid_request}
   end
 
   defp credentials(_), do: {:error, :invalid_request}
+
+  defp login_identity(identifier) do
+    if Atoll.Syntax.did?(identifier) do
+      {:ok, identifier, nil}
+    else
+      opts = Application.get_env(:atoll, :identity_resolution_options, [])
+
+      case Atoll.Identity.Handle.verify(identifier, opts) do
+        {:ok, identity} -> {:ok, identity.did, identity.handle}
+        {:error, _} -> {:error, :invalid_credentials}
+      end
+    end
+  end
 
   defp bearer(conn), do: AtollWeb.BearerToken.get(conn)
 
