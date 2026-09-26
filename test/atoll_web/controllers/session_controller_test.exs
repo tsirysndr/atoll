@@ -189,8 +189,15 @@ defmodule AtollWeb.SessionControllerTest do
     pair = login(conn) |> json_response(200)
     {:ok, _} = Repositories.set_status(@did, :deactivated)
 
-    assert %{"error" => "RepoDeactivated"} =
-             conn |> bearer(pair["accessJwt"]) |> get(@get) |> json_response(400)
+    assert %{"active" => false, "status" => "deactivated"} =
+             conn |> bearer(pair["accessJwt"]) |> get(@get) |> json_response(200)
+
+    inactive = login(conn) |> json_response(200)
+    assert inactive["active"] == false
+    assert inactive["status"] == "deactivated"
+
+    assert %{"active" => false, "status" => "deactivated"} =
+             conn |> bearer(inactive["refreshJwt"]) |> post(@refresh) |> json_response(200)
 
     assert response(conn |> bearer(pair["refreshJwt"]) |> post(@delete), 200) == ""
   end
@@ -265,7 +272,7 @@ defmodule AtollWeb.SessionControllerTest do
     request =
       Req.new(
         plug: fn conn ->
-          {:ok, _} = Repositories.set_status(@did, :deactivated)
+          {:ok, _} = Repositories.set_status(@did, :suspended)
           original.(conn)
         end
       )
@@ -276,7 +283,7 @@ defmodule AtollWeb.SessionControllerTest do
       Keyword.put(opts, :request, request)
     )
 
-    assert %{"error" => "RepoDeactivated"} =
+    assert %{"error" => "RepoSuspended"} =
              login(c.conn, %{"identifier" => "alice.example.com"}) |> json_response(400)
 
     refute Atoll.Repo.exists?(Atoll.Accounts.Session)

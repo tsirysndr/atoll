@@ -1,6 +1,6 @@
 defmodule Atoll.Accounts.Sessions do
   @moduledoc """
-  Password session lifecycle for active repositories, used by the HTTP session API.
+  Password session lifecycle for active and deactivated repositories, used by the HTTP session API.
 
   Refresh rotates the refresh token once, without a retry grace period. Older
   access tokens remain valid until expiry or session revocation. Every access
@@ -19,7 +19,7 @@ defmodule Atoll.Accounts.Sessions do
          {:ok, pair} <- Tokens.pair(did, id, opts) do
       Repo.transaction(fn ->
         # Serialize account logins before counting so parallel creates cannot exceed the cap.
-        active_head!(did, true)
+        head = active_head!(did, true, true)
         now = Keyword.get(opts, :now, System.system_time(:second))
         live = from s in Session, where: s.did == ^did and s.expires_at > ^now
         if Repo.aggregate(live, :count) >= limit, do: Repo.rollback(:session_limit_exceeded)
@@ -34,7 +34,7 @@ defmodule Atoll.Accounts.Sessions do
           log: false
         )
 
-        response(did, pair)
+        response(head, pair)
       end)
     end
   end
@@ -52,7 +52,7 @@ defmodule Atoll.Accounts.Sessions do
   def refresh(token, opts \\ []) do
     with {:ok, claims} <- Tokens.verify(token, :refresh, opts) do
       Repo.transaction(fn ->
-        active_head!(claims["sub"])
+        head = active_head!(claims["sub"], false, true)
         session = session!(claims, opts, true)
         matching_refresh!(session, claims)
 
@@ -62,7 +62,7 @@ defmodule Atoll.Accounts.Sessions do
             |> Ecto.Changeset.change(refresh_hash: pair.refresh_hash, expires_at: pair.expires_at)
             |> Repo.update!(log: false)
 
-            response(session.did, pair)
+            response(head, pair)
 
           {:error, reason} ->
             Repo.rollback(reason)
@@ -80,6 +80,17 @@ defmodule Atoll.Accounts.Sessions do
             Repo.rollback(:invalid_token)
 
         session!(claims, [], false)
+        head
+      end)
+    end
+  end
+
+  @doc "Authorizes session management for active or deactivated accounts; not ordinary write permission."
+  def authenticate_management(token, opts \\ []) do
+    with {:ok, claims} <- Tokens.verify(token, :access, opts) do
+      Repo.transaction(fn ->
+        head = active_head!(claims["sub"], false, true)
+        session!(claims, opts, false)
         head
       end)
     end
@@ -125,7 +136,7 @@ defmodule Atoll.Accounts.Sessions do
       else: {:error, :invalid_session_limit}
   end
 
-  defp active_head!(did, update? \\ false) do
+  defp active_head!(did, update? \\ false, allow_deactivated? \\ false) do
     query = from h in Head, where: h.did == ^did
 
     query =
@@ -139,10 +150,16 @@ defmodule Atoll.Accounts.Sessions do
 
     case Repositories.availability(head) do
       :ok -> head
+      {:error, {:repo_inactive, :deactivated}} when allow_deactivated? -> head
       {:error, reason} -> Repo.rollback(reason)
     end
   end
 
-  defp response(did, pair),
-    do: %{did: did, access_jwt: pair.access_jwt, refresh_jwt: pair.refresh_jwt}
+  defp response(head, pair),
+    do: %{
+      did: head.did,
+      status: head.status,
+      access_jwt: pair.access_jwt,
+      refresh_jwt: pair.refresh_jwt
+    }
 end

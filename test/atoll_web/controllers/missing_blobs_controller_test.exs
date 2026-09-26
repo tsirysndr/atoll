@@ -60,7 +60,7 @@ defmodule AtollWeb.MissingBlobsControllerTest do
     assert %{"blobs" => [_]} = query(c, %{}) |> json_response(200)
   end
 
-  test "requires an active access session and prevents caching", c do
+  test "requires a live session, supports deactivated accounts and prevents caching", c do
     assert json_response(get(c.conn, @route), 401)
 
     assert c.conn
@@ -72,7 +72,7 @@ defmodule AtollWeb.MissingBlobsControllerTest do
     assert get_resp_header(response, "cache-control") == ["no-store"]
     assert %{"blobs" => []} == json_response(response, 200)
     {:ok, _} = Repositories.set_status(@did, :deactivated)
-    assert query(c, %{}).status != 200
+    assert %{"blobs" => []} = query(c, %{}) |> json_response(200)
     {:ok, _} = Repositories.set_status(@did, :active)
     {:ok, :ok} = Sessions.revoke(c.pair.refresh_jwt)
     assert query(c, %{}) |> json_response(401)

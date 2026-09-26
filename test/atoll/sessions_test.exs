@@ -90,8 +90,8 @@ defmodule Atoll.Accounts.SessionsTest do
     assert Sessions.refresh(unpersisted.refresh_jwt, @opts) == {:error, :invalid_token}
   end
 
-  test "inactive repositories cannot create, authenticate or refresh sessions but can revoke" do
-    for status <- [:deactivated, :takendown, :suspended] do
+  test "taken-down and suspended repositories cannot create, authenticate or refresh sessions but can revoke" do
+    for status <- [:takendown, :suspended] do
       {:ok, _} = Repositories.set_status(@did, :active)
       {:ok, pair} = Sessions.create(@did, @password, @opts)
       {:ok, _} = Repositories.set_status(@did, status)
@@ -100,6 +100,26 @@ defmodule Atoll.Accounts.SessionsTest do
       assert Sessions.refresh(pair.refresh_jwt, @opts) == {:error, {:repo_inactive, status}}
       assert Sessions.revoke(pair.refresh_jwt, @opts) == {:ok, :ok}
     end
+  end
+
+  test "deactivated accounts manage sessions without ordinary write permission" do
+    {:ok, _} = Repositories.set_status(@did, :deactivated)
+    {:ok, pair} = Sessions.create(@did, @password, @opts)
+    assert pair.status == :deactivated
+
+    assert {:ok, %{status: :deactivated}} =
+             Sessions.authenticate_management(pair.access_jwt, @opts)
+
+    assert {:error, {:repo_inactive, :deactivated}} =
+             Sessions.authenticate(pair.access_jwt, @opts)
+
+    assert {:ok, refreshed} = Sessions.refresh(pair.refresh_jwt, @opts)
+    assert refreshed.status == :deactivated
+    assert {:error, :invalid_token} = Sessions.refresh(pair.refresh_jwt, @opts)
+    assert {:ok, :ok} = Sessions.revoke(refreshed.refresh_jwt, @opts)
+
+    assert {:error, :invalid_token} =
+             Sessions.authenticate_management(refreshed.access_jwt, @opts)
   end
 
   test "binds a session to its account and current refresh identifier" do

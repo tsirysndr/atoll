@@ -9,7 +9,7 @@ defmodule Atoll.Blobs.Missing do
     Repo.transaction(fn ->
       # The nested authentication retains head/session share locks through the query.
       did =
-        case Sessions.authenticate(token) do
+        case Sessions.authenticate_management(token) do
           {:ok, %{did: did}} -> did
           {:error, reason} -> Repo.rollback(reason)
         end

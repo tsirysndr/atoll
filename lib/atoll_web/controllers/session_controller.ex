@@ -14,8 +14,8 @@ defmodule AtollWeb.SessionController do
 
   def show(conn, _params) do
     with {:ok, token} <- bearer(conn),
-         {:ok, %{did: did}} <- Sessions.authenticate(token) do
-      json(conn, identity(did))
+         {:ok, head} <- Sessions.authenticate_management(token) do
+      json(conn, identity(head))
     end
   end
 
@@ -81,16 +81,18 @@ defmodule AtollWeb.SessionController do
   defp bearer(conn), do: AtollWeb.BearerToken.get(conn)
 
   defp session_response(pair) do
-    Map.merge(identity(pair.did), %{accessJwt: pair.access_jwt, refreshJwt: pair.refresh_jwt})
+    Map.merge(identity(pair), %{accessJwt: pair.access_jwt, refreshJwt: pair.refresh_jwt})
   end
 
-  defp identity(did) do
+  defp identity(%{did: did, status: status}) do
     observation = Atoll.Repo.get(Atoll.Identity.Observation, did)
 
-    %{
+    result = %{
       did: did,
       handle: if(observation, do: observation.handle, else: "handle.invalid"),
-      active: true
+      active: status == :active
     }
+
+    if status == :active, do: result, else: Map.put(result, :status, Atom.to_string(status))
   end
 end

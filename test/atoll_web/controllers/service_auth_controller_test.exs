@@ -118,6 +118,23 @@ defmodule AtollWeb.ServiceAuthControllerTest do
            |> json_response(429)
   end
 
+  test "deactivated accounts may only delegate account migration", c do
+    {:ok, _} = Repositories.set_status(@did, :deactivated)
+
+    assert %{"token" => token} =
+             query(c, %{aud: @aud, lxm: "com.atproto.server.createAccount"}) |> json_response(200)
+
+    {_, claims} = verify(token, c.key)
+    assert claims["lxm"] == "com.atproto.server.createAccount"
+
+    for params <- [%{aud: @aud}, %{aud: @aud, lxm: "app.bsky.feed.getTimeline"}] do
+      assert %{"error" => "RepoDeactivated"} = query(c, params) |> json_response(400)
+    end
+
+    {:ok, _} = Repositories.set_status(@did, :takendown)
+    assert query(c, %{aud: @aud, lxm: "com.atproto.server.createAccount"}) |> json_response(400)
+  end
+
   defp query(c, params),
     do:
       c.conn

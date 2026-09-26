@@ -155,7 +155,8 @@ The same `validate: true` restriction applies to batch requests.
 - [x] Internal password session creation, scoped HS256 JWT verification, single-use refresh rotation, and persistent revocation.
 - [x] Public DID/password session creation, refresh, inspection, and revocation endpoints, with bounded requests and per-node rate limits.
 - [x] Bidirectionally verified handle/password login with normalized handles and DID-bound sessions.
-- [ ] Email login, authentication factors, and restricted sessions for inactive accounts.
+- [x] Deactivated-account login, refresh, session inspection, missing-blob inventory, and migration-scoped service tokens.
+- [ ] Email login, authentication factors, and taken-down account session scopes.
 - [ ] App passwords.
 - [ ] ATProto OAuth authorization and resource server support.
 - [x] Live-session and repository ownership checks for blob uploads and single/batch record writes.
@@ -198,7 +199,8 @@ These internal APIs also back the following public XRPC routes:
 | POST | `/xrpc/com.atproto.server.refreshSession` | `Authorization: Bearer <refreshJwt>` |
 | POST | `/xrpc/com.atproto.server.deleteSession` | `Authorization: Bearer <refreshJwt>` |
 
-Creation and refresh return `did`, `handle`, `active`, `accessJwt`, and `refreshJwt`.
+Creation and refresh return `did`, `handle`, `active`, `accessJwt`, and `refreshJwt`,
+plus `status: "deactivated"` for deactivated accounts.
 Handle login normalizes the identifier and freshly verifies its forward lookup
 and the DID document's handle claim before checking that DID's password. A
 forward-only alias cannot log in. Unresolvable handles, unhosted identities, and
@@ -232,12 +234,16 @@ token immediately; retry grace periods are not implemented. Older access tokens
 remain valid until expiration or revocation. Revocation invalidates all access
 tokens for that session through the required database check.
 
-Creation, access verification, and refresh currently require an active repository;
-revocation and read-only `checkAccountStatus` are also allowed for inactive repositories.
-Other authenticated operations still require an active repository. Sessions survive process
-restarts. Changing the signing key invalidates existing tokens. Key rotation with
-overlap and restricted sessions for
-inactive accounts remain pending. Write handlers recheck authorization inside the
+Creation, refresh, and session inspection allow active or deactivated accounts.
+Ordinary write authorization still requires an active repository. Deactivated
+accounts may also list missing blobs and request service tokens specifically for
+`com.atproto.server.createAccount`; other service-token scopes remain blocked.
+Revocation and read-only `checkAccountStatus` allow existing sessions for any
+repository status. Taken-down and suspended accounts cannot create or refresh
+sessions. Restrictions are enforced from current database status on each request,
+including sessions issued before deactivation. Sessions survive process restarts.
+Changing the signing key invalidates existing tokens. Key rotation with overlap
+and taken-down account session scopes remain pending. Write handlers recheck authorization inside the
 write transaction; token verification alone is not write permission.
 
 Expired session rows can be removed with `mix atoll.sessions.prune --limit 500`
@@ -409,7 +415,7 @@ missing or foreign CID rejects the whole request. Historical verification can
 load multiple complete retained trees, so its cost grows with repository history;
 scalable membership indexes and history compaction remain pending.
 
-`GET /xrpc/com.atproto.server.getServiceAuth` requires an active account's access
+`GET /xrpc/com.atproto.server.getServiceAuth` normally requires an active account's access
 token and a stored repository signing key. Supply `aud` as a DID or DID with a
 service fragment, optionally `lxm` as an XRPC method NSID and `exp` as Unix epoch
 seconds. Tokens default to 60 seconds; method-less tokens cannot exceed 60 seconds,
@@ -423,7 +429,8 @@ occur in one transaction. Tokens already issued remain cryptographically valid
 until expiration even if the originating session is revoked; receiving services
 must enforce audience, method, expiration, and their own authorization policy.
 Atoll does not yet accept service JWTs as local access tokens or proxy requests.
-Restricted sessions for inactive accounts and app-password delegation remain pending.
+Deactivated accounts can request only the `com.atproto.server.createAccount`
+method for migration. Taken-down sessions and app-password delegation remain pending.
 
 For local development, connect to
 `ws://localhost:4000/xrpc/com.atproto.sync.subscribeRepos?cursor=0`.
@@ -579,7 +586,7 @@ once with a referencing `recordUri`. Uploading the matching bytes and MIME type
 removes that blob from the results. Metadata mismatches remain listed. This is
 an inventory of current database references, not a physical storage integrity
 scan; missing or corrupted backend objects require separate operational checks.
-It currently requires an active account and shares the session endpoint's
+It accepts active or deactivated accounts and shares the session endpoint's
 300-request per-IP, per-five-minute limit. Pagination reflects current state
 rather than a snapshot across requests.
 
@@ -594,8 +601,9 @@ the DID's PDS endpoint against Phoenix's configured public endpoint URL. Resolut
 failure returns `validDid: false`. PLC operation-log/rotation-key authority and
 private-key availability are not checked. Remote resolution runs before inventory
 locks; the session is checked again before returning account data. This endpoint
-shares the session query rate limit and does not grant inactive accounts write,
-import, upload, refresh, or new-login access.
+shares the session query rate limit and does not grant write, import, or upload
+access to inactive accounts. Deactivated accounts may separately log in and refresh;
+taken-down and suspended accounts may not.
 
 ### Validation
 

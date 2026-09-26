@@ -28,7 +28,8 @@ defmodule Atoll.Accounts.ServiceAuth do
          :ok <- method(params["lxm"]),
          {:ok, expiry} <- expiration(params["exp"]) do
       Repo.transaction(fn ->
-        with {:ok, %{did: did}} <- Sessions.authenticate(token),
+        with {:ok, %{did: did} = head} <- Sessions.authenticate_management(token),
+             :ok <- account_scope(head, params["lxm"]),
              now = System.system_time(:second),
              {:ok, exp} <- bounded_expiry(expiry, params["lxm"], now),
              {:ok, key} <- KeyVault.fetch(did),
@@ -43,6 +44,10 @@ defmodule Atoll.Accounts.ServiceAuth do
       error -> error
     end
   end
+
+  defp account_scope(%{status: :active}, _method), do: :ok
+  defp account_scope(%{status: :deactivated}, "com.atproto.server.createAccount"), do: :ok
+  defp account_scope(_, _), do: {:error, {:repo_inactive, :deactivated}}
 
   defp audience?(value) when is_binary(value) and byte_size(value) <= 2048 do
     case String.split(value, "#") do
