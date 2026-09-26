@@ -44,7 +44,7 @@ defmodule Atoll.Accounts.InviteListing do
   def account(token, params) when is_map(params) do
     with true <- Map.keys(params) -- ["includeUsed", "createAvailable"] == [],
          {:ok, include_used} <- boolean(Map.get(params, "includeUsed", "true")),
-         {:ok, _create_available} <- boolean(Map.get(params, "createAvailable", "true")),
+         {:ok, create_available} <- boolean(Map.get(params, "createAvailable", "true")),
          {:ok, _} <- Sessions.authenticate_management(token) do
       read(fn ->
         head =
@@ -52,6 +52,8 @@ defmodule Atoll.Accounts.InviteListing do
             {:ok, head} -> head
             {:error, reason} -> Repo.rollback(reason)
           end
+
+        if create_available, do: Atoll.Accounts.InviteAllocation.allocate!(head.did)
 
         query = ordered("recent") |> where([i], i.for_account == ^head.did) |> limit(1001)
         query = if include_used, do: query, else: where(query, [i], i.remaining > 0)
@@ -61,7 +63,6 @@ defmodule Atoll.Accounts.InviteListing do
              Enum.sum(Enum.map(rows, &(&1.use_count - &1.remaining))) > @max_uses,
            do: Repo.rollback(:invite_listing_too_large)
 
-        # No automatic invite-allocation policy is configured, so there are no earned codes to create.
         %{codes: details(rows)}
       end)
     else
@@ -127,7 +128,7 @@ defmodule Atoll.Accounts.InviteListing do
         available: row.use_count,
         disabled: row.disabled,
         forAccount: row.for_account || "admin",
-        createdBy: "admin",
+        createdBy: row.created_by,
         createdAt: DateTime.to_iso8601(row.inserted_at),
         uses: Map.get(grouped, row.code, [])
       }

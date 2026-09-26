@@ -1,6 +1,10 @@
 import Config
 
 config :atoll,
+       :invite_allocation,
+       Atoll.Accounts.InviteAllocation.config_from_env!(System.get_env())
+
+config :atoll,
        :admin_password,
        Atoll.Accounts.AdminAuth.password_from_env!(System.get_env("ATOLL_ADMIN_PASSWORD"))
 

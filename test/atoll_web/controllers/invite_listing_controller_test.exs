@@ -9,8 +9,13 @@ defmodule AtollWeb.InviteListingControllerTest do
 
   setup %{conn: conn} do
     previous =
-      Map.new([:admin_password, :session_signing_key], &{&1, Application.fetch_env(:atoll, &1)})
+      Map.new(
+        [:admin_password, :session_signing_key, :invite_code_required, :invite_allocation],
+        &{&1, Application.fetch_env(:atoll, &1)}
+      )
 
+    Application.put_env(:atoll, :invite_code_required, false)
+    Application.put_env(:atoll, :invite_allocation, interval_seconds: 0, max_open: 5)
     Application.put_env(:atoll, :admin_password, @secret)
     Application.put_env(:atoll, :session_signing_key, :crypto.strong_rand_bytes(32))
 
@@ -147,6 +152,31 @@ defmodule AtollWeb.InviteListingControllerTest do
     Repo.insert_all(Invite, rows, log: false)
     assert bearer(c.conn, c.pair.access_jwt) |> get(@account) |> json_response(400)
     assert length((admin(c) |> get(@admin, %{limit: 500}) |> json_response(200))["codes"]) == 500
+  end
+
+  test "HTTP createAvailable creates earned codes only for an eligible full-session owner", c do
+    now = DateTime.utc_now()
+
+    Repo.insert!(%Atoll.Accounts.Profile{
+      did: @did,
+      handle: "owner.example.com",
+      email: "owner@example.com",
+      email_confirmed_at: now,
+      inserted_at: DateTime.add(now, -7200)
+    })
+
+    Application.put_env(:atoll, :invite_code_required, true)
+    Application.put_env(:atoll, :invite_allocation, interval_seconds: 3600, max_open: 2)
+    full = bearer(c.conn, c.pair.access_jwt)
+
+    assert get(full, @account, %{createAvailable: false}) |> json_response(200) == %{
+             "codes" => []
+           }
+
+    result = get(full, @account) |> json_response(200)
+    assert length(result["codes"]) == 2
+    assert Enum.all?(result["codes"], &(&1["createdBy"] == @did and &1["available"] == 1))
+    assert get(full, @account) |> json_response(200) == result
   end
 
   test "query methods enforce authentication, cursors, limits and empty bodies", c do

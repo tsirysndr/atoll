@@ -1,6 +1,9 @@
 defmodule AtollWeb.XRPCFallback do
   use AtollWeb, :controller
 
+  def call(conn, {:error, :invalid_invite_allocation}),
+    do: error(conn, 503, "ServiceUnavailable", "Invite allocation is misconfigured.")
+
   def call(conn, {:error, :invite_listing_too_large}),
     do:
       error(

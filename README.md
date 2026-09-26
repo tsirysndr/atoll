@@ -165,7 +165,8 @@ The same `validate: true` restriction applies to batch requests.
 - [x] Configurable invite-required signup and migration, limited uses, durable redemption and local operator issuance.
 - [x] Separately authenticated HTTP invite issuance, bulk issuance, and disabling by code/account.
 - [x] Cursor-paginated admin invite listings and full-session account-owned invite listings.
-- [ ] Automatic invite allocation, custom-domain signup, phone verification, and abandoned signup reservation cleanup.
+- [x] Opt-in interval invite allocation with confirmed-email eligibility and an unused-code cap.
+- [ ] Per-account invite-allocation controls, custom-domain signup, phone verification, and abandoned signup reservation cleanup.
 - [x] Internal DID-scoped password credentials with salted Argon2id hashes, bounded input, redacted inspection, and duplicate protection.
 - [x] Shared configurable Cloudflare Worker email delivery client.
 - [x] Email confirmation requests and one-use confirmation through the Worker.
@@ -1186,7 +1187,7 @@ operator API that blocks new reservations without cancelling existing ones.
 
 Migration redemption also rolls back with failed provisioning and service-token
 consumption. HTTP issuance/disabling uses the separate operator authentication
-below. Automatic allocation remains pending; the Mix task and
+below. Optional automatic allocation is described below; the Mix task and
 internal APIs are trusted operator operations.
 
 
@@ -1237,14 +1238,14 @@ a page may contain fewer codes than its requested limit to stay within this boun
 Continue through its returned cursor. The original code use allowance appears as
 `available`, matching the protocol; subtract `uses.length` to calculate remaining
 uses. Each use contains `usedBy` and `usedAt`. Codes also include `disabled`,
-`forAccount`, `createdBy`, and `createdAt`. Current codes are operator-issued, so
-`createdBy` is `admin`; unowned codes also have `forAccount: "admin"`.
+`forAccount`, `createdBy`, and `createdAt`. Operator-issued codes use `createdBy: "admin"`;
+earned codes use the owner DID. Unowned codes have `forAccount: "admin"`.
 
 `GET com.atproto.server.getAccountInviteCodes` requires a full account session;
 app-password sessions are rejected. It returns only codes attributed to that DID.
 `includeUsed=false` excludes exhausted codes; the default includes them. Disabled
-codes remain visible with their disabled flag. `createAvailable` accepts a boolean,
-but currently creates nothing because automatic invite allocation is not configured.
+codes remain visible with their disabled flag. `createAvailable` accepts a boolean (default true) and allocates earned codes when
+the optional policy below is enabled; false performs a read-only listing.
 This unpaginated protocol method allows at most 1,000 codes and 10,000 use records;
 larger results return an error directing operators to admin pagination, never a
 silently truncated list.
@@ -1255,3 +1256,35 @@ serialize with invite mutations to keep counters and histories consistent, with
 one-second lock and five-second statement timeouts. Database indexes support the
 recent, usage and account-owned orderings. Histories include redemptions by deleted
 accounts because deletion does not refund invitations.
+
+
+### Automatic invite allocation
+
+Set `ATOLL_INVITE_INTERVAL_SECONDS` to an interval from 3600 to 31536000 seconds;
+zero (the default) disables allocation. Set `ATOLL_INVITE_MAX_OPEN` from 1 to 1000
+(default 5) to cap unused, non-disabled earned codes per account. Allocation also
+requires `ATOLL_INVITE_CODE_REQUIRED=true`, an active repository, and a locally
+confirmed account email. Missing profiles and unconfirmed or deactivated accounts
+receive no newly earned codes.
+
+On a full-session `getAccountInviteCodes` request with `createAvailable=true`, the
+account earns one single-use code for each complete interval since its local
+profile creation. Already-issued earned codes, including spent and disabled ones,
+count against that lifetime interval entitlement. Issuance fills only the available
+space under the open-code cap. Older accounts may have a backlog; spending a code
+can make room to issue another from that backlog. Future-dated profiles receive no
+credits. Operator gifts neither use earned credits nor count against the open-code
+cap. Changing the interval changes the calculated entitlement; existing codes are
+retained. No allocation scheduler or epoch-reset mechanism is configured.
+
+Allocation runs in the authenticated listing transaction under the invite mutation
+lock. Repeated or concurrent requests cannot multiply an entitlement, and a failed
+listing rolls back new codes. `createdBy` identifies earned codes by the account
+DID. Email confirmation uses the existing Cloudflare Worker flow; allocation itself
+sends no email and does not enable any production policy automatically.
+
+New reservations using account-owned codes are rejected if the owner is taken down,
+suspended, or deleted. Deactivated owners' existing codes remain usable. This check
+is repeated at redemption, while already-committed signup reservations retain their
+original authorization. Disabling current codes does not disable future earning;
+per-account allocation controls remain pending.

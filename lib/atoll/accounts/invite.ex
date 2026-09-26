@@ -7,6 +7,7 @@ defmodule Atoll.Accounts.Invite do
     field :remaining, :integer
     field :disabled, :boolean, default: false
     field :for_account, :string
+    field :created_by, :string, default: "admin"
     timestamps(type: :utc_datetime_usec)
   end
 end

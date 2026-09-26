@@ -133,8 +133,11 @@ defmodule Atoll.Accounts.Invites do
   def validate_new(code) do
     if valid_code?(code) do
       case Repo.get(Invite, code, log: false) do
-        %{disabled: false, remaining: remaining} when remaining > 0 -> :ok
-        _ -> {:error, :invalid_invite_code}
+        %{disabled: false, remaining: remaining} = invite when remaining > 0 ->
+          if owner_available?(invite), do: :ok, else: {:error, :invalid_invite_code}
+
+        _ ->
+          {:error, :invalid_invite_code}
       end
     else
       {:error, :invalid_invite_code}
@@ -179,12 +182,18 @@ defmodule Atoll.Accounts.Invites do
     unless valid_code?(code), do: Repo.rollback(:invalid_invite_code)
     invite = Repo.one(from(i in Invite, where: i.code == ^code, lock: "FOR UPDATE"), log: false)
 
-    unless invite && not invite.disabled && invite.remaining > 0,
+    unless invite && not invite.disabled && invite.remaining > 0 && owner_available?(invite),
       do: Repo.rollback(:invalid_invite_code)
 
     invite |> Ecto.Changeset.change(remaining: invite.remaining - 1) |> Repo.update!(log: false)
     Repo.insert!(%InviteUse{did: did, code: code}, log: false)
     :ok
+  end
+
+  defp owner_available?(%{for_account: nil}), do: true
+
+  defp owner_available?(%{for_account: did}) do
+    Repo.exists?(from h in Head, where: h.did == ^did and h.status in [:active, :deactivated])
   end
 
   defp valid_code?(code),
