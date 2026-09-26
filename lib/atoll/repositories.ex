@@ -127,6 +127,21 @@ defmodule Atoll.Repositories do
     end
   end
 
+  @doc "Lists collections that currently contain at least one record."
+  def collections(did) do
+    with {:ok, _} <- get_head(did) do
+      names =
+        Repo.all(
+          from r in Record,
+            where: r.did == ^did,
+            select: fragment("split_part(?, '/', 1)", r.path),
+            distinct: true
+        )
+
+      {:ok, Enum.sort(names)}
+    end
+  end
+
   @doc "Lists hosted repository heads in bytewise DID order. Cursor is the last returned DID."
   def list_heads(limit, cursor \\ nil) when limit in 1..1000 do
     query =

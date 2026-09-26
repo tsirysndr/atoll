@@ -11,6 +11,9 @@ defmodule AtollWeb.XRPCFallback do
   def call(conn, {:error, :unverified_handle}),
     do: error(conn, 400, "InvalidRequest", "Unable to verify repository handle.")
 
+  def call(conn, {:error, :identity_unavailable}),
+    do: error(conn, 400, "InvalidRequest", "Unable to resolve repository identity.")
+
   def call(conn, {:error, :block_not_found}),
     do: error(conn, 400, "BlockNotFound", "Block not found in the current repository.")
 

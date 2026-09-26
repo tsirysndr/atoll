@@ -3,6 +3,14 @@ defmodule AtollWeb.RepoController do
   alias Atoll.{CID, Repositories, Syntax}
   action_fallback AtollWeb.XRPCFallback
 
+  def describe(conn, params) do
+    opts = Application.get_env(:atoll, :identity_resolution_options, [])
+
+    with {:ok, description} <- Atoll.Repositories.Description.get(params["repo"], opts) do
+      json(conn, description)
+    end
+  end
+
   def get_record(conn, params) do
     with :ok <- location(params),
          true <- Syntax.record_key?(params["rkey"]),
