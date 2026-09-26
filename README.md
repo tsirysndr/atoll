@@ -358,7 +358,8 @@ mutation. Deletes and empty batches need no record schema, even with `validate: 
 - [x] Opt-in supervised scheduling of bounded unsubmitted-signup cleanup with telemetry.
 - [x] Operator resume of exact pending signup registrations without password input or session issuance.
 - [x] Opt-in automatic signup retries with database leases, durable delay and activation fencing.
-- [ ] Self-service custom-domain DID reservation, phone verification, and divergent-identity signup reconciliation.
+- [x] Operator signup activation from verified directory advancement that preserves local identity and authority.
+- [ ] Self-service custom-domain DID reservation, phone verification, and signup recovery requiring changed local identity or keys.
 - [x] Internal DID-scoped password credentials with salted Argon2id hashes, bounded input, redacted inspection, and duplicate protection.
 - [x] Shared configurable Cloudflare Worker email delivery client.
 - [x] `requestPlcOperationSignature` email authorization with atomic single-use challenge consumption.
@@ -3901,7 +3902,7 @@ stays deactivated with no session until a valid retry. Normalized profile detail
 password proof, invite and recovery key must still match; publication/session
 failures retain the exact journal for retry. No configuration is enabled on the
 running deployment by adding this feature. Self-service custom-domain reservation,
-phone verification, and divergent-identity signup reconciliation remain unfinished. Bounded
+phone verification, and signup recovery requiring changed local identity remain unfinished. Bounded
 operator and scheduled cleanup of unsubmitted reservations are described below.
 
 
@@ -3986,8 +3987,8 @@ success `selected` and `deleted` counts. Metadata contains `result` (`ok`, `fail
 or `timeout`) and `more`. DIDs, handles, credentials and cutoff strings are excluded.
 Automatic startup is suppressed in tests; worker tests use supervised isolated
 instances, explicit timer delivery and mocked failures. Exact pending signup
-resume and automatic retries are described below; divergent directory identities
-remain separate unfinished work.
+resume and automatic retries are described below. Compatible directory advancement
+can be reconciled explicitly; changed local identity still requires recovery work.
 
 
 ### Operator resume of a pending signup
@@ -4022,8 +4023,9 @@ The owner logs in through the normal session endpoint afterward. Completed retri
 only report current local status, without a network request, repeated audit, or
 reactivating an account subsequently deactivated or suspended. That read-only
 result does not assert fresh directory compatibility. Automatic scheduling is
-described below. Reconciliation when the directory has advanced away from the
-stored genesis remains unfinished.
+described below. A compatible successor of the stored genesis can be reconciled
+with the explicit command below; changing local identity or keys remains separate
+recovery work.
 
 
 ### Automatic signup retries
@@ -4071,3 +4073,38 @@ failures. Completion audit uses actor `system`. Response loss can outlive a comm
 activation; telemetry is not an exactly-once ledger. Automatic startup is disabled
 in tests. Directory divergence remains an operator reconciliation case rather
 than an automatic identity rewrite.
+
+
+### Signup reconciliation after compatible directory advancement
+
+If the directory advanced beyond a reservation's genesis before local signup
+completed, an operator can activate it from verified current history:
+
+```sh
+mix atoll.accounts.reconcile_signup did:plc:ACCOUNT EXPECTED_GENESIS_CID EXPECTED_DIRECTORY_HEAD_CID
+```
+
+This command performs only directory GETs. It independently verifies the bounded
+audit chain and fresh latest head, requires both expected CIDs, rejects tombstones,
+and compares the signed genesis with the exact local reservation. The current
+primary handle, repository verification key and PDS service must match the local
+account, and the retained readable PLC authority must still be authorized. Extra
+aliases or services do not prevent reconciliation when the primary identity still
+matches. Custom-handle ownership is freshly verified. Incompatible handles,
+services, signing keys or missing authority require separate identity recovery;
+this command cannot rewrite them or synthesize replacement private keys.
+
+Credential/profile changes during reads invalidate the captured reservation proof.
+Pending PLC journals and handle reservations block activation until their own
+workflows are reconciled. Under account locks, confirmation, completion, activation
+and an operator audit containing genesis/current-head CIDs commit together. The
+first confirmation timestamp is preserved if already present. No genesis is
+resubmitted, no replacement DID is created, and no session or email is issued.
+Automatic signup retries continue to use exact-genesis resume and do not invoke
+this broader reconciliation automatically.
+
+Completed retries still verify the expected directory head but only return local
+status: they do not repeat activation/auditing, reactivate a subsequently disabled
+account, or assert that its current local keys still match that head. As with other
+identity workflows, a directory change after the final read cannot be made atomic
+with the local database transaction; the audit records the head actually observed.

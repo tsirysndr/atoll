@@ -70,6 +70,122 @@ defmodule AtollWeb.SignupControllerTest do
     :ok
   end
 
+  test "operator reconciles compatible directory advancement without a POST or session" do
+    reservation = cleanup_reservation("reconcile", 0)
+    row = Repo.get!(Registration, reservation.did)
+    {operation, head} = signup_successor(row)
+
+    Application.put_env(:atoll, :identity_resolution_options,
+      txt_lookup: fn _ -> [["did=" <> row.did]] end
+    )
+
+    expect_signup_audit(row, operation)
+
+    output =
+      ExUnit.CaptureIO.capture_io(fn ->
+        Mix.Tasks.Atoll.Accounts.ReconcileSignup.run([row.did, row.cid, head])
+      end)
+
+    assert Jason.decode!(output)["result"] == "completed"
+    complete = Repo.get!(Registration, row.did)
+    assert complete.confirmed_at && complete.completed_at
+    assert complete.operation == row.operation
+    refute complete.submission_started_at
+    assert Repo.aggregate(Session, :count) == 0
+
+    audit =
+      Enum.find(
+        Repo.all(Atoll.Moderation.AuditEntry),
+        &(&1.operation == "atoll.accounts.reconcileSignup")
+      )
+
+    assert audit.requested["observedHead"] == head
+    assert {:ok, _} = Atoll.Repositories.set_status(row.did, :deactivated)
+    expect_signup_audit(row, operation)
+
+    assert {:ok, %{result: :already_completed, active: false}} =
+             Signup.reconcile_registration(row.did, row.cid, head, plug: {Req.Test, __MODULE__})
+
+    assert Repo.get!(Registration, row.did).completed_at == complete.completed_at
+    assert Repo.aggregate(Atoll.Moderation.AuditEntry, :count) == 2
+  end
+
+  test "signup reconciliation refuses incompatible keys, handles, services, and authority" do
+    reservation = cleanup_reservation("incompatible", 0)
+    row = Repo.get!(Registration, reservation.did)
+    new_key = SigningKey.generate()
+    {:ok, public} = Multikey.to_did_key(new_key.curve, new_key.public)
+    opts = [plug: {Req.Test, __MODULE__}, txt_lookup: fn _ -> [["did=" <> row.did]] end]
+
+    mutations = [
+      fn op -> put_in(op, ["verificationMethods", "atproto"], public) end,
+      fn op -> Map.put(op, "alsoKnownAs", ["at://different.example.com"]) end,
+      fn op ->
+        put_in(op, ["services", "atproto_pds", "endpoint"], "https://other.example.com")
+      end,
+      fn op -> Map.put(op, "rotationKeys", [public]) end
+    ]
+
+    for mutate <- mutations do
+      {operation, head} = signup_successor(row, mutate)
+      expect_signup_audit(row, operation)
+
+      assert {:error, :incompatible_signup_identity} =
+               Signup.reconcile_registration(row.did, row.cid, head, opts)
+
+      refute Repo.get!(Registration, row.did).confirmed_at
+      refute Repo.get!(Registration, row.did).completed_at
+    end
+
+    {operation, _} = signup_successor(row)
+    expect_signup_audit(row, operation)
+
+    assert {:error, :plc_conflict} =
+             Signup.reconcile_registration(row.did, row.cid, row.cid, opts)
+
+    assert Repo.get!(Head, row.did).status == :deactivated
+    assert Repo.aggregate(Session, :count) == 0
+  end
+
+  test "signup reconciliation fences profile changes and refuses pending identity work" do
+    reservation = cleanup_reservation("fenced", 0)
+    row = Repo.get!(Registration, reservation.did)
+    {operation, head} = signup_successor(row)
+
+    opts = [
+      plug: {Req.Test, __MODULE__},
+      txt_lookup: fn _ ->
+        Repo.get!(Profile, row.did)
+        |> Ecto.Changeset.change(email: "changed@example.com")
+        |> Repo.update!()
+
+        [["did=" <> row.did]]
+      end
+    ]
+
+    expect_signup_audit(row, operation)
+
+    assert {:error, :handle_not_available} =
+             Signup.reconcile_registration(row.did, row.cid, head, opts)
+
+    refute Repo.get!(Registration, row.did).confirmed_at
+
+    Repo.insert!(%Atoll.Identity.PLC.Update{
+      did: row.did,
+      cid: head,
+      previous: row.operation,
+      operation: operation
+    })
+
+    opts = Keyword.put(opts, :txt_lookup, fn _ -> [["did=" <> row.did]] end)
+    expect_signup_audit(row, operation)
+
+    assert {:error, :plc_update_pending} =
+             Signup.reconcile_registration(row.did, row.cid, head, opts)
+
+    refute Repo.get!(Registration, row.did).completed_at
+  end
+
   test "durable signup retry claims skip unsubmitted reservations and fairly defer failures" do
     alias Atoll.Accounts.SignupRetries
     unsubmitted = cleanup_reservation("never-submitted", 0)
@@ -648,6 +764,52 @@ defmodule AtollWeb.SignupControllerTest do
              get(%{build_conn() | host: @params["handle"]}, "/.well-known/atproto-did"),
              200
            ) == result["did"]
+  end
+
+  defp signup_successor(row, mutate \\ fn op -> op end) do
+    {:ok, key} = Registrations.rotation_key(row.did)
+    {:ok, unsigned} = Operation.successor(row.operation)
+
+    unsigned =
+      put_in(unsigned, ["services", "extra"], %{
+        "type" => "ExampleService",
+        "endpoint" => "https://app.example.com"
+      })
+
+    {:ok, operation} = Operation.sign(mutate.(unsigned), key)
+    {:ok, cid} = Operation.cid(operation)
+    {operation, cid}
+  end
+
+  defp expect_signup_audit(row, operation) do
+    {:ok, cid} = Operation.cid(operation)
+    now = DateTime.utc_now()
+
+    entries =
+      for {op, op_cid, time} <- [
+            {row.operation, row.cid, DateTime.add(now, -30, :second)},
+            {operation, cid, now}
+          ] do
+        %{
+          "did" => row.did,
+          "cid" => op_cid,
+          "operation" => op,
+          "nullified" => false,
+          "createdAt" => DateTime.to_iso8601(time)
+        }
+      end
+
+    Req.Test.expect(__MODULE__, fn conn ->
+      assert conn.method == "GET"
+      assert String.ends_with?(conn.request_path, "/log/audit")
+      Req.Test.json(conn, entries)
+    end)
+
+    Req.Test.expect(__MODULE__, fn conn ->
+      assert conn.method == "GET"
+      assert String.ends_with?(conn.request_path, "/log/last")
+      Req.Test.json(conn, operation)
+    end)
   end
 
   defp attempted_reservation(label) do

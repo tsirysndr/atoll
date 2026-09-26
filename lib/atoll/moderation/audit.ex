@@ -59,6 +59,19 @@ defmodule Atoll.Moderation.Audit do
     )
   end
 
+  @doc "Records signup activation against a verified directory head without resubmitting genesis."
+  def signup_reconciliation!(did, genesis, head) do
+    insert!(
+      "atoll.accounts.reconcileSignup",
+      did,
+      %{kind: "signup", did: did},
+      %{genesisCid: genesis, observedHead: head},
+      %{completed: false},
+      %{completed: true, active: true},
+      "operator"
+    )
+  end
+
   @doc "Records trusted completion of a pending signup without issuing a session."
   def signup_resume!(did, cid, actor) do
     insert!(

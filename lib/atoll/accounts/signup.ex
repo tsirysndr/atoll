@@ -44,6 +44,31 @@ defmodule Atoll.Accounts.Signup do
     end
   end
 
+  @doc "Operator activation from a freshly verified, locally compatible directory successor. No POST."
+  def reconcile_registration(did, expected_genesis, expected_head, opts \\ []) do
+    with false <- Repo.in_transaction?(),
+         {:ok, snapshot} <- resume_snapshot(did, expected_genesis, nil),
+         {:ok, %{entries: entries, state: state}} <-
+           Atoll.Identity.PLC.Client.fetch_audit(did, Keyword.take(opts, [:plug])),
+         true <- not state.tombstoned and state.cid == expected_head,
+         true <- hd(entries)["cid"] == expected_genesis do
+      case snapshot do
+        {:completed, result} ->
+          {:ok, result}
+
+        {:pending, input, proof} ->
+          with :ok <- verify_custom_handle(input.handle, did, opts) do
+            proof = Map.merge(proof, %{reconciled: state, genesis: hd(entries)["operation"]})
+            finish(input, proof, false)
+          end
+      end
+    else
+      true -> {:error, :registration_inside_transaction}
+      false -> {:error, :plc_conflict}
+      error -> error
+    end
+  end
+
   defp resume_snapshot(did, expected_cid, retry_token) do
     Repo.transaction(fn ->
       Events.lock!()
@@ -302,6 +327,17 @@ defmodule Atoll.Accounts.Signup do
       unless registration.cid == Map.get(proof, :cid, registration.cid),
         do: Repo.rollback(:stale_signup)
 
+      registration =
+        if Map.has_key?(proof, :reconciled) do
+          check_reconciled!(registration, input, proof)
+
+          registration
+          |> Ecto.Changeset.change(confirmed_at: registration.confirmed_at || DateTime.utc_now())
+          |> Repo.update!(log: false)
+        else
+          registration
+        end
+
       unless registration.confirmed_at, do: Repo.rollback(:plc_unavailable)
       unwrap!(KeyVault.fetch(proof.did))
       unwrap!(Registrations.rotation_key(proof.did))
@@ -317,15 +353,48 @@ defmodule Atoll.Accounts.Signup do
         pair = unwrap!(Sessions.create_for_account(proof.did))
         Map.merge(result, %{accessJwt: pair.access_jwt, refreshJwt: pair.refresh_jwt})
       else
-        Atoll.Moderation.Audit.signup_resume!(
-          proof.did,
-          registration.cid,
-          if(Map.get(proof, :retry_token), do: "system", else: "operator")
-        )
+        if Map.has_key?(proof, :reconciled) do
+          Atoll.Moderation.Audit.signup_reconciliation!(
+            proof.did,
+            registration.cid,
+            proof.reconciled.cid
+          )
+        else
+          Atoll.Moderation.Audit.signup_resume!(
+            proof.did,
+            registration.cid,
+            if(Map.get(proof, :retry_token), do: "system", else: "operator")
+          )
+        end
 
         Map.put(result, :result, :completed)
       end
     end)
+  end
+
+  defp check_reconciled!(registration, input, proof) do
+    operation = proof.reconciled.operation
+    key = unwrap!(KeyVault.fetch(proof.did))
+    authority = unwrap!(Registrations.rotation_key(proof.did))
+    {:ok, signing} = Multikey.to_did_key(key.curve, key.public)
+    {:ok, rotation} = Multikey.to_did_key(authority.curve, authority.public)
+
+    unless registration.operation == proof.genesis and
+             List.first(operation["alsoKnownAs"]) == "at://" <> input.handle and
+             get_in(operation, ["verificationMethods", "atproto"]) == signing and
+             get_in(operation, ["services", "atproto_pds"]) == %{
+               "type" => "AtprotoPersonalDataServer",
+               "endpoint" => AtollWeb.Endpoint.url()
+             } and
+             rotation in Operation.rotation_keys(operation),
+           do: Repo.rollback(:incompatible_signup_identity)
+
+    if Repo.exists?(
+         from u in Atoll.Identity.PLC.Update,
+           where: u.did == ^proof.did and is_nil(u.completed_at) and is_nil(u.nullified_at)
+       ) or
+         Repo.get_by(Atoll.Identity.HandleReservation, did: proof.did),
+       do: Repo.rollback(:plc_update_pending)
   end
 
   defp validate_retry!(input, did, digest) do
