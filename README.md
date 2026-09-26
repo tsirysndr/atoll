@@ -388,7 +388,8 @@ mutation. Deletes and empty batches need no record schema, even with `validate: 
 - [x] Internal issuer/role-bound OAuth nonce issuance and PostgreSQL-shared atomic DPoP replay rejection.
 - [x] Internal bounded client-metadata retrieval and validation of client IDs, redirects, scopes, and authentication declarations.
 - [x] Fresh inline/remote confidential-client JWKS retrieval and ES256 public-key validation.
-- [ ] OAuth JWT client assertions, session key binding, and localhost virtual client metadata.
+- [x] Internal ES256 JWT client assertions, supplied session-key binding checks, and PostgreSQL-shared assertion replay rejection.
+- [ ] OAuth session binding persistence/revocation and localhost virtual client metadata.
 - [ ] OAuth nonce challenges and proof admission integrated into authorization/resource server routes.
 - [ ] ATProto OAuth authorization and resource server support.
 - [x] Live-session and repository ownership checks for blob uploads and single/batch record writes.
@@ -4458,7 +4459,8 @@ for confidential `private_key_jwt` clients using ES256. A confidential declarati
 must identify exactly one inline or remote JWKS source; inline sets are limited
 to 32 key objects. These declarations are **not verified client authentication**:
 the `ClientKeys` loader below adds key validation and remote JWKS retrieval, while
-JWT assertions and session key binding remain unfinished. Metadata branding is untrusted and must not be displayed as
+the assertion guard below adds signature, replay, and supplied key-binding checks.
+Persisted session binding and OAuth routes remain unfinished. Metadata branding is untrusted and must not be displayed as
 verified application identity. The optional localhost virtual-client flow and
 PAR/authorization/token route integration also remain pending.
 
@@ -4487,6 +4489,51 @@ The result contains validated metadata and a map indexed by `kid`, with each
 entry's public JOSE key, algorithm, and JWK thumbprint. Removal or replacement of
 a key is visible on the next fetch, including replacement under an unchanged
 `kid`. These are advertised verification keys, not proof of client authentication.
-JWT assertion validation/replay rejection and enforcing the original session's
-`kid`/`alg`/`jkt` binding still need implementation before OAuth routes can use
-confidential-client authentication.
+The assertion guard below verifies signatures, rejects replay, and can check an
+original `kid`/`alg`/`jkt` binding. Persisting that binding and revoking affected
+OAuth sessions when keys disappear still need integration into the session lifecycle.
+
+### Confidential-client JWT assertions
+
+`Atoll.OAuth.ClientAssertions.authenticate/5` accepts a client ID, assertion type,
+compact JWT, trusted authorization-server issuer, and options. The type must be
+`urn:ietf:params:oauth:client-assertion-type:jwt-bearer`. It freshly fetches client
+metadata and verification keys before starting its replay-admission transaction.
+The internal `verify/4` primitive performs only stateless checks against a
+`ClientKeys.fetch/2` result and must not be used alone to admit requests.
+
+Assertions are limited to 8 KiB, use ES256, and select an advertised key by `kid`.
+Both `iss` and `sub` must exactly match the client ID; `aud` must be the issuer
+string or a one-element array containing it. Assertions require integer `iat`
+and `exp`, with a maximum five-minute lifetime, at most thirty seconds of future
+issue-time skew, and no tolerance past expiry. An optional integer `nbf` must
+already have passed. `jti` and `kid` are 1–256 printable ASCII bytes. Duplicate
+JSON members, noncanonical base64url, invalid signatures, alternate algorithms,
+embedded/remote header keys, and unsupported critical extensions are rejected.
+Optional `typ` must be `JWT` or `jwt`.
+
+For an existing session, pass `binding: %{kid: ..., alg: ..., jkt: ...}` from its
+stored original client authentication. All three values must match the selected
+freshly advertised key. Missing keys, replacement under the same ID, and changing
+the selected ID cannot satisfy that binding. Omitting the option is for initial
+authentication only; an explicitly supplied nil/incomplete binding fails. This
+does not itself create, look up, or revoke a session.
+
+Admission uses PostgreSQL time and a dedicated shared transaction lock. It stores
+only a SHA-256 digest of issuer/client ID/assertion ID and the assertion's expiry.
+Different signatures or signing keys cannot reuse a retained assertion ID.
+Markers remain until expiry, with at most 1,000 expired markers reclaimed per
+successful admission and a global cap of 100,000 assertion markers. Capacity and
+database failures reject admission; SQL lock/statement timeouts are one/five
+seconds. There is no memory or Redis fallback. The shared lock/table count limit
+throughput, and idle expired markers remain until subsequent admissions reclaim
+them. This store is separate from DPoP proof admission.
+
+Run authentication before the request mutation transaction so a later request
+rollback cannot restore a used assertion; nested calls fail. Concurrent submissions
+through independent connections admit once. Tests also cover malformed JWTs,
+key substitution, retained binding checks, expiry, capacity, and rollback behavior.
+The result authenticates client software only: account authorization, DPoP,
+PAR/PKCE, consent, OAuth sessions and token routes remain separate requirements.
+The assertion profile follows [RFC 7523](https://www.rfc-editor.org/rfc/rfc7523.html)
+and the [ATProto confidential-client requirements](https://atproto.com/specs/oauth#confidential-client-authentication).
