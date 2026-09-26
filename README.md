@@ -144,9 +144,9 @@ The same `validate: true` restriction applies to batch requests.
 - [x] P-256 and secp256k1 multikey / `did:key` encoding and decoding with curve-point validation.
 - [x] Modern DID-document parsing for expected identity, signing key, HTTPS PDS endpoint, and unverified handle claim.
 - [x] Internal HTTPS resolution for `did:plc` and hostname-level `did:web`, with expected-document identity checks.
-- [x] Resolver public-IPv4 address pinning, TLS hostname verification, timeouts, redirect rejection, and 256 KiB response limit.
+- [x] Resolver public IPv4/IPv6 address pinning, TLS hostname verification, timeouts, redirect rejection, and 256 KiB response limit.
 - [x] Bounded node-local positive DID resolution caching with forced refresh for authorization and identity changes.
-- [ ] IPv6 and localhost development resolution support, and independent PLC operation-log verification (currently trusts `plc.directory` over HTTPS).
+- [ ] Localhost development resolution support and independent PLC operation-log verification (currently trusts `plc.directory` over HTTPS).
 - [x] DNS TXT handle resolution with HTTPS fallback, normalization, ambiguity checks, and reserved-domain rejection.
 - [x] Internal bidirectional handle verification against the resolved DID document.
 - [x] Public `com.atproto.identity.resolveHandle` forward lookup (does not assert bidirectional verification).
@@ -1098,3 +1098,23 @@ still parses the document's signing key, PDS endpoint and handle; handle forward
 lookups remain uncached. Multi-node cache invalidation and PLC log verification
 remain pending. Existing SSRF checks, pinned addresses and response limits apply
 on every network lookup.
+
+
+### IPv6 identity resolution
+
+DID and HTTPS handle resolution accept public IPv6 destinations as well as IPv4.
+DNS selection prefers the first permitted A answer, then checks AAAA if there is no
+permitted IPv4 result. Both lookups share a three-second DNS budget. The selected
+address is pinned into the HTTPS URL; IPv6 uses a bracketed literal and an IPv6
+socket. HTTP Host and TLS verification/SNI retain the original domain. Redirects
+remain disabled. This does not add connection racing or retry another address
+when the selected address cannot connect.
+
+The IPv6 policy permits `2000::/3` global unicast, excluding `2001::/23` IETF
+assignments, `2001:db8::/32` and `3fff::/20` documentation ranges, and `2002::/16`
+6to4. It also excludes all mapped/translated IPv4, loopback, unspecified, private,
+link-local, multicast and other space outside that global-unicast range. This is
+conservative: it excludes some globally reachable special-purpose assignments.
+The policy follows the ranges in the [IANA IPv6 special-purpose registry](https://www.iana.org/assignments/iana-ipv6-special-registry/).
+Tests cover address boundaries, DNS fallback, pinned URLs and transport options;
+they do not depend on the test machine having public IPv6 connectivity.

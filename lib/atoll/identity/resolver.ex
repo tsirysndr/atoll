@@ -2,9 +2,9 @@ defmodule Atoll.Identity.Resolver do
   @moduledoc """
   HTTPS DID resolution through plc.directory or hostname-level did:web.
 
-  Uses public IPv4 destinations only, pins the checked address, rejects redirects,
+  Uses public IPv4/IPv6 destinations, pins the checked address, rejects redirects,
   and limits response bytes. PLC resolution trusts the directory's HTTPS response;
-  operation-log validation, IPv6, and development localhost are pending. Routine
+  operation-log validation and development localhost are pending. Routine
   lookups use a bounded positive cache; force_refresh bypasses and replaces it.
   Options provide trusted transport/DNS injection for tests, never request input.
   """
@@ -91,7 +91,7 @@ defmodule Atoll.Identity.Resolver do
     lookup = Keyword.get(opts, :lookup, &lookup/1)
 
     with {:ok, address} <- lookup.(uri.host),
-         true <- public_ipv4?(address) do
+         true <- public_address?(address) do
       pinned = %{uri | host: address |> :inet.ntoa() |> to_string()} |> URI.to_string()
       request = Keyword.get_lazy(opts, :request, &Req.new/0)
 
@@ -107,7 +107,11 @@ defmodule Atoll.Identity.Resolver do
             {"accept", "application/did+ld+json, application/json"},
             {"accept-encoding", "identity"}
           ],
-          connect_options: [hostname: uri.host, timeout: 3000],
+          connect_options: [
+            hostname: uri.host,
+            timeout: 3000,
+            transport_opts: [inet6: tuple_size(address) == 8, inet4: tuple_size(address) == 4]
+          ],
           receive_timeout: 5000,
           request_timeout: 5000,
           into: fn event, pair -> collect(event, pair, max_bytes) end
@@ -141,12 +145,48 @@ defmodule Atoll.Identity.Resolver do
       else: {:cont, {req, %{resp | body: resp.body <> chunk}}}
   end
 
-  defp lookup(host) do
-    case :inet.getaddrs(String.to_charlist(host), :inet, 3000) do
-      {:ok, [address | _]} -> {:ok, address}
-      _ -> {:error, :dns_failed}
-    end
+  @doc false
+  def lookup(host, query \\ &:inet.getaddrs/3) do
+    deadline = System.monotonic_time(:millisecond) + 3000
+
+    Enum.reduce_while([:inet, :inet6], {:error, :dns_failed}, fn family, _ ->
+      remaining = deadline - System.monotonic_time(:millisecond)
+
+      result =
+        if remaining > 0,
+          do: query.(String.to_charlist(host), family, remaining),
+          else: {:error, :timeout}
+
+      address =
+        case result do
+          {:ok, addresses} when is_list(addresses) ->
+            Enum.find(addresses, fn address ->
+              if family == :inet, do: public_ipv4?(address), else: public_ipv6?(address)
+            end)
+
+          _ ->
+            nil
+        end
+
+      if address, do: {:halt, {:ok, address}}, else: {:cont, {:error, :dns_failed}}
+    end)
   end
+
+  @doc false
+  def public_address?(address), do: public_ipv4?(address) or public_ipv6?(address)
+
+  @doc false
+  def public_ipv6?({a, b, c, d, e, f, g, h})
+      when a in 0x2000..0x3FFF and b in 0..0xFFFF and c in 0..0xFFFF and
+             d in 0..0xFFFF and e in 0..0xFFFF and f in 0..0xFFFF and
+             g in 0..0xFFFF and h in 0..0xFFFF do
+    # Conservative subset of global unicast: exclude IETF assignments, documentation,
+    # and 6to4. All mapped/translated, local and multicast ranges lie outside 2000::/3.
+    not ((a == 0x2001 and b < 0x0200) or (a == 0x2001 and b == 0x0DB8) or
+           a == 0x2002 or (a == 0x3FFF and b < 0x1000))
+  end
+
+  def public_ipv6?(_), do: false
 
   @doc false
   def public_ipv4?({a, b, c, d})
