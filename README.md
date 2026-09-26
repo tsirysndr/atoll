@@ -300,7 +300,8 @@ mutation. Deletes and empty batches need no record schema, even with `validate: 
 - [x] Bounded positive handle caching with forced refresh for authorization and identity updates.
 - [x] Internal full-session handle-change staging, durable reservations, and verified atomic completion.
 - [x] `com.atproto.identity.updateHandle` for hosted/custom handles on modern PLC accounts with a retained authorized rotation key.
-- [ ] Handle changes for legacy PLC/did:web identities and external-signing/recovery workflows.
+- [x] did:web handle reconciliation after an owner updates their hosted DID document.
+- [ ] Handle changes for legacy PLC identities and external-signing/recovery workflows.
 - [x] Authenticated account activation and deactivation with atomic status events.
 - [x] Service-authenticated `createAccount` for migration of an existing DID.
 - [x] Authenticated recommended DID credentials for the destination signing key and service.
@@ -2671,7 +2672,8 @@ account's full access session, validates a signed handle-only update against ver
 audit evidence and the locally hosted signing key/service, and reserves the target
 name in the same transaction as the journal entry. Other identity fields must remain
 unchanged. The new operation uses a single `at://` alias. This currently accepts
-modern PLC predecessors; legacy PLC and did:web handle mutation remain pending.
+modern PLC predecessors; legacy PLC mutation remains pending. did:web accounts use
+the separate document-reconciliation path below.
 
 Hosted names use the configured server domains. Custom names must freshly resolve
 to the owner's DID. Authorization is checked again under the account lock after
@@ -2718,7 +2720,30 @@ handle checks fresh directory state and is a no-op, with no extra directory POST
 identity event. A directory conflict leaves local state pending for reconciliation.
 
 This supports modern PLC accounts whose rotation key is retained by Atoll. Legacy
-PLC predecessors, did:web changes, and accounts needing external signing or recovery
-remain unsupported. Current configured directory/key availability is required;
+PLC predecessors and accounts needing external signing or recovery remain unsupported
+by the PLC signing path. did:web owners use the reconciliation path below. Current configured directory/key availability is required;
 local confirmation history never substitutes for fresh completion checks. No live
 PLC writes are exercised by the test suite.
+
+
+### did:web handle reconciliation
+
+For a hosted did:web account, `updateHandle` reconciles a DID document the owner has
+already updated. Publish the new `at://` handle in the document's first recognized
+handle alias, retaining the account's current repository signing key and this PDS's
+service URL, then call the same authenticated procedure. The existing resolver
+supports hostname-level did:web identities, not path-based identifiers.
+
+Atoll forces a fresh DID-document lookup through its existing bounded, address-pinned
+HTTPS resolver. Custom handles must freshly resolve forward to that DID; hosted
+names must be available under the configured domains. It checks the signing key,
+PDS URL, active status, and full session again under the repository lock before
+changing the profile and identity observation and emitting one identity event.
+Current names and pending PLC handle reservations are both protected against takeover.
+A concurrent local handle/observation change invalidates stale completion. Repeating
+the current verified handle is a no-op.
+
+This path does not write the externally hosted DID document and sends no PLC requests.
+A mismatched document or failed lookup leaves the local account unchanged. As with
+other identity resolution, the document can change after the lookup; later identity
+refresh detects subsequent remote changes. App passwords cannot authorize this action.

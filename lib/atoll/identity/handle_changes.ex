@@ -17,7 +17,7 @@ defmodule Atoll.Identity.HandleChanges do
          %Profile{} <- Repo.get(Profile, head.did),
          {:ok, result} <- prepare_update(token, head, handle, opts) do
       case result do
-        :unchanged ->
+        status when status in [:unchanged, :completed] ->
           {:ok, %{did: head.did, handle: handle}}
 
         %{cid: cid} ->
@@ -34,6 +34,9 @@ defmodule Atoll.Identity.HandleChanges do
   end
 
   def update(_, _, _), do: {:error, :invalid_request}
+
+  defp prepare_update(token, %{did: "did:web:" <> _}, handle, opts),
+    do: Atoll.Identity.WebHandleChanges.update(token, handle, opts)
 
   defp prepare_update(token, head, handle, opts) do
     case Repo.get_by(HandleReservation, did: head.did) do

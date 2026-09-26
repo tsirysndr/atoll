@@ -10,7 +10,21 @@ defmodule AtollWeb.IdentityController do
          {:ok, _} <- Atoll.Identity.HandleChanges.update(token, params, opts) do
       send_resp(conn, 200, "")
     else
-      error -> AtollWeb.XRPCFallback.call(conn, error)
+      {:error, reason}
+      when reason in [
+             :did_not_found,
+             :resolution_failed,
+             :unsafe_destination,
+             :invalid_did_document,
+             :invalid_did,
+             :unsupported_did_method,
+             :did_document_too_large,
+             :stale_identity_refresh
+           ] ->
+        AtollWeb.XRPCFallback.call(conn, {:error, :identity_unavailable})
+
+      error ->
+        AtollWeb.XRPCFallback.call(conn, error)
     end
   end
 
