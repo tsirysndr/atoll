@@ -32,6 +32,7 @@ config :phoenix, :json_library, Jason
 
 config :phoenix, :filter_parameters, [
   "password",
+  "identifier",
   "email",
   "token",
   "accessJwt",

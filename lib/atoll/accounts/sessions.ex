@@ -9,12 +9,28 @@ defmodule Atoll.Accounts.Sessions do
   """
   import Ecto.Query
   alias Atoll.{Repo, Repositories}
-  alias Atoll.Accounts.{Credentials, Session, Tokens}
+  alias Atoll.Accounts.{Credentials, EmailAddress, Profile, Session, Tokens}
   alias Atoll.Repositories.Head
 
   def create(did, password, opts \\ []) do
     with {:ok, digest} <- Credentials.verified_digest(did, password),
          do: create_for_account(did, Keyword.put(opts, :credential_digest, digest))
+  end
+
+  @doc "Creates a password session using a local account email, rechecking ownership under the account lock."
+  def create_email(email, password, opts \\ []) do
+    with {:ok, email} <- EmailAddress.normalize(email) do
+      case Repo.get_by(Profile, [email: email], log: false) do
+        %Profile{did: did} ->
+          create(did, password, Keyword.put(opts, :login_email, email))
+
+        nil ->
+          Argon2.no_user_verify(argon2_type: 2)
+          {:error, :invalid_credentials}
+      end
+    else
+      _ -> {:error, :invalid_credentials}
+    end
   end
 
   @doc "Internal session creation after credentials or provisioning have been authorized by the caller."
@@ -28,6 +44,13 @@ defmodule Atoll.Accounts.Sessions do
         # Password verification happens outside locks; reject a proof made stale by recovery.
         if digest = opts[:credential_digest] do
           unless Credentials.current_digest?(did, digest), do: Repo.rollback(:invalid_credentials)
+        end
+
+        if email = opts[:login_email] do
+          unless Repo.exists?(from(p in Profile, where: p.did == ^did and p.email == ^email),
+                   log: false
+                 ),
+                 do: Repo.rollback(:invalid_credentials)
         end
 
         now = Keyword.get(opts, :now, System.system_time(:second))

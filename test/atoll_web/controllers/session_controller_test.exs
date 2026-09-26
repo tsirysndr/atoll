@@ -31,6 +31,48 @@ defmodule AtollWeb.SessionControllerTest do
     %{conn: %{conn | remote_ip: {10, 10, div(id, 256), rem(id, 256)}}, head: head}
   end
 
+  test "email login normalizes identifiers and follows changes without sending mail", %{
+    conn: conn
+  } do
+    profile =
+      Atoll.Repo.insert!(%Atoll.Accounts.Profile{
+        did: @did,
+        handle: "alice.example.com",
+        email: "alice@example.com"
+      })
+
+    pair = login(conn, %{"identifier" => "ALICE@example.com"}) |> json_response(200)
+    assert pair["did"] == @did
+    assert pair["email"] == "alice@example.com"
+    assert pair["emailConfirmed"] == false
+    assert pair["handle"] == "alice.example.com"
+    assert {:ok, _} = Sessions.authenticate(pair["accessJwt"])
+
+    wrong =
+      login(conn, %{"identifier" => "alice@example.com", "password" => "incorrect password"})
+      |> json_response(401)
+
+    unknown = login(conn, %{"identifier" => "unknown@example.com"}) |> json_response(401)
+    assert wrong == unknown
+
+    profile
+    |> Ecto.Changeset.change(email: "new@example.com", email_confirmed_at: DateTime.utc_now())
+    |> Atoll.Repo.update!()
+
+    assert login(conn, %{"identifier" => "alice@example.com"}) |> response(401)
+    changed = login(conn, %{"identifier" => "NEW@example.com"}) |> json_response(200)
+    assert changed["emailConfirmed"]
+    {:ok, _} = Repositories.set_status(@did, :deactivated)
+
+    assert %{"status" => "deactivated", "active" => false} =
+             login(conn, %{"identifier" => "new@example.com"}) |> json_response(200)
+
+    {:ok, _} = Repositories.set_status(@did, :takendown)
+
+    assert %{"error" => "AccountTakedown"} =
+             login(conn, %{"identifier" => "new@example.com"}) |> json_response(400)
+  end
+
   test "account session cap returns a protocol error and revocation frees a slot", %{conn: conn} do
     prior = Application.fetch_env(:atoll, :session_max_count)
     Application.put_env(:atoll, :session_max_count, 1)
@@ -111,8 +153,8 @@ defmodule AtollWeb.SessionControllerTest do
     assert %{"error" => "AuthRequired"} =
              login(conn, %{"identifier" => "did:plc:missing"}) |> json_response(401)
 
-    assert %{"error" => "InvalidRequest"} =
-             login(conn, %{"identifier" => "alice@example.com"}) |> json_response(400)
+    assert %{"error" => "AuthRequired"} =
+             login(conn, %{"identifier" => "alice@example.com"}) |> json_response(401)
 
     for override <- [
           %{"password" => []},

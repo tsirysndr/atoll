@@ -16,6 +16,25 @@ defmodule Atoll.Accounts.SessionsTest do
     :ok
   end
 
+  test "email ownership is rechecked before a session can be inserted" do
+    profile =
+      Repo.insert!(%Atoll.Accounts.Profile{
+        did: @did,
+        handle: "sessions.example.com",
+        email: "old@example.com"
+      })
+
+    {:ok, digest} = Credentials.verified_digest(@did, @password)
+    profile |> Ecto.Changeset.change(email: "new@example.com") |> Repo.update!()
+    opts = Keyword.merge(@opts, credential_digest: digest, login_email: "old@example.com")
+    assert {:error, :invalid_credentials} = Sessions.create_for_account(@did, opts)
+    refute Repo.exists?(Session)
+    assert {:ok, _} = Sessions.create_email("NEW@example.com", @password, @opts)
+
+    assert {:error, :invalid_credentials} =
+             Sessions.create_email("old@example.com", @password, @opts)
+  end
+
   test "caps live sessions while allowing refresh, expiry and revocation to release capacity" do
     opts = Keyword.put(@opts, :max_sessions, 1)
     {:ok, first} = Sessions.create(@did, @password, opts)

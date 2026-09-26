@@ -45,8 +45,7 @@ defmodule AtollWeb.SessionController do
 
   def create(conn, _params) do
     with {:ok, identifier, password} <- credentials(conn.body_params),
-         {:ok, did, handle} <- login_identity(identifier),
-         {:ok, pair} <- Sessions.create(did, password) do
+         {:ok, pair, handle} <- login_pair(identifier, password) do
       result = session_response(pair)
       json(conn, if(handle, do: Map.put(result, :handle, handle), else: result))
     end
@@ -107,7 +106,8 @@ defmodule AtollWeb.SessionController do
 
   defp credentials(%{"identifier" => identifier, "password" => password} = body)
        when is_binary(identifier) and is_binary(password) do
-    if (Atoll.Syntax.did?(identifier) or Atoll.Syntax.handle?(identifier)) and
+    if (Atoll.Syntax.did?(identifier) or Atoll.Syntax.handle?(identifier) or
+          match?({:ok, _}, Atoll.Accounts.EmailAddress.normalize(identifier))) and
          byte_size(password) in 8..1024 and String.valid?(password) and
          Map.get(body, "allowTakendown", false) == false and
          not Map.has_key?(body, "authFactorToken"),
@@ -116,6 +116,16 @@ defmodule AtollWeb.SessionController do
   end
 
   defp credentials(_), do: {:error, :invalid_request}
+
+  defp login_pair(identifier, password) do
+    if String.contains?(identifier, "@") do
+      with {:ok, pair} <- Sessions.create_email(identifier, password), do: {:ok, pair, nil}
+    else
+      with {:ok, did, handle} <- login_identity(identifier),
+           {:ok, pair} <- Sessions.create(did, password),
+           do: {:ok, pair, handle}
+    end
+  end
 
   defp login_identity(identifier) do
     if Atoll.Syntax.did?(identifier) do

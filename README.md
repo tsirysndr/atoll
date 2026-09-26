@@ -163,7 +163,8 @@ The same `validate: true` restriction applies to batch requests.
 - [x] Public DID/password session creation, refresh, inspection, and revocation endpoints, with bounded requests and per-node rate limits.
 - [x] Bidirectionally verified handle/password login with normalized handles and DID-bound sessions.
 - [x] Deactivated-account login, refresh, session inspection, repository import, blob upload, missing-blob inventory, and migration-scoped service tokens.
-- [ ] Email login, authentication factors, and taken-down account session scopes.
+- [x] Email/password login with normalized addresses and locked ownership rechecks.
+- [ ] Authentication factors and taken-down account session scopes.
 - [ ] App passwords.
 - [ ] ATProto OAuth authorization and resource server support.
 - [x] Live-session and repository ownership checks for blob uploads and single/batch record writes.
@@ -184,7 +185,7 @@ with random salts and the library's default work factors (64 MiB memory, three
 iterations, four lanes). Only test configuration reduces the work factors.
 Building this dependency requires a C compiler and `make`. Hashes are redacted
 from schema inspection, and credential insertion disables query logging.
-Email login and additional authentication factors remain pending. Password recovery
+Additional authentication factors remain pending. Password recovery
 uses the email reset endpoints described below.
 
 ### Sessions
@@ -792,3 +793,13 @@ codes. A reset does not activate the account or change its email confirmation.
 Login rechecks the verified credential under its account lock to prevent an old
 password check from creating a session after recovery. Expired or consumed codes
 cannot be reused. Suspended and taken-down accounts cannot redeem reset codes.
+
+
+`createSession` also accepts a local account email as its `identifier`. Email
+normalization matches provisioning and updates; it does not require DNS resolution
+or send an email. The password is still required, and email confirmation is not a
+prerequisite for login. Incorrect passwords and unknown emails share the same
+credential error, with dummy Argon2 work for unknown addresses. Email ownership
+is rechecked under the account lock before session insertion. Updated addresses
+stop resolving to the old account. Existing account status checks, session caps,
+and direct-peer login limits apply. Request logs redact the identifier.
