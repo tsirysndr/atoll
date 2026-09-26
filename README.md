@@ -103,7 +103,8 @@ and history retention policy remain pending.
 - [ ] Account creation, activation, deactivation, and deletion.
 - [x] Internal DID-scoped password credentials with salted Argon2id hashes, bounded input, redacted inspection, and duplicate protection.
 - [ ] Email verification, password changes, and account recovery.
-- [ ] Session creation, refresh, inspection, and revocation.
+- [x] Internal password session creation, scoped HS256 JWT verification, single-use refresh rotation, and persistent revocation.
+- [ ] Public session creation, refresh, inspection, and revocation endpoints.
 - [ ] App passwords.
 - [ ] ATProto OAuth authorization and resource server support.
 - [ ] Authorization checks for account and repository operations.
@@ -122,7 +123,38 @@ with random salts and the library's default work factors (64 MiB memory, three
 iterations, four lanes). Only test configuration reduces the work factors.
 Building this dependency requires a C compiler and `make`. Hashes are redacted
 from schema inspection, and credential insertion disables query logging. Rate
-limits, email/handle login, sessions, password changes, and recovery remain pending.
+limits, email/handle login, public session endpoints, password changes, and recovery remain pending.
+
+### Internal sessions
+
+Set `ATOLL_SESSION_SIGNING_KEY` to a separately generated, base64-encoded 32-byte
+secret before starting Atoll. There is no development fallback key; session
+issuance fails with `:session_configuration_missing` when no key is configured.
+Keep this secret separate from the repository-key encryption key. All nodes must
+share the same session key and configured PDS DID (the JWT audience).
+
+Trusted callers can use `Atoll.Accounts.Sessions.create(did, password)` to obtain
+`access_jwt` and `refresh_jwt`, `authenticate(access_jwt)` to verify a live session,
+`refresh(refresh_jwt)` to rotate its tokens, and `revoke(refresh_jwt)` to revoke it.
+These are internal APIs; they do not yet provide HTTP login, handle/email lookup,
+or complete account management.
+
+The JWT types, scopes, and lifetimes follow the
+[reference PDS token implementation](https://github.com/bluesky-social/atproto/blob/main/packages/pds/src/account-manager/helpers/auth.ts):
+two-hour access tokens and ninety-day refresh tokens. JOSE verification is restricted
+to HS256, with explicit audience, type, scope, identity, and time checks. PostgreSQL
+stores a session ID and a SHA-256 digest of the random refresh identifier, not bearer
+tokens. Refresh is serialized under a row lock and rejects the previous refresh
+token immediately; retry grace periods are not implemented. Older access tokens
+remain valid until expiration or revocation. Revocation invalidates all access
+tokens for that session through the required database check.
+
+Creation, access verification, and refresh currently require an active repository;
+revocation is also allowed for inactive repositories. Sessions survive process
+restarts. Changing the signing key invalidates existing tokens. Key rotation with
+overlap, expired-session cleanup, session-count limits, and restricted sessions for
+inactive accounts remain pending. Future write handlers must enforce authorization
+again inside the write transaction; token verification alone is not write permission.
 
 ### Blobs
 

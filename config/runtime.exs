@@ -1,5 +1,12 @@
 import Config
 
+if encoded = System.get_env("ATOLL_SESSION_SIGNING_KEY") do
+  case Base.decode64(encoded) do
+    {:ok, <<_::binary-size(32)>> = key} -> config :atoll, :session_signing_key, key
+    _ -> raise "ATOLL_SESSION_SIGNING_KEY must be a base64-encoded 32-byte key"
+  end
+end
+
 nonnegative_integer = fn name, default ->
   value = System.get_env(name, default)
 
