@@ -22,19 +22,23 @@ defmodule Atoll.Accounts.InviteControl do
 
         unless profile, do: Repo.rollback(:account_not_found)
 
-        if profile.invites_disabled == disabled and profile.invite_control_note == note do
-          :unchanged
-        else
-          profile
-          |> Ecto.Changeset.change(
-            invites_disabled: disabled,
-            invite_control_note: note,
-            invites_updated_at: DateTime.utc_now()
-          )
-          |> Repo.update!(log: false)
+        unchanged? = profile.invites_disabled == disabled and profile.invite_control_note == note
 
-          :updated
-        end
+        updated =
+          if unchanged? do
+            profile
+          else
+            profile
+            |> Ecto.Changeset.change(
+              invites_disabled: disabled,
+              invite_control_note: note,
+              invites_updated_at: DateTime.utc_now()
+            )
+            |> Repo.update!(log: false)
+          end
+
+        Atoll.Moderation.Audit.invite_control!(profile, updated, params)
+        if unchanged?, do: :unchanged, else: :updated
       end)
     else
       {:error, :invalid_request}

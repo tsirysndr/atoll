@@ -690,6 +690,7 @@ events. The `[:atoll, :identity, :refresh]` telemetry event reports a count and
 - [x] Operator account inspection, singly and in bounded batches, with private metadata and invite histories.
 - [x] Audited operator email correction with invalidation of old email challenges.
 - [x] Audited operator password replacement with session, app-password, and pending-code revocation.
+- [x] Transactional audit history for account invite enable/disable decisions and private reason changes.
 - [ ] Remaining administrative account controls and audit coverage for other operator actions.
 - [ ] Production configuration, HTTPS deployment, and signing-key protection.
 - [ ] Database and blob backup / restore workflow.
@@ -1478,8 +1479,12 @@ The flag, latest private note, and change timestamp are updated atomically with 
 same lock ordering as allocation and redemption. Repeating the same flag and note
 is idempotent. An omitted note clears the previous note on a change. Notes are
 redacted in schema inspection and request logs and are not returned in invite lists.
-This stores the latest control reason; a complete administrator audit log remains
-pending. No email is sent for these controls.
+Every successful call also appends a private audit entry in the same transaction,
+including repeated decisions and note-only changes. Entries retain the requested
+note and before/after flag, note, and change timestamp. Failed authorization,
+validation failures, and rolled-back changes leave no audit entry. History survives
+account deletion and is available through `mix atoll.moderation.history`; it contains
+no invitation codes. No email or public repository event is sent for these controls.
 
 
 ### Administrative account status
@@ -1625,8 +1630,9 @@ recorded in the audit history described below.
 ### Moderation decision history
 
 Every successful `com.atproto.admin.updateSubjectStatus`,
-`com.atproto.admin.updateAccountEmail`, or `com.atproto.admin.updateAccountPassword` call records an audit entry in the same
-database transaction as its account, record, blob, or email change.
+`com.atproto.admin.updateAccountEmail`, `com.atproto.admin.updateAccountPassword`,
+`com.atproto.admin.disableAccountInvites`, or `com.atproto.admin.enableAccountInvites`
+call records an audit entry in the same database transaction as its change.
 Entries include the subject, requested attributes, before/after state, UTC time,
 and the shared operator identity `admin`. Account snapshots also include effective
 and underlying availability, so deactivation changes beneath a takedown are visible.
@@ -1643,7 +1649,7 @@ reconstructed. Entries survive account deletion and have no automatic retention
 limit. The application only appends entries; this is not a tamper-proof log against
 database administrators. The shared Basic credential does not identify individual
 human operators. Owner lifecycle changes, direct `Repositories.set_status` calls,
-invite administration, and failed authentication attempts are outside this decision
+invite-code issuance/revocation, and failed authentication attempts are outside this decision
 log's current coverage.
 
 Export one page from the trusted operator console:

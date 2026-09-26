@@ -45,6 +45,37 @@ defmodule Atoll.Moderation.Audit do
     )
   end
 
+  @doc "Records account invitation controls, including no-ops and changes to private reasons."
+  def invite_control!(before_profile, after_profile, params) do
+    unless before_profile.did == after_profile.did,
+      do: raise(ArgumentError, "audit account mismatch")
+
+    operation =
+      if after_profile.invites_disabled,
+        do: "com.atproto.admin.disableAccountInvites",
+        else: "com.atproto.admin.enableAccountInvites"
+
+    did = after_profile.did
+
+    insert!(
+      operation,
+      did,
+      %{"$type" => "com.atproto.admin.defs#repoRef", "did" => did},
+      Map.take(params, ["account", "note"]),
+      invite_state(before_profile),
+      invite_state(after_profile)
+    )
+  end
+
+  defp invite_state(profile) do
+    %{
+      invitesDisabled: profile.invites_disabled,
+      inviteNote: profile.invite_control_note,
+      invitesUpdatedAt:
+        profile.invites_updated_at && DateTime.to_iso8601(profile.invites_updated_at)
+    }
+  end
+
   defp email_state(profile) do
     %{
       email: profile.email,

@@ -2,6 +2,7 @@ defmodule AtollWeb.InviteControlControllerTest do
   use AtollWeb.ConnCase, async: false
   alias Atoll.{Repo, Repositories, SigningKey}
   alias Atoll.Accounts.{Invite, InviteControl, InviteListing, Invites, Profile, Sessions}
+  alias Atoll.Moderation.Audit
   @did "did:web:controlled.example.com"
   @disable "/xrpc/com.atproto.admin.disableAccountInvites"
   @enable "/xrpc/com.atproto.admin.enableAccountInvites"
@@ -68,6 +69,24 @@ defmodule AtollWeb.InviteControlControllerTest do
     assert {:ok, %{codes: codes}} = InviteListing.account(c.pair.access_jwt, %{})
     assert length(codes) == 3
     assert Repo.get!(Invite, first.code).remaining == 0
+    assert {:ok, %{entries: [disabled, enabled]}} = Audit.list()
+    assert disabled.operation == "com.atproto.admin.disableAccountInvites"
+    assert disabled.requested == %{"account" => @did, "note" => "private operator reason"}
+
+    assert disabled.before == %{
+             "invitesDisabled" => false,
+             "inviteNote" => nil,
+             "invitesUpdatedAt" => nil
+           }
+
+    assert disabled.after["invitesDisabled"]
+    assert disabled.after["inviteNote"] == "private operator reason"
+    assert disabled.after["invitesUpdatedAt"] == DateTime.to_iso8601(profile.invites_updated_at)
+    assert enabled.operation == "com.atproto.admin.enableAccountInvites"
+    assert enabled.before == disabled.after
+    refute enabled.after["invitesDisabled"]
+    assert is_nil(enabled.after["inviteNote"])
+    refute Jason.encode!([disabled, enabled]) =~ first.code
   end
 
   test "repeated controls are idempotent and do not change account status", c do
@@ -87,6 +106,10 @@ defmodule AtollWeb.InviteControlControllerTest do
              end)
 
     assert Repo.get!(Profile, @did).invites_disabled
+    assert {:ok, %{entries: [first, repeated]}} = Audit.list()
+    assert repeated.before == first.after
+    assert repeated.before == repeated.after
+    assert repeated.id != first.id
   end
 
   test "both methods require operator auth and validate account and private notes", c do
@@ -112,8 +135,28 @@ defmodule AtollWeb.InviteControlControllerTest do
     end
 
     refute Repo.get!(Profile, @did).invites_disabled
+    assert {:ok, %{entries: []}} = Audit.list()
     result = request(admin(c.conn), @disable, %{account: @did})
     assert get_resp_header(result, "cache-control") == ["no-store"]
+  end
+
+  test "private reason changes are retained without public events and survive account deletion" do
+    seq = Atoll.Repositories.Events.latest_seq()
+
+    assert {:ok, :updated} =
+             InviteControl.set(%{"account" => @did, "note" => "first reason"}, true)
+
+    assert {:ok, :updated} =
+             InviteControl.set(%{"account" => @did, "note" => "revised reason"}, true)
+
+    assert Atoll.Repositories.Events.latest_seq() == seq
+    assert {:ok, %{entries: [first, second]}} = Audit.list(100, 0, @did)
+    assert second.before == first.after
+    assert second.after["inviteNote"] == "revised reason"
+    assert second.subject == %{"$type" => "com.atproto.admin.defs#repoRef", "did" => @did}
+    assert second.actor == "admin"
+    Repo.get!(Atoll.Repositories.Head, @did) |> Repo.delete!()
+    assert {:ok, %{entries: [^first, ^second]}} = Audit.list(100, 0, @did)
   end
 
   defp admin(conn),
