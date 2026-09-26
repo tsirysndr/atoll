@@ -51,7 +51,25 @@ defmodule Atoll.Identity.PLC.SignatureChallenges do
       do: raise(ArgumentError, "PLC challenge consumption requires a transaction")
 
     profile = authorize!(token)
+    verify!(profile, code)
 
+    profile
+    |> Ecto.Changeset.change(plc_signature_digest: nil, plc_signature_expires_at: nil)
+    |> Repo.update!(log: false)
+
+    profile.did
+  end
+
+  @doc "Check before external lookups without consuming; signing must recheck and consume atomically."
+  def verify(token, code) do
+    Repo.transaction(fn ->
+      profile = authorize!(token)
+      verify!(profile, code)
+      profile.did
+    end)
+  end
+
+  defp verify!(profile, code) do
     cond do
       is_nil(code) ->
         Repo.rollback(:email_token_required)
@@ -69,11 +87,7 @@ defmodule Atoll.Identity.PLC.SignatureChallenges do
         Repo.rollback(:expired_email_token)
 
       true ->
-        profile
-        |> Ecto.Changeset.change(plc_signature_digest: nil, plc_signature_expires_at: nil)
-        |> Repo.update!(log: false)
-
-        profile.did
+        :ok
     end
   end
 

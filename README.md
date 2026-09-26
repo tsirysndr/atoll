@@ -324,7 +324,8 @@ mutation. Deletes and empty batches need no record schema, even with `validate: 
 - [x] Internal DID-scoped password credentials with salted Argon2id hashes, bounded input, redacted inspection, and duplicate protection.
 - [x] Shared configurable Cloudflare Worker email delivery client.
 - [x] `requestPlcOperationSignature` email authorization with atomic single-use challenge consumption.
-- [ ] Email-authorized public PLC operation signing and submission workflows.
+- [x] Email-authorized `signPlcOperation` with fresh verified predecessor lookup and atomic code consumption.
+- [ ] Authenticated public PLC operation submission and local identity reconciliation.
 - [x] Email confirmation requests and one-use confirmation through the Worker.
 - [x] Email updates authorized through the current confirmed address using the Worker.
 - [x] Email-based password reset through the Worker with atomic session revocation.
@@ -2792,6 +2793,37 @@ password/email changes invalidate these challenges alongside existing account co
 `SignatureChallenges.consume!/2` is the internal signing-transaction boundary: it
 rechecks full-session authorization and confirmed email, verifies expiry and the
 digest, and clears the token atomically. Signing failure must roll back the same
-transaction, preserving the authorization for retry. This increment implements
-issuance and consumption; the public `signPlcOperation` and `submitPlcOperation`
-workflows remain pending. Requesting a code does not sign or submit a PLC operation.
+transaction, preserving the authorization for retry. The public `signPlcOperation` endpoint now consumes these codes;
+`submitPlcOperation` remains pending. Requesting a code does not itself sign or
+submit a PLC operation.
+
+
+### Email-authorized PLC signing
+
+`POST /xrpc/com.atproto.identity.signPlcOperation` requires a full active or
+user-deactivated account session and the current email code in `token`. Optional
+`rotationKeys`, `alsoKnownAs`, `verificationMethods`, and `services` replace the
+corresponding fields of the fresh verified predecessor; omitted fields are preserved.
+Callers cannot supply `prev`, `sig`, `type`, or another DID. It returns
+`{"operation": {...}}`, following the
+[pinned endpoint Lexicon](https://github.com/bluesky-social/atproto/blob/7a857989751ae31518509d69ab7194a922064f3d/lexicons/com/atproto/identity/signPlcOperation.json).
+
+Atoll verifies the email authorization before directory lookup, checks the audit
+head against `/log/last`, and then consumes the code and signs in one local transaction.
+The current DID signing key and PDS service must still match this hosted repository.
+Its retained rotation key must be authorized by the predecessor. A pending journaled
+identity update blocks another signature. Authorization, email state, and session
+revocation are rechecked under locks after network lookup. Invalid operations or
+signing failures roll back code consumption.
+
+The JSON envelope is limited to 16 KiB; canonical signed operations remain bounded
+to 7500 bytes and new rotation-key lists to one through five distinct supported keys.
+The endpoint shares the 20-per-five-minute identity/login IP budget. It returns the
+signature without posting to the directory, changing local keys/profiles, or emitting
+an event. Owners can use the operation for migration or rotation through a separate
+submission workflow. Directory changes after lookup can make its predecessor stale.
+
+A successful response consumes the code once. If the response is lost after commit,
+request a new code after the cooldown; there is no signed-response replay cache.
+Keep the returned signed operation unchanged when submitting or retrying it. Public
+submission and local signing-key transition/recovery workflows remain pending.

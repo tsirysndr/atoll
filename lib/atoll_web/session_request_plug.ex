@@ -4,6 +4,7 @@ defmodule AtollWeb.SessionRequestPlug do
   @prefix "/xrpc/com.atproto.server."
   @procedures [
     "/xrpc/com.atproto.identity.requestPlcOperationSignature",
+    "/xrpc/com.atproto.identity.signPlcOperation",
     "/xrpc/com.atproto.identity.updateHandle",
     "/xrpc/com.atproto.identity.refreshIdentity",
     @prefix <> "requestAccountDelete",
@@ -46,6 +47,14 @@ defmodule AtollWeb.SessionRequestPlug do
             read_timeout: 5_000
           )
 
+  @signing_parser Plug.Parsers.init(
+                    parsers: [:json],
+                    json_decoder: Jason,
+                    length: 16_384,
+                    read_length: 16_384,
+                    read_timeout: 5_000
+                  )
+
   def init(opts), do: opts
 
   def call(conn, _opts) do
@@ -69,6 +78,7 @@ defmodule AtollWeb.SessionRequestPlug do
             {:identity_resolution, 60}
 
           path in [
+            "/xrpc/com.atproto.identity.signPlcOperation",
             "/xrpc/com.atproto.identity.updateHandle",
             "/xrpc/com.atproto.identity.refreshIdentity",
             @prefix <> "createSession",
@@ -101,6 +111,7 @@ defmodule AtollWeb.SessionRequestPlug do
 
   defp parse(conn, path)
        when path in [
+              "/xrpc/com.atproto.identity.signPlcOperation",
               "/xrpc/com.atproto.identity.updateHandle",
               "/xrpc/com.atproto.identity.refreshIdentity",
               @prefix <> "createSession",
@@ -117,8 +128,17 @@ defmodule AtollWeb.SessionRequestPlug do
     case get_req_header(conn, "content-type") do
       [type] ->
         case Plug.Conn.Utils.media_type(type) do
-          {:ok, "application", "json", _} -> Plug.Parsers.call(conn, @parser)
-          _ -> error(conn, 415, "InvalidRequest", "Expected application/json.")
+          {:ok, "application", "json", _} ->
+            Plug.Parsers.call(
+              conn,
+              if(path == "/xrpc/com.atproto.identity.signPlcOperation",
+                do: @signing_parser,
+                else: @parser
+              )
+            )
+
+          _ ->
+            error(conn, 415, "InvalidRequest", "Expected application/json.")
         end
 
       _ ->

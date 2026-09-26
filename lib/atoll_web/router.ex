@@ -66,6 +66,8 @@ defmodule AtollWeb.Router do
     post "/com.atproto.server.activateAccount", SessionController, :activate
     post "/com.atproto.server.deactivateAccount", SessionController, :deactivate
 
+    post "/com.atproto.identity.signPlcOperation", IdentityController, :sign_operation
+
     post "/com.atproto.identity.requestPlcOperationSignature",
          IdentityController,
          :request_signature
