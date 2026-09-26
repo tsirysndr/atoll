@@ -388,7 +388,7 @@ Session request bodies are limited to 4 KiB before general parsing. Login permit
 IP/bucket entries, expires old entries, and denies new keys while at capacity.
 It is per-node and resets on restart. Forwarded-IP headers are ignored by default;
 configure explicit trusted proxy CIDRs to use the verified proxy chain for client
-budgets (see below). Distributed limits and account-level throttling remain pending.
+budgets (see below). Shared PostgreSQL limits are available; account-level throttling remains pending.
 Passwords and token fields are filtered from Phoenix parameter logs.
 
 The JWT types, scopes, and lifetimes follow the
@@ -689,7 +689,7 @@ events. The `[:atoll, :identity, :refresh]` telemetry event reports a count and
 - [x] Session, blob-upload, and record-write rate limits and bounded request bodies.
 - [x] Configurable general XRPC request budget before parsing, in addition to specialized rate limits.
 - [x] Explicit trusted-proxy CIDRs and bounded client-IP extraction for all request rate limits.
-- [ ] Distributed rate limits.
+- [x] Optional PostgreSQL-shared request budgets across nodes, with bounded storage and fail-closed errors.
 - [x] Operator account status reads, takedowns, restoration, and deactivation.
 - [x] Account-scoped blob takedowns across PostgreSQL/S3 serving, uploads, references, and cleanup.
 - [x] Operator record takedowns for JSON record reads and listings (signed sync data remains available).
@@ -1931,7 +1931,7 @@ well-known identity routes are outside the XRPC budget.
 Buckets use the existing bounded in-memory limiter and reset on process restart.
 Limits are per node, not shared across a cluster. Forwarded headers are ignored by
 default; explicitly configured trusted proxies can supply the client address as
-described below. Distributed limits remain unimplemented.
+described below. Select the PostgreSQL backend for shared limits across nodes.
 
 ### Trusted reverse proxies
 
@@ -1961,3 +1961,39 @@ This setting does not change request host, port, or scheme and does not enable
 distributed rate limiting. Without configured trust, clients behind a proxy share
 that proxy's budget. Application configuration can use
 `config :atoll, :trusted_proxies, AtollWeb.ClientIP.parse_trusted_proxies!("127.0.0.1/32")`.
+
+### Shared request limits across nodes
+
+Set `ATOLL_RATE_LIMIT_BACKEND=postgres` to use PostgreSQL for every HTTP request
+budget: general XRPC, login/session, identity resolution, record writes, uploads,
+imports, and administration. All nodes must use the same database, backend, limit
+settings, and trusted-proxy policy. The default is `memory`, retaining the existing
+node-local limiter. Invalid backend names fail startup. Application configuration
+uses `config :atoll, :rate_limit_backend, :postgres`.
+
+Apply migration `20260926142505` before enabling the PostgreSQL backend. It stores
+a SHA-256 digest of each internal bucket key, its count, and expiry; raw addresses,
+credentials, and request bodies are not stored in the bucket table. Digests are
+not intended to anonymize guessable IP addresses. Five-minute windows begin with
+the first admitted request and use the database clock. Denied requests do not
+extend expiry. Counts survive application/node restarts. Switching backends does
+not migrate counters and can grant a fresh budget.
+
+A dedicated transaction advisory lock serializes admission and storage-cap checks
+across nodes. It is separate from repository/event locking. Storage is capped at
+10,000 buckets across all kinds and nodes. A new bucket reclaims at most 1000
+expired rows before checking the cap; idle expired rows may remain until another
+new bucket is admitted. At capacity, new keys are denied for up to five minutes
+while existing keys retain their remaining budget.
+
+Database lock waits are limited to one second and statements to two seconds.
+Database errors deny the request through the existing 429 response with a
+one-second `Retry-After`; they never silently switch to independent memory limits.
+`[:atoll, :rate_limit, :unavailable]` reports `count: 1` without request details.
+Health and other non-XRPC routes remain outside the general request budget.
+
+This backend favors consistent, bounded admission over maximum throughput: each
+budget check requires a database transaction and shares the admission lock. Load
+test it for the expected request volume. It does not provide sliding windows,
+per-account abuse policy, or a Redis backend. HTTP guards consume budgets before
+handler transactions, so a failed handler does not restore its request allowance.

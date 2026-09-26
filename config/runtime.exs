@@ -26,6 +26,10 @@ config :atoll,
        )
 
 config :atoll,
+       :rate_limit_backend,
+       Atoll.Accounts.SessionLimiter.backend_from_env!(System.get_env("ATOLL_RATE_LIMIT_BACKEND"))
+
+config :atoll,
        :trusted_proxies,
        AtollWeb.ClientIP.parse_trusted_proxies!(System.get_env("ATOLL_TRUSTED_PROXY_CIDRS"))
 
