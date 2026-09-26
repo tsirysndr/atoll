@@ -10,7 +10,10 @@ defmodule Atoll.Accounts.Provisioning do
     with {:ok, input} <- input(params),
          :ok <- Invites.validate_new(input.invite),
          {:ok, hash} <- Credentials.hash(input.password) do
-      opts = Application.get_env(:atoll, :identity_resolution_options, [])
+      opts =
+        Application.get_env(:atoll, :identity_resolution_options, [])
+        |> Keyword.put(:force_refresh, true)
+
       audience = Application.fetch_env!(:atoll, :pds) |> Keyword.fetch!(:did)
 
       Repo.transaction(fn ->

@@ -14,6 +14,14 @@ defmodule Atoll.Application do
       {Atoll.Identity.Cache,
        name: Atoll.Identity.Cache,
        ttl_ms: Application.get_env(:atoll, :did_cache_ttl_seconds, 60) * 1000},
+      Supervisor.child_spec(
+        {Atoll.Identity.Cache,
+         name: Atoll.Identity.HandleCache,
+         ttl_ms: Application.get_env(:atoll, :handle_cache_ttl_seconds, 60) * 1000,
+         max_entries: 256,
+         max_bytes: 1_048_576},
+        id: Atoll.Identity.HandleCache
+      ),
       {DNSCluster, query: Application.get_env(:atoll, :dns_cluster_query) || :ignore},
       {Phoenix.PubSub, name: Atoll.PubSub},
       # Start to serve requests, typically the last entry

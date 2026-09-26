@@ -295,7 +295,8 @@ mutation. Deletes and empty batches need no record schema, even with `validate: 
 - [x] Public `resolveDid` and `resolveIdentity` queries for remote DID documents and verified identity information.
 - [x] Handle-based repository reads with bidirectional verification and canonical DID record URIs.
 - [x] HTTPS handle-resolution redirects with per-hop address validation and bounded hops.
-- [ ] Handle updates and caching.
+- [x] Bounded positive handle caching with forced refresh for authorization and identity updates.
+- [ ] Handle updates.
 - [x] Authenticated account activation and deactivation with atomic status events.
 - [x] Service-authenticated `createAccount` for migration of an existing DID.
 - [x] Authenticated recommended DID credentials for the destination signing key and service.
@@ -2022,3 +2023,27 @@ worker's existing overall task deadline still applies.
 DID-document resolution and PLC-directory submission continue to reject redirects.
 DNS TXT still takes precedence over HTTPS, and a successful redirect only proves
 the forward handle claim; bidirectional verification still checks the DID document.
+
+### Handle-resolution cache
+
+Successful normalized handle-to-DID claims are cached separately from DID
+documents. `ATOLL_HANDLE_CACHE_TTL_SECONDS` controls the TTL (default 60 seconds,
+range 0–300; zero disables caching). The node-local cache holds at most 256 entries
+and 1 MiB of serialized payload. It caches only successful syntactically valid DID
+claims, never lookup failures or ambiguous DNS results. Reserved/invalid handles
+are rejected before cache lookup.
+
+Routine handle resolution and repository reads reuse claims within this TTL, then
+re-resolve DNS or HTTPS. Bidirectional checks still require the DID document to
+claim the requested handle. Cache failures fall back to resolution. A forced
+refresh replaces the previous claim; failure removes that claim rather than
+returning stale data. Tokens identifying in-flight lookups prevent an older result
+from overwriting a newer forced refresh. There is no distributed cache or
+concurrent-request coalescing.
+
+Handle login, handle-based repository writes, migration account provisioning, and
+owner/periodic identity refreshes force fresh handle resolution. Login and writes
+also force fresh DID resolution. Public queries cannot set trusted resolver options
+to bypass these policies. Internal calls use `force_refresh: true`; test/custom
+transports disable the shared handle cache unless explicitly supplied with
+`handle_cache: cache_pid`.

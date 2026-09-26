@@ -250,7 +250,9 @@ defmodule Atoll.Repositories.Writes do
       {:ok, identifier}
     else
       # Resolve before opening the write transaction; recheck the live session under lock.
-      opts = Application.get_env(:atoll, :identity_resolution_options, [])
+      opts =
+        Application.get_env(:atoll, :identity_resolution_options, [])
+        |> Keyword.put(:force_refresh, true)
 
       case Atoll.Identity.Handle.verify(identifier, opts) do
         {:ok, identity} -> {:ok, identity.did}

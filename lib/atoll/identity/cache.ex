@@ -1,6 +1,6 @@
 defmodule Atoll.Identity.Cache do
   @moduledoc """
-  Bounded node-local positive DID cache. Network work stays in callers.
+  Bounded node-local positive DID-document and handle-claim cache. Network work stays in callers.
   Fetch tokens prevent older in-flight responses from replacing newer lookups.
   Payloads are serialized internally to enforce an exact stored-payload byte cap.
   """
@@ -35,7 +35,7 @@ defmodule Atoll.Identity.Cache do
 
     unless is_integer(ttl) and ttl in 0..300_000 and is_integer(count) and count in 1..10_000 and
              is_integer(bytes) and bytes in 1..(64 * 1024 * 1024),
-           do: raise(ArgumentError, "invalid DID cache limits")
+           do: raise(ArgumentError, "invalid identity cache limits")
 
     {:ok,
      %{
@@ -82,10 +82,10 @@ defmodule Atoll.Identity.Cache do
       case Map.get(state.entries, did) do
         %{token: ^token} = entry ->
           case result do
-            {:ok, %{"id" => ^did} = document} ->
-              payload = :erlang.term_to_binary(document)
+            {:ok, value} ->
+              payload = :erlang.term_to_binary(value)
 
-              if byte_size(payload) <= state.max_bytes do
+              if cacheable?(did, value) and byte_size(payload) <= state.max_bytes do
                 entry = %{entry | payload: payload, expires: now + state.ttl}
                 %{state | entries: Map.put(state.entries, did, entry)} |> bound()
               else
@@ -102,6 +102,12 @@ defmodule Atoll.Identity.Cache do
 
     {:reply, :ok, state}
   end
+
+  defp cacheable?({:handle, handle}, did),
+    do: Atoll.Syntax.handle?(handle) and Atoll.Syntax.did?(did)
+
+  defp cacheable?(did, %{"id" => did}) when is_binary(did), do: true
+  defp cacheable?(_, _), do: false
 
   defp prune(state, now),
     do: %{state | entries: Map.reject(state.entries, fn {_, entry} -> entry.expires <= now end)}

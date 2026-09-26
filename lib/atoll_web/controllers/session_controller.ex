@@ -183,7 +183,9 @@ defmodule AtollWeb.SessionController do
     if Atoll.Syntax.did?(identifier) do
       {:ok, identifier, nil}
     else
-      opts = Application.get_env(:atoll, :identity_resolution_options, [])
+      opts =
+        Application.get_env(:atoll, :identity_resolution_options, [])
+        |> Keyword.put(:force_refresh, true)
 
       case Atoll.Identity.Handle.verify(identifier, opts) do
         {:ok, identity} -> {:ok, identity.did, identity.handle}

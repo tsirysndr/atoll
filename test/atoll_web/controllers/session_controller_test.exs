@@ -275,6 +275,34 @@ defmodule AtollWeb.SessionControllerTest do
              |> json_response(401)
   end
 
+  test "handle login bypasses stale cached claims and fails closed on fresh resolution failure",
+       c do
+    configure_handle(c)
+    cache = start_supervised!({Atoll.Identity.Cache, []})
+
+    Atoll.Identity.Cache.fetch(cache, {:handle, "alice.example.com"}, false, fn ->
+      {:ok, "did:web:stale.example.com"}
+    end)
+
+    opts =
+      Application.fetch_env!(:atoll, :identity_resolution_options)
+      |> Keyword.put(:handle_cache, cache)
+
+    Application.put_env(:atoll, :identity_resolution_options, opts)
+
+    assert login(c.conn, %{"identifier" => "alice.example.com"})
+           |> json_response(200)
+           |> Map.fetch!("did") == @did
+
+    opts =
+      Keyword.put(opts, :txt_lookup, fn _ ->
+        [["did=" <> @did], ["did=did:web:conflict.example.com"]]
+      end)
+
+    Application.put_env(:atoll, :identity_resolution_options, opts)
+    assert login(c.conn, %{"identifier" => "alice.example.com"}) |> json_response(401)
+  end
+
   test "rejects forward-only aliases, mismatched documents and unhosted identities", c do
     for {did, changes} <- [
           {@did, %{"alsoKnownAs" => ["at://someoneelse.example.com"]}},

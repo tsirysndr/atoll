@@ -22,6 +22,8 @@ defmodule Atoll.Identity.Updates do
 
   def refresh_authenticated(token, %{"identifier" => identifier} = params, opts)
       when map_size(params) == 1 do
+    opts = Keyword.put(opts, :force_refresh, true)
+
     with {:ok, head} <- Atoll.Accounts.Sessions.authenticate_management(token),
          :ok <- own_identifier(identifier, head.did, opts),
          {:ok, result} <- refresh_result(head.did, opts, token) do
@@ -52,6 +54,8 @@ defmodule Atoll.Identity.Updates do
   end
 
   defp refresh_result(did, opts, token) do
+    opts = Keyword.put(opts, :force_refresh, true)
+
     with {:ok, _} <- Repositories.get_head(did) do
       prior = Repo.get(Observation, did)
 

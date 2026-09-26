@@ -6,6 +6,7 @@ defmodule Atoll.Identity.Handle do
   `resolve/2` returns a forward claim; `verify/2` additionally resolves the DID and
   checks its first claimed handle. DNS uses the system recursive resolver.
   HTTPS inherits public IPv4/IPv6 pinning, with at most three validated HTTPS redirects.
+  Positive forward claims use a separate bounded cache; force_refresh bypasses and replaces it.
   Options are trusted test dependencies, never untrusted request parameters.
   """
   alias Atoll.Syntax
@@ -13,14 +14,36 @@ defmodule Atoll.Identity.Handle do
 
   def resolve(handle, opts \\ []) do
     with {:ok, handle} <- normalize(handle) do
-      txt = Keyword.get(opts, :txt_lookup, &txt_lookup/1)
-      records = if byte_size(handle) <= 244, do: txt.("_atproto." <> handle), else: []
+      loader = fn -> resolve_uncached(handle, opts) end
 
-      case dns_did(records) do
-        {:ok, did} -> {:ok, did}
-        {:error, :ambiguous_handle} = error -> error
-        :absent -> https_did(handle, opts)
+      default =
+        if Enum.any?([:request, :lookup, :txt_lookup], &Keyword.has_key?(opts, &1)),
+          do: false,
+          else: Atoll.Identity.HandleCache
+
+      case Keyword.get(opts, :handle_cache, default) do
+        false ->
+          loader.()
+
+        server ->
+          Atoll.Identity.Cache.fetch(
+            server,
+            {:handle, handle},
+            Keyword.get(opts, :force_refresh, false),
+            loader
+          )
       end
+    end
+  end
+
+  defp resolve_uncached(handle, opts) do
+    txt = Keyword.get(opts, :txt_lookup, &txt_lookup/1)
+    records = if byte_size(handle) <= 244, do: txt.("_atproto." <> handle), else: []
+
+    case dns_did(records) do
+      {:ok, did} -> {:ok, did}
+      {:error, :ambiguous_handle} = error -> error
+      :absent -> https_did(handle, opts)
     end
   end
 
