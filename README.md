@@ -74,9 +74,10 @@ record Lexicons or grant access to account data.
 - [x] Internal record create, put, delete, and read operations with collection/type checks (not Lexicon validation).
 - [x] Public `getRecord` and paginated `listRecords` for repository DIDs or bidirectionally verified handles and current record versions.
 - [x] Historical CID versions for record reads, verified against retained signed revisions and the exact record path.
-- [x] Authenticated `createRecord`, `putRecord`, and `deleteRecord` for repository DIDs, with atomic commit/record compare-and-swap.
+- [x] Authenticated `createRecord`, `putRecord`, and `deleteRecord`, with atomic commit/record compare-and-swap.
 - [x] Authenticated atomic `applyWrites` batches with ordered results and commit compare-and-swap.
-- [ ] Handle-addressed writes and Lexicon validation.
+- [x] DID or bidirectionally verified handle addressing for single and batch record writes.
+- [ ] Lexicon validation.
 - [x] `com.atproto.repo.describeRepo` with resolved DID document, current collections, and bidirectional handle status.
 - [x] In-memory CARv1 encoding and decoding with block verification and resource limits.
 - [x] Consistent repository CAR export through the internal storage API.
@@ -92,7 +93,13 @@ many revisions or large repositories can be expensive. A dedicated version index
 and history retention policy remain pending.
 
 Single-record writes use POST with JSON and an access JWT in the Authorization
-header. `repo` must be the token owner's DID. `collection` and `record.$type` must
+header. `repo` must be the token owner's DID or a bidirectionally verified handle
+resolving to that DID. Handles are normalized and freshly verified through forward
+resolution and the DID document's handle claim, before acquiring repository locks.
+Forward-only aliases and handles belonging to another DID cannot authorize writes.
+The live session is rechecked after resolution; returned record URIs always use
+the canonical DID. DID requests do not perform handle resolution.
+`collection` and `record.$type` must
 match; `rkey` is required for put/delete and generated as a TID when omitted for
 create. The repository must have a persisted signing key and
 `ATOLL_KEY_ENCRYPTION_KEY` configured. Session authorization is rechecked while

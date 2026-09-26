@@ -1,5 +1,5 @@
 defmodule Atoll.Repositories.Writes do
-  @moduledoc "Authenticated single and batch writes for repository DIDs. Lexicon validation is pending."
+  @moduledoc "Authenticated writes for DIDs or bidirectionally verified handles. Lexicon validation is pending."
   import Ecto.Query
   alias Atoll.{CID, Repo, Repositories, Syntax, TID}
   alias Atoll.Accounts.{Sessions, Tokens}
@@ -9,9 +9,10 @@ defmodule Atoll.Repositories.Writes do
   def batch(token, body) when is_map(body) do
     with {:ok, claims} <- Tokens.verify(token, :access),
          :ok <- batch_parameters(body),
-         true <- body["repo"] == claims["sub"],
          {:ok, commit} <- swap(body, "swapCommit", false),
-         {:ok, writes} <- batch_operations(body) do
+         {:ok, writes} <- batch_operations(body),
+         {:ok, did} <- repository_did(body["repo"]),
+         true <- did == claims["sub"] do
       Repo.transaction(fn ->
         did = claims["sub"]
         head = authorize!(token, did)
@@ -86,7 +87,7 @@ defmodule Atoll.Repositories.Writes do
 
   defp batch_parameters(body) do
     cond do
-      not Syntax.did?(body["repo"]) -> {:error, :invalid_request}
+      not repository_identifier?(body["repo"]) -> {:error, :invalid_request}
       not is_list(body["writes"]) or length(body["writes"]) > 200 -> {:error, :invalid_request}
       Map.get(body, "validate", false) == true -> {:error, :validation_unavailable}
       Map.get(body, "validate", false) != false -> {:error, :invalid_request}
@@ -140,9 +141,10 @@ defmodule Atoll.Repositories.Writes do
   def write(token, action, body) when action in [:create, :put, :delete] and is_map(body) do
     with {:ok, claims} <- Tokens.verify(token, :access),
          :ok <- parameters(action, body),
-         true <- body["repo"] == claims["sub"],
          {:ok, commit} <- swap(body, "swapCommit", false),
-         {:ok, record} <- record_swap(action, body) do
+         {:ok, record} <- record_swap(action, body),
+         {:ok, did} <- repository_did(body["repo"]),
+         true <- did == claims["sub"] do
       Repo.transaction(fn ->
         did = claims["sub"]
         head = authorize!(token, did)
@@ -207,7 +209,7 @@ defmodule Atoll.Repositories.Writes do
       action == :delete or (is_map(body["record"]) and body["record"]["$type"] == collection)
 
     cond do
-      not (Syntax.did?(body["repo"]) and is_binary(collection) and
+      not (repository_identifier?(body["repo"]) and is_binary(collection) and
              Syntax.repo_path?(collection <> "/self") and valid_key and valid_record) ->
         {:error, :invalid_request}
 
@@ -224,6 +226,22 @@ defmodule Atoll.Repositories.Writes do
 
   defp record_swap(:create, _), do: {:ok, :any}
   defp record_swap(action, body), do: swap(body, "swapRecord", action == :put)
+
+  defp repository_identifier?(value), do: Syntax.did?(value) or Syntax.handle?(value)
+
+  defp repository_did(identifier) do
+    if Syntax.did?(identifier) do
+      {:ok, identifier}
+    else
+      # Resolve before opening the write transaction; recheck the live session under lock.
+      opts = Application.get_env(:atoll, :identity_resolution_options, [])
+
+      case Atoll.Identity.Handle.verify(identifier, opts) do
+        {:ok, identity} -> {:ok, identity.did}
+        {:error, _} -> {:error, :unverified_handle}
+      end
+    end
+  end
 
   defp swap(body, field, nullable) do
     case Map.fetch(body, field) do

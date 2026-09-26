@@ -2,13 +2,13 @@ defmodule AtollWeb.RecordWriteControllerTest do
   use AtollWeb.ConnCase, async: false
   alias Atoll.{CID, Repo, Repositories}
   alias Atoll.Accounts.{Credentials, Sessions}
-  @did "did:plc:httpwrites"
+  @did "did:plc:ewvi7nxzyoun6zhxrhs64oiz"
   @collection "com.example.record"
   @record %{"$type" => @collection, "text" => "original"}
 
   setup %{conn: conn} do
     old =
-      for key <- [:session_signing_key, :key_encryption_key],
+      for key <- [:session_signing_key, :key_encryption_key, :identity_resolution_options],
           do: {key, Application.fetch_env(:atoll, key)}
 
     on_exit(fn ->
@@ -312,6 +312,140 @@ defmodule AtollWeb.RecordWriteControllerTest do
 
     assert %{"error" => "InvalidToken"} =
              request(c, "applyWrites", %{"repo" => @did, "writes" => []}) |> json_response(401)
+  end
+
+  test "verified handles address all record writes while results use canonical DIDs", c do
+    configure_handle(c)
+    params = body("handle", %{"repo" => "Alice.Example.Com", "record" => @record})
+    created = request(c, "createRecord", params) |> json_response(200)
+    assert created["uri"] == "at://#{@did}/#{@collection}/handle"
+
+    assert request(c, "putRecord", Map.put(params, "swapRecord", created["cid"]))
+           |> json_response(200)
+
+    assert request(c, "deleteRecord", params) |> json_response(200)
+
+    batch =
+      request(c, "applyWrites", %{
+        "repo" => "alice.example.com",
+        "writes" => [operation("create", "batch")]
+      })
+      |> json_response(200)
+
+    assert hd(batch["results"])["uri"] == "at://#{@did}/#{@collection}/batch"
+  end
+
+  test "forward-only handles and verified handles of other accounts cannot authorize writes", c do
+    for {did, claimed, code, status} <- [
+          {@did, "other.example.com", "InvalidRequest", 400},
+          {"did:web:other.example.com", "alice.example.com", "Forbidden", 403}
+        ] do
+      configure_handle(c, did, claimed)
+
+      assert %{"error" => ^code} =
+               request(
+                 c,
+                 "putRecord",
+                 body("one", %{"repo" => "alice.example.com", "record" => @record})
+               )
+               |> json_response(status)
+
+      assert %{"error" => ^code} =
+               request(c, "applyWrites", %{
+                 "repo" => "alice.example.com",
+                 "writes" => [operation("create")]
+               })
+               |> json_response(status)
+    end
+
+    assert Repositories.get_head(@did) == {:ok, c.head}
+    refute Repo.exists?(Atoll.Repositories.Record)
+  end
+
+  test "rejects malformed requests before resolution and bypasses lookup for DID writes", c do
+    Application.put_env(:atoll, :identity_resolution_options,
+      txt_lookup: fn _ -> flunk("unexpected DNS lookup") end
+    )
+
+    params =
+      body("one", %{"repo" => "alice.example.com", "record" => @record, "swapCommit" => "invalid"})
+
+    assert %{"error" => "InvalidRequest"} = request(c, "putRecord", params) |> json_response(400)
+
+    assert %{"error" => "InvalidRequest"} =
+             request(c, "applyWrites", %{
+               "repo" => "alice.example.com",
+               "writes" => [%{"$type" => "invalid"}]
+             })
+             |> json_response(400)
+
+    assert request(c, "putRecord", body("one", %{"record" => @record})) |> json_response(200)
+    assert request(c, "applyWrites", %{"repo" => @did, "writes" => []}) |> json_response(200)
+  end
+
+  test "revocation during identity lookup prevents the later write", c do
+    configure_handle(c)
+    opts = Application.fetch_env!(:atoll, :identity_resolution_options)
+    request = Keyword.fetch!(opts, :request)
+    # Wrap the trusted test transport so revocation occurs after initial HTTP auth.
+    original_plug = request.options.plug
+
+    request =
+      Req.new(
+        plug: fn conn ->
+          {:ok, :ok} = Sessions.revoke(c.pair.refresh_jwt)
+          original_plug.(conn)
+        end
+      )
+
+    Application.put_env(
+      :atoll,
+      :identity_resolution_options,
+      Keyword.put(opts, :request, request)
+    )
+
+    assert %{"error" => "InvalidToken"} =
+             request(
+               c,
+               "putRecord",
+               body("one", %{"repo" => "alice.example.com", "record" => @record})
+             )
+             |> json_response(401)
+
+    assert Repositories.get_head(@did) == {:ok, c.head}
+  end
+
+  defp configure_handle(c, did \\ @did, claimed \\ "alice.example.com") do
+    {:ok, public} = Atoll.Multikey.encode(c.head.curve, c.head.public_key)
+
+    document = %{
+      "id" => did,
+      "alsoKnownAs" => ["at://" <> claimed],
+      "verificationMethod" => [
+        %{
+          "id" => "#atproto",
+          "controller" => did,
+          "type" => "Multikey",
+          "publicKeyMultibase" => public
+        }
+      ],
+      "service" => [
+        %{
+          "id" => "#atproto_pds",
+          "type" => "AtprotoPersonalDataServer",
+          "serviceEndpoint" => "https://pds.example.com"
+        }
+      ]
+    }
+
+    Application.put_env(:atoll, :identity_resolution_options,
+      txt_lookup: fn name ->
+        assert name == "_atproto.alice.example.com"
+        [["did=" <> did]]
+      end,
+      lookup: fn _ -> {:ok, {8, 8, 8, 8}} end,
+      request: Req.new(plug: fn conn -> Req.Test.json(conn, document) end)
+    )
   end
 
   defp operation(kind, rkey \\ nil) do
