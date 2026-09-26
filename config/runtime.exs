@@ -26,6 +26,10 @@ config :atoll,
        )
 
 config :atoll,
+       :trusted_proxies,
+       AtollWeb.ClientIP.parse_trusted_proxies!(System.get_env("ATOLL_TRUSTED_PROXY_CIDRS"))
+
+config :atoll,
        :xrpc_rate_limit,
        AtollWeb.XRPCRequestPlug.rate_limit_from_env!(System.get_env("ATOLL_XRPC_RATE_LIMIT"))
 

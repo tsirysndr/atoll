@@ -386,9 +386,9 @@ Session request bodies are limited to 4 KiB before general parsing. Login permit
 20 attempts per direct peer IP per five minutes; other session methods share a
 300-request limit per peer per five minutes. The limiter retains at most 10000
 IP/bucket entries, expires old entries, and denies new keys while at capacity.
-It is per-node and resets on restart. Forwarded-IP headers are deliberately ignored:
-behind a reverse proxy, its clients share the proxy's limit until trusted-proxy
-handling is implemented. Distributed limits and account-level throttling remain pending.
+It is per-node and resets on restart. Forwarded-IP headers are ignored by default;
+configure explicit trusted proxy CIDRs to use the verified proxy chain for client
+budgets (see below). Distributed limits and account-level throttling remain pending.
 Passwords and token fields are filtered from Phoenix parameter logs.
 
 The JWT types, scopes, and lifetimes follow the
@@ -688,7 +688,8 @@ events. The `[:atoll, :identity, :refresh]` telemetry event reports a count and
 - [x] GitHub Actions runs checks and the Docker MinIO integration suite on every push (also available manually).
 - [x] Session, blob-upload, and record-write rate limits and bounded request bodies.
 - [x] Configurable general XRPC request budget before parsing, in addition to specialized rate limits.
-- [ ] Distributed limits and trusted-proxy client IP handling.
+- [x] Explicit trusted-proxy CIDRs and bounded client-IP extraction for all request rate limits.
+- [ ] Distributed rate limits.
 - [x] Operator account status reads, takedowns, restoration, and deactivation.
 - [x] Account-scoped blob takedowns across PostgreSQL/S3 serving, uploads, references, and cleanup.
 - [x] Operator record takedowns for JSON record reads and listings (signed sync data remains available).
@@ -1393,9 +1394,9 @@ secret store. This implementation does not configure a live admin password.
 
 These methods accept POST JSON bodies up to 16 KiB. Authentication occurs before
 body parsing and is checked again by the controller. Responses use `no-store`;
-failed authentication includes a Basic challenge. A separate per-node, direct-IP
+failed authentication includes a Basic challenge. A separate per-node client-IP
 bucket allows 60 admin attempts per five minutes, including failed authentication;
-forwarded client addresses do not change it. Account-wide disabling has a
+client addresses honor the explicit trusted-proxy configuration. Account-wide disabling has a
 one-second lock timeout and five-second statement timeout, rolling back on timeout.
 Invite codes are filtered from request-parameter logs. Account moderation uses
 the same operator authentication, as described below; other administrative methods
@@ -1928,6 +1929,35 @@ the standard public CORS headers. `[:atoll, :xrpc, :rate_limit]` telemetry repor
 well-known identity routes are outside the XRPC budget.
 
 Buckets use the existing bounded in-memory limiter and reset on process restart.
-Limits are per node, not shared across a cluster. Forwarded headers are ignored;
-behind a reverse proxy, requests currently share that proxy's direct-peer budget.
-Trusted-proxy address handling and distributed limits remain unimplemented.
+Limits are per node, not shared across a cluster. Forwarded headers are ignored by
+default; explicitly configured trusted proxies can supply the client address as
+described below. Distributed limits remain unimplemented.
+
+### Trusted reverse proxies
+
+By default, every request limit uses the directly connected peer address. To run
+behind a reverse proxy, set `ATOLL_TRUSTED_PROXY_CIDRS` to that proxy's exact address
+or network, for example `127.0.0.1/32,::1/128`. Values are comma-separated IPv4/IPv6
+addresses or CIDRs, with at most 128 entries and 8192 bytes. Invalid configuration
+fails startup. Use only networks whose proxies you control; a proxy in this list
+is trusted to append or replace `X-Forwarded-For` correctly.
+
+Atoll reads `X-Forwarded-For` only when the directly connected peer is trusted. It
+walks the chain from right to left, skipping trusted proxy hops and stopping at the
+first untrusted address. Entries farther left cannot override that boundary. If
+all hops are trusted, the leftmost address is selected. The resolved address feeds
+every existing request limiter, including login, identity, upload, writes, imports,
+and administration. The original peer remains in `conn.private.atoll_peer_ip`.
+
+Only one header field is accepted, with at most 2048 bytes and 32 literal IPs.
+Missing, duplicate, malformed, or oversized headers fall back to the direct peer.
+Hostnames, ports, brackets, zone identifiers, and `unknown` values are rejected.
+IPv4-mapped IPv6 addresses normalize to IPv4 to keep trust checks and rate-limit
+buckets consistent. A mapped IPv6 CIDR must have a prefix of at least 96 bits;
+ordinary IPv4 CIDRs also match mapped IPv4 peers.
+
+`Forwarded`, `X-Real-IP`, and `CF-Connecting-IP` are not used for client addressing.
+This setting does not change request host, port, or scheme and does not enable
+distributed rate limiting. Without configured trust, clients behind a proxy share
+that proxy's budget. Application configuration can use
+`config :atoll, :trusted_proxies, AtollWeb.ClientIP.parse_trusted_proxies!("127.0.0.1/32")`.
