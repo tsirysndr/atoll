@@ -384,6 +384,8 @@ mutation. Deletes and empty batches need no record schema, even with `validate: 
 - [x] Optional email authentication factors for account-password login.
 - [x] Opt-in taken-down session scopes and owner-only repository/blob exports.
 - [x] App password creation, metadata listing, revocation, restricted sessions, and privileged service delegation.
+- [x] Internal ES256 DPoP signature, request, nonce, and access-token binding verification.
+- [ ] OAuth nonce issuance, atomic DPoP replay rejection, and authorization/resource server integration.
 - [ ] ATProto OAuth authorization and resource server support.
 - [x] Live-session and repository ownership checks for blob uploads and single/batch record writes.
 - [x] Operator Basic authentication for repository/blob exports, including inactive accounts.
@@ -4353,3 +4355,38 @@ status: they do not repeat activation/auditing, reactivate a subsequently disabl
 account, or assert that its current local keys still match that head. As with other
 identity workflows, a directory change after the final read cannot be made atomic
 with the local database transaction; the audit records the head actually observed.
+
+### OAuth DPoP verification foundation
+
+`Atoll.OAuth.DPoP.verify/4` verifies a single DPoP header using ES256/P-256 and
+returns its JWK thumbprint, proof ID, issue time, and nonce. It uses the existing
+JOSE library for signature verification and RFC JWK thumbprints. This is an
+internal cryptographic component, not an OAuth authorization endpoint. OAuth
+requests are not enabled by this change.
+
+The caller supplies the externally visible method/URL, current time, and a recent
+server-issued nonce. For protected-resource requests it must supply both the
+validated access token and its bound `jkt`; the verifier checks both the SHA-256
+`ath` and key binding. Token validity, account state, consent and scopes remain the
+caller's responsibility. Successful proof verification must be followed by atomic
+replay rejection before executing a request. Nonce issuance, replay storage, and
+OAuth route integration remain unfinished.
+
+Proofs are bounded to 8 KiB. The verifier rejects duplicate HTTP headers, duplicate
+JSON members (including nested JWK members), excessive JSON nesting, noncanonical
+base64url, private key material, unsupported algorithms and JOSE extensions, and
+invalid signatures. It accepts both valid ECDSA signature forms; replay identity
+must use the verified thumbprint/proof ID, not signature bytes. Proof IDs are
+bounded to 256 bytes. Required server nonces are 16–256 printable ASCII bytes.
+Proofs can be at most five minutes old or thirty seconds ahead of server time.
+
+Request binding compares method and HTTP(S) target, excluding the actual request's
+query as required by DPoP. The proof target itself must omit query and fragment;
+userinfo is rejected. Scheme/host case, default ports, and an empty root path are
+normalized; other path spellings are compared exactly. Callers must build the
+expected URL from trusted public endpoint configuration rather than untrusted
+forwarding headers.
+
+The implementation follows the mandatory ES256 requirement in the
+[ATProto OAuth profile](https://atproto.com/specs/oauth) and the proof checks in
+[RFC 9449 §4.3](https://www.rfc-editor.org/rfc/rfc9449.html#section-4.3).
