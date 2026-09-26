@@ -5,6 +5,9 @@ defmodule Atoll.Accounts.SubjectStatus do
   alias Atoll.Repositories.{Events, Head}
   @repo_type "com.atproto.admin.defs#repoRef"
 
+  def get(%{"did" => did, "blob" => cid} = params) when map_size(params) == 2,
+    do: Atoll.Blobs.Takedowns.get(did, cid)
+
   def get(%{"did" => did} = params) when map_size(params) == 1 do
     if Syntax.did?(did) do
       case Repo.get(Head, did) do
@@ -17,6 +20,9 @@ defmodule Atoll.Accounts.SubjectStatus do
   end
 
   def get(_), do: {:error, :unsupported_moderation_subject}
+
+  def update(%{"subject" => %{"$type" => "com.atproto.admin.defs#repoBlobRef"}} = params),
+    do: Atoll.Blobs.Takedowns.update(params)
 
   def update(%{"subject" => %{"$type" => @repo_type, "did" => did} = subject} = params) do
     if Syntax.did?(did) and Map.keys(subject) -- ["$type", "did"] == [] and
@@ -97,7 +103,8 @@ defmodule Atoll.Accounts.SubjectStatus do
     }
   end
 
-  defp attribute?(params, key) do
+  @doc false
+  def attribute?(params, key) do
     case Map.fetch(params, key) do
       :error ->
         true

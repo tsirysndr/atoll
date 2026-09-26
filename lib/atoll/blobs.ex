@@ -13,7 +13,7 @@ defmodule Atoll.Blobs do
   """
   import Ecto.Query
   alias Atoll.{CID, Repo, Repositories, Storage}
-  alias Atoll.Blobs.{Blob, Reference, S3}
+  alias Atoll.Blobs.{Blob, Reference, S3, Takedown, Takedowns}
   alias Atoll.Repositories.{Events, Head}
   @max_size 5 * 1024 * 1024
 
@@ -55,6 +55,7 @@ defmodule Atoll.Blobs do
       Repo.transaction(fn ->
         Events.lock!()
         active_head!(did, "FOR UPDATE", allow_deactivated?)
+        Takedowns.ensure_available!(did, cid)
         check_quota!(did, cid, byte_size(bytes), opts)
 
         backend =
@@ -96,6 +97,7 @@ defmodule Atoll.Blobs do
     with {:ok, %{codec: :raw}} <- CID.decode(cid) do
       Repo.transaction(fn ->
         active_head!(did, "FOR SHARE")
+        Takedowns.ensure_available!(did, cid)
         blob = Repo.get_by(Blob, did: did, cid: cid) || Repo.rollback(:blob_not_found)
 
         with {:ok, bytes} <- read_bytes(blob, storage(opts)),
@@ -154,7 +156,9 @@ defmodule Atoll.Blobs do
     from b in Blob,
       join: r in Reference,
       on: r.did == b.did and r.cid == b.cid and r.mime_type == b.mime_type and r.size == b.size,
-      where: b.did == ^did
+      left_join: t in Takedown,
+      on: t.did == b.did and t.cid == b.cid,
+      where: b.did == ^did and is_nil(t.cid)
   end
 
   defp storage(opts),

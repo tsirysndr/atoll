@@ -684,7 +684,8 @@ events. The `[:atoll, :identity, :refresh]` telemetry event reports a count and
 - [x] Session, blob-upload, and record-write rate limits and bounded request bodies.
 - [ ] General API rate limits, distributed limits, and trusted-proxy client IP handling.
 - [x] Operator account status reads, takedowns, restoration, and deactivation.
-- [ ] Record/blob takedowns, remaining administrative account controls, and full moderation audit history.
+- [x] Account-scoped blob takedowns across PostgreSQL/S3 serving, uploads, references, and cleanup.
+- [ ] Record takedowns, remaining administrative account controls, and full moderation audit history.
 - [ ] Production configuration, HTTPS deployment, and signing-key protection.
 - [ ] Database and blob backup / restore workflow.
 - [x] `GET /health/ready` database connectivity readiness with bounded queries and outcome telemetry.
@@ -1519,5 +1520,51 @@ a takedown without `ref` clears the previous reference; lifting it also clears i
 `deactivated.ref` is accepted metadata but is not retained. This stores current
 state, not a complete moderation audit history.
 
-Record and blob subjects are explicitly rejected until their takedown enforcement
-is implemented; no successful response implies that such content has been hidden.
+Record subjects are explicitly rejected until record takedown enforcement is
+implemented. Blob subjects are supported as described below.
+
+
+### Administrative blob takedowns
+
+The same subject-status endpoints support account-scoped blob moderation:
+
+- `GET com.atproto.admin.getSubjectStatus?did=...&blob=...` accepts a local DID and
+  canonical raw blob CID. It returns a `com.atproto.admin.defs#repoBlobRef` subject
+  and its `takedown` attribute.
+- `POST com.atproto.admin.updateSubjectStatus` accepts that blob subject and an
+  optional `takedown` attribute, using the same `applied`/private `ref` fields as
+  account takedowns. `recordUri` is optional context and must name a record under
+  the subject DID; it does not restrict the takedown to that record. Blob subjects
+  cannot have a `deactivated` attribute.
+
+```json
+{
+  "subject": {
+    "$type": "com.atproto.admin.defs#repoBlobRef",
+    "did": "did:plc:example",
+    "cid": "<canonical raw blob CID>"
+  },
+  "takedown": {"applied": true, "ref": "case-123"}
+}
+```
+
+A takedown hides bytes from `getBlob` and excludes the CID from `listBlobs` and
+`listMissingBlobs`. Uploading the same bytes or writing another record that references
+them fails with `BlobTakendown`. This applies to PostgreSQL and S3 storage and to
+staged blobs. Other accounts owning the same CID remain unaffected; a takedown does
+not delete a shared object or take down the account.
+
+Markers are stored separately from ownership and survive record deletion, staged
+expiration, and byte cleanup. Operators can read or lift a retained marker even
+after ownership has gone. A new restriction requires existing local ownership;
+an unknown blob returns `NotFound`. Markers are removed when the account is deleted.
+Lifting a takedown restores serving if referenced bytes still exist; otherwise the
+owner can upload them again. This does not recreate bytes already collected.
+
+Blob moderation takes the event lock before the repository head lock, serializing
+with uploads, record writes, import, and cleanup. It does not rewrite signed records,
+remove their blob descriptors, or emit a fabricated repository commit. Imports may
+retain descriptors for restricted blobs, but serving/upload checks remain in force
+and migration's missing-blob inventory omits them until the restriction is lifted.
+Private references stay out of public events and request logs. Previously downloaded
+copies on other services are outside this PDS's control.

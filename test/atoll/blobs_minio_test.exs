@@ -124,6 +124,49 @@ defmodule Atoll.BlobsMinioTest do
     assert {:ok, %{bytes: ^bytes}} = Blobs.get_staged(@did, cid, context.opts)
   end
 
+  test "S3 bytes remain private to the moderated account and restoration uses retained data", c do
+    bytes = "shared moderated S3 object"
+    cid = CID.create(bytes, :raw)
+    text = CID.to_base32(cid)
+    other = "did:plc:miniomoderationother"
+    {:ok, _} = Repositories.create(other, c.key)
+
+    for did <- [@did, other] do
+      {:ok, blob} = Blobs.stage(did, bytes, "text/plain", c.opts)
+
+      {:ok, _} =
+        Repositories.apply_writes(
+          did,
+          [
+            {:put, "com.example.record/moderation",
+             %{"$type" => "com.example.record", "blob" => blob}}
+          ],
+          c.key
+        )
+    end
+
+    subject = %{"$type" => "com.atproto.admin.defs#repoBlobRef", "did" => @did, "cid" => text}
+
+    assert {:ok, _} =
+             Atoll.Accounts.SubjectStatus.update(%{
+               "subject" => subject,
+               "takedown" => %{"applied" => true}
+             })
+
+    assert {:error, :blob_not_found} = Blobs.get_public(@did, cid, c.opts)
+    assert {:ok, %{cids: []}} = Blobs.list_public(@did, 10)
+    assert {:error, :blob_taken_down} = Blobs.stage(@did, bytes, "text/plain", c.opts)
+    assert {:ok, %{bytes: ^bytes}} = Blobs.get_public(other, cid, c.opts)
+
+    assert {:ok, _} =
+             Atoll.Accounts.SubjectStatus.update(%{
+               "subject" => subject,
+               "takedown" => %{"applied" => false}
+             })
+
+    assert {:ok, %{bytes: ^bytes}} = Blobs.get_public(@did, cid, c.opts)
+  end
+
   defp s3_request(method, url, body, config) do
     signing =
       Keyword.take(config, [:region, :access_key_id, :secret_access_key])

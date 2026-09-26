@@ -139,12 +139,11 @@ defmodule AtollWeb.AdminSubjectControllerTest do
             "$type" => "com.atproto.repo.strongRef",
             "uri" => "at://#{@did}/com.example.record/one",
             "cid" => cid
-          },
-          %{"$type" => "com.atproto.admin.defs#repoBlobRef", "did" => @did, "cid" => cid}
+          }
         ] do
       assert %{
                "error" => "InvalidRequest",
-               "message" => "Only local repository subjects are supported."
+               "message" => "Only local repository and blob subjects are supported."
              } =
                update(c, %{"subject" => subject, "takedown" => %{"applied" => true}})
                |> json_response(400)
@@ -215,6 +214,182 @@ defmodule AtollWeb.AdminSubjectControllerTest do
   test "moderation references are filtered from request parameters" do
     assert Phoenix.Logger.filter_values(%{"takedown" => %{"ref" => "private-case"}}) ==
              %{"takedown" => %{"ref" => "[FILTERED]"}}
+  end
+
+  test "blob takedowns hide only the selected account's bytes and block re-upload and new references",
+       c do
+    alias Atoll.{Blobs, CID}
+    bytes = "moderated shared bytes"
+    {:ok, blob} = Blobs.stage(@did, bytes, "text/plain")
+    cid = CID.create(bytes, :raw)
+    text = CID.to_base32(cid)
+    subject = %{"$type" => "com.atproto.admin.defs#repoBlobRef", "did" => @did, "cid" => text}
+    other = "did:web:unaffected.example.com"
+    {:ok, _} = Repositories.create(other, c.key)
+    {:ok, _} = Blobs.stage(other, bytes, "text/plain")
+    value = %{"$type" => "com.example.record", "blob" => blob}
+
+    for did <- [@did, other],
+        do:
+          assert(
+            {:ok, _} =
+              Repositories.apply_writes(did, [{:put, "com.example.record/one", value}], c.key)
+          )
+
+    seq = Events.latest_seq()
+    params = %{"subject" => subject, "takedown" => %{"applied" => true, "ref" => "blob-case"}}
+    assert update(c, params) |> json_response(200) == params
+    assert update(c, params) |> json_response(200) == params
+    assert auth(c.conn) |> get(@get, %{did: @did, blob: text}) |> json_response(200) == params
+
+    assert get(c.conn, "/xrpc/com.atproto.sync.getBlob", %{did: @did, cid: text})
+           |> json_response(400)
+
+    assert get(c.conn, "/xrpc/com.atproto.sync.listBlobs", %{did: @did}) |> json_response(200) ==
+             %{"cids" => []}
+
+    assert {:ok, %{bytes: ^bytes}} = Blobs.get_public(other, cid)
+    assert {:ok, %{cids: [^text]}} = Blobs.list_public(other, 1)
+    assert {:error, :blob_taken_down} = Blobs.get_staged(@did, cid)
+
+    upload =
+      c.conn
+      |> put_req_header("authorization", "Bearer " <> c.pair.access_jwt)
+      |> put_req_header("content-type", "text/plain")
+      |> post("/xrpc/com.atproto.repo.uploadBlob", bytes)
+
+    assert json_response(upload, 400)["error"] == "BlobTakendown"
+
+    assert {:error, :blob_taken_down} =
+             Repositories.apply_writes(@did, [{:put, "com.example.record/two", value}], c.key)
+
+    assert {:ok, _} = Sessions.authenticate(c.pair.access_jwt)
+    assert Events.latest_seq() == seq
+    # The signed record retains its descriptor; moderation does not rewrite signed data.
+    assert {:ok, _} = Repositories.get_record(@did, "com.example.record/one")
+    update(c, %{"subject" => subject, "takedown" => %{"applied" => false}}) |> json_response(200)
+    assert {:ok, %{bytes: ^bytes}} = Blobs.get_public(@did, cid)
+    assert {:ok, %{cids: [^text]}} = Blobs.list_public(@did, 1)
+  end
+
+  test "blob restriction survives ownership deletion and imported missing references", c do
+    alias Atoll.{Blobs, CAR, CBOR, CID, Commit, MST, TID}
+    bytes = "withdrawn bytes"
+    {:ok, blob} = Blobs.stage(@did, bytes, "text/plain")
+    text = blob["ref"]["$link"]
+    subject = %{"$type" => "com.atproto.admin.defs#repoBlobRef", "did" => @did, "cid" => text}
+    path = "com.example.record/withdrawn"
+
+    {:ok, _} =
+      Repositories.apply_writes(
+        @did,
+        [{:put, path, %{"$type" => "com.example.record", "blob" => blob}}],
+        c.key
+      )
+
+    update(c, %{"subject" => subject, "takedown" => %{"applied" => true}}) |> json_response(200)
+    {:ok, head} = Repositories.apply_writes(@did, [{:delete, path}], c.key)
+    refute Repo.get_by(Atoll.Blobs.Blob, did: @did, cid: CID.create(bytes, :raw))
+    assert {:error, :blob_taken_down} = Blobs.stage(@did, bytes, "text/plain")
+
+    assert (auth(c.conn)
+            |> get(@get, %{did: @did, blob: text})
+            |> json_response(200))["takedown"]["applied"]
+
+    record =
+      CBOR.encode!(%{
+        "$type" => "com.example.record",
+        "blob" => Map.put(blob, "ref", %CBOR.Link{cid: CID.create(bytes, :raw)})
+      })
+
+    record_cid = CID.create(record, :dag_cbor)
+    {:ok, tree} = MST.new(%{path => record_cid})
+    {:ok, rev} = TID.next(head.rev)
+    {:ok, commit} = Commit.create(@did, tree.root, rev, c.key)
+
+    {:ok, car} =
+      CAR.encode(
+        [commit.cid],
+        tree.blocks |> Map.put(record_cid, record) |> Map.put(commit.cid, commit.bytes)
+      )
+
+    assert {:ok, _} = Repositories.import_archive(@did, car, head.head)
+    assert {:ok, %{blobs: []}} = Atoll.Blobs.Missing.list(c.pair.access_jwt, 10, nil)
+    update(c, %{"subject" => subject, "takedown" => %{"applied" => false}}) |> json_response(200)
+    assert {:ok, %{blobs: [%{cid: ^text}]}} = Atoll.Blobs.Missing.list(c.pair.access_jwt, 10, nil)
+    assert {:ok, _} = Blobs.stage(@did, bytes, "text/plain")
+    assert {:ok, %{bytes: ^bytes}} = Blobs.get_public(@did, CID.create(bytes, :raw))
+  end
+
+  test "blob moderation validates target, CID, metadata and availability independently of account status",
+       c do
+    alias Atoll.{Blobs, CID}
+    bytes = "staged moderation"
+    {:ok, _} = Blobs.stage(@did, bytes, "text/plain")
+    cid = CID.create(bytes, :raw)
+    text = CID.to_base32(cid)
+    subject = %{"$type" => "com.atproto.admin.defs#repoBlobRef", "did" => @did, "cid" => text}
+
+    for params <- [
+          %{
+            "subject" =>
+              Map.put(subject, "cid", CID.to_base32(CID.create("wrong codec", :dag_cbor)))
+          },
+          %{"subject" => subject, "deactivated" => %{"applied" => true}},
+          %{
+            "subject" =>
+              Map.put(
+                subject,
+                "recordUri",
+                "at://did:web:other.example.com/com.example.record/one"
+              )
+          },
+          %{
+            "subject" => subject,
+            "takedown" => %{"applied" => true, "ref" => String.duplicate("x", 2001)}
+          }
+        ],
+        do: assert(update(c, params) |> json_response(400))
+
+    unknown = Map.put(subject, "cid", CID.to_base32(CID.create("unknown", :raw)))
+
+    assert %{"error" => "NotFound"} =
+             update(c, %{"subject" => unknown, "takedown" => %{"applied" => true}})
+             |> json_response(400)
+
+    assert Repo.aggregate(Atoll.Blobs.Takedown, :count) == 0
+    {:ok, _} = Repositories.set_status(@did, :takendown)
+
+    update(c, %{
+      "subject" => Map.put(subject, "recordUri", "at://#{@did}/com.example.record/one"),
+      "takedown" => %{"applied" => true}
+    })
+    |> json_response(200)
+
+    {:ok, _} = Repositories.set_status(@did, :active)
+    assert {:error, :blob_taken_down} = Blobs.stage(@did, bytes, "text/plain")
+    # Staged cleanup may reclaim bytes but cannot clear the moderation marker.
+    Repo.get_by!(Atoll.Blobs.Blob, did: @did, cid: cid)
+    |> Ecto.Changeset.change(staged_at: DateTime.add(DateTime.utc_now(), -100_000))
+    |> Repo.update!()
+
+    assert {:ok, 1} = Atoll.Blobs.Cleanup.expire_staged()
+    assert {:error, :blob_taken_down} = Blobs.stage(@did, bytes, "text/plain")
+
+    assert {:error, :cancelled} =
+             Repo.transaction(fn ->
+               assert {:ok, _} =
+                        Atoll.Accounts.SubjectStatus.update(%{
+                          "subject" => subject,
+                          "takedown" => %{"applied" => false}
+                        })
+
+               Repo.rollback(:cancelled)
+             end)
+
+    assert {:error, :blob_taken_down} = Blobs.stage(@did, bytes, "text/plain")
+    update(c, %{"subject" => subject, "takedown" => %{"applied" => false}}) |> json_response(200)
+    assert {:ok, _} = Blobs.stage(@did, bytes, "text/plain")
   end
 
   defp auth(conn),

@@ -5,7 +5,8 @@ defmodule AtollWeb.XRPCFallback do
     do: error(conn, 400, "NotFound", "Subject not found.")
 
   def call(conn, {:error, :unsupported_moderation_subject}),
-    do: error(conn, 400, "InvalidRequest", "Only local repository subjects are supported.")
+    do:
+      error(conn, 400, "InvalidRequest", "Only local repository and blob subjects are supported.")
 
   def call(conn, {:error, :invalid_invite_allocation}),
     do: error(conn, 503, "ServiceUnavailable", "Invite allocation is misconfigured.")
@@ -217,6 +218,9 @@ defmodule AtollWeb.XRPCFallback do
 
   def call(conn, {:error, :record_not_found}),
     do: error(conn, 400, "RecordNotFound", "Record not found.")
+
+  def call(conn, {:error, :blob_taken_down}),
+    do: error(conn, 400, "BlobTakendown", "Blob is unavailable due to a takedown.")
 
   def call(conn, {:error, :blob_not_found}),
     do: error(conn, 400, "BlobNotFound", "Blob is not available in the current repository.")

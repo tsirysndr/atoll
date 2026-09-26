@@ -3,7 +3,7 @@ defmodule Atoll.Blobs.Missing do
   import Ecto.Query
   alias Atoll.{CID, Repo}
   alias Atoll.Accounts.Sessions
-  alias Atoll.Blobs.{Blob, Reference}
+  alias Atoll.Blobs.{Blob, Reference, Takedown}
 
   def list(token, limit, cursor) when limit in 1..1000 do
     Repo.transaction(fn ->
@@ -20,7 +20,9 @@ defmodule Atoll.Blobs.Missing do
           on:
             b.did == r.did and b.cid == r.cid and b.mime_type == r.mime_type and
               b.size == r.size,
-          where: r.did == ^did and is_nil(b.cid),
+          left_join: t in Takedown,
+          on: t.did == r.did and t.cid == r.cid,
+          where: r.did == ^did and is_nil(b.cid) and is_nil(t.cid),
           group_by: r.cid,
           order_by: r.cid,
           select: {r.cid, min(r.path)},

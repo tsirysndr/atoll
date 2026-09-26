@@ -32,6 +32,8 @@ defmodule Atoll.Blobs.References do
 
     for {cid, metadata} <- references do
       unless allow_missing do
+        Atoll.Blobs.Takedowns.ensure_available!(did, cid)
+
         case Repo.get_by(Blob, did: did, cid: cid) do
           %Blob{mime_type: mime, size: size}
           when mime == metadata.mime_type and size == metadata.size ->
