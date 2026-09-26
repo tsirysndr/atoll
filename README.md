@@ -236,7 +236,7 @@ Creation, access verification, and refresh currently require an active repositor
 revocation and read-only `checkAccountStatus` are also allowed for inactive repositories.
 Other authenticated operations still require an active repository. Sessions survive process
 restarts. Changing the signing key invalidates existing tokens. Key rotation with
-overlap, session-count limits, and restricted sessions for
+overlap and restricted sessions for
 inactive accounts remain pending. Write handlers recheck authorization inside the
 write transaction; token verification alone is not write permission.
 
@@ -249,6 +249,14 @@ backlog; zero deleted rows can mean remaining expired rows are locked. Cleanup
 does not revoke live sessions or alter refresh-token rotation. The internal
 `Atoll.Accounts.SessionCleanup.prune_expired/1` API supports release maintenance.
 Automatic in-application scheduling is not enabled.
+
+`ATOLL_SESSION_MAX_COUNT` limits unexpired sessions per account (default 100,
+range 0–1000). Login creation is serialized per repository before counting and
+inserting sessions, so concurrent logins cannot bypass the cap. A full account
+receives HTTP 429 `RateLimitExceeded`; revoking an existing session or waiting
+for expiration frees capacity. Refresh rotates an existing session and does not
+consume another slot. Lowering the limit does not revoke existing sessions;
+zero disables new logins while preserving existing sessions and refreshes.
 
 ### Blobs
 

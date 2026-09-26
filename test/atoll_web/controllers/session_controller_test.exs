@@ -31,6 +31,23 @@ defmodule AtollWeb.SessionControllerTest do
     %{conn: %{conn | remote_ip: {10, 10, div(id, 256), rem(id, 256)}}, head: head}
   end
 
+  test "account session cap returns a protocol error and revocation frees a slot", %{conn: conn} do
+    prior = Application.fetch_env(:atoll, :session_max_count)
+    Application.put_env(:atoll, :session_max_count, 1)
+
+    on_exit(fn ->
+      case prior do
+        {:ok, value} -> Application.put_env(:atoll, :session_max_count, value)
+        :error -> Application.delete_env(:atoll, :session_max_count)
+      end
+    end)
+
+    pair = login(conn) |> json_response(200)
+    assert %{"error" => "RateLimitExceeded"} = login(conn) |> json_response(429)
+    assert conn |> bearer(pair["refreshJwt"]) |> post(@delete) |> response(200) == ""
+    assert login(conn) |> json_response(200)
+  end
+
   test "creates, inspects, refreshes and deletes a session", %{conn: conn} do
     created = login(conn)
     assert get_resp_header(created, "cache-control") == ["no-store"]

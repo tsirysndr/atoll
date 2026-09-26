@@ -5,6 +5,7 @@ defmodule Atoll.ServerRuntimeConfigTest do
     values = %{
       "ATOLL_PDS_DID" => "did:web:pds.example.com",
       "ATOLL_AVAILABLE_USER_DOMAINS" => ".example.com",
+      "ATOLL_SESSION_MAX_COUNT" => "25",
       "PHX_HOST" => "PDS.Example.com",
       "DATABASE_URL" => "ecto://postgres:postgres@localhost/atoll_config_test",
       "SECRET_KEY_BASE" => String.duplicate("a", 64)
@@ -26,6 +27,7 @@ defmodule Atoll.ServerRuntimeConfigTest do
     config = Config.Reader.read!("config/runtime.exs", env: :prod, target: :host)
     assert config[:atoll][:pds][:did] == "did:web:pds.example.com"
     assert config[:atoll][:pds][:available_user_domains] == [".example.com"]
+    assert config[:atoll][:session_max_count] == 25
 
     assert config[:atoll][AtollWeb.Endpoint][:url] == [
              host: "pds.example.com",
@@ -39,6 +41,18 @@ defmodule Atoll.ServerRuntimeConfigTest do
 
     assert_raise RuntimeError, "ATOLL_PDS_DID is required in production", fn ->
       Config.Reader.read!("config/runtime.exs", env: :prod, target: :host)
+    end
+  end
+
+  test "invalid session limits fail at boot" do
+    for limit <- ["-1", "1001", "bad", ""] do
+      System.put_env("ATOLL_SESSION_MAX_COUNT", limit)
+
+      assert_raise RuntimeError,
+                   "ATOLL_SESSION_MAX_COUNT must be an integer from 0 to 1000",
+                   fn ->
+                     Config.Reader.read!("config/runtime.exs", env: :prod, target: :host)
+                   end
     end
   end
 end

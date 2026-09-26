@@ -16,6 +16,42 @@ defmodule Atoll.Accounts.SessionsTest do
     :ok
   end
 
+  test "caps live sessions while allowing refresh, expiry and revocation to release capacity" do
+    opts = Keyword.put(@opts, :max_sessions, 1)
+    {:ok, first} = Sessions.create(@did, @password, opts)
+    assert {:error, :session_limit_exceeded} = Sessions.create(@did, @password, opts)
+    assert Repo.aggregate(Session, :count) == 1
+    assert {:ok, refreshed} = Sessions.refresh(first.refresh_jwt, opts)
+    assert {:ok, :ok} = Sessions.revoke(refreshed.refresh_jwt, opts)
+    assert {:ok, next} = Sessions.create(@did, @password, opts)
+    {:ok, claims} = Tokens.verify(next.refresh_jwt, :refresh, opts)
+    later = Keyword.put(opts, :now, claims["exp"])
+    assert {:ok, _} = Sessions.create(@did, @password, later)
+    assert Repo.aggregate(Session, :count) == 2
+  end
+
+  test "zero disables new sessions without invalidating existing sessions" do
+    {:ok, pair} = Sessions.create(@did, @password, @opts)
+    opts = Keyword.put(@opts, :max_sessions, 0)
+    assert {:error, :session_limit_exceeded} = Sessions.create(@did, @password, opts)
+    assert {:ok, %{did: @did}} = Sessions.authenticate(pair.access_jwt, opts)
+    assert {:ok, _} = Sessions.refresh(pair.refresh_jwt, opts)
+  end
+
+  test "session caps are account scoped and invalid settings fail closed" do
+    other = "did:plc:othersessions"
+    {:ok, _} = Repositories.create(other, SigningKey.generate())
+    {:ok, _} = Credentials.create(other, @password)
+    opts = Keyword.put(@opts, :max_sessions, 1)
+    assert {:ok, _} = Sessions.create(@did, @password, opts)
+    assert {:ok, _} = Sessions.create(other, @password, opts)
+
+    for limit <- [-1, 1001, "100", nil] do
+      assert {:error, :invalid_session_limit} =
+               Sessions.create(@did, @password, Keyword.put(@opts, :max_sessions, limit))
+    end
+  end
+
   test "creates sessions only after password verification and stores no bearer tokens" do
     assert Sessions.create(@did, "wrong password", @opts) == {:error, :invalid_credentials}
     refute Repo.exists?(Session)

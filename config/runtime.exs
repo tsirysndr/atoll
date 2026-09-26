@@ -3,6 +3,11 @@ import Config
 server = Atoll.ServerConfig.parse!(System.get_env(), config_env() == :prod)
 config :atoll, :pds, server.pds
 
+case Integer.parse(System.get_env("ATOLL_SESSION_MAX_COUNT", "100")) do
+  {limit, ""} when limit in 0..1000 -> config :atoll, :session_max_count, limit
+  _ -> raise "ATOLL_SESSION_MAX_COUNT must be an integer from 0 to 1000"
+end
+
 if encoded = System.get_env("ATOLL_SESSION_SIGNING_KEY") do
   case Base.decode64(encoded) do
     {:ok, <<_::binary-size(32)>> = key} -> config :atoll, :session_signing_key, key

@@ -14,10 +14,15 @@ defmodule Atoll.Accounts.Sessions do
 
   def create(did, password, opts \\ []) do
     with {:ok, _} <- Credentials.verify(did, password),
+         {:ok, limit} <- session_limit(opts),
          id = Tokens.random_id(),
          {:ok, pair} <- Tokens.pair(did, id, opts) do
       Repo.transaction(fn ->
-        active_head!(did)
+        # Serialize account logins before counting so parallel creates cannot exceed the cap.
+        active_head!(did, true)
+        now = Keyword.get(opts, :now, System.system_time(:second))
+        live = from s in Session, where: s.did == ^did and s.expires_at > ^now
+        if Repo.aggregate(live, :count) >= limit, do: Repo.rollback(:session_limit_exceeded)
 
         Repo.insert!(
           %Session{
@@ -112,9 +117,24 @@ defmodule Atoll.Accounts.Sessions do
            do: Repo.rollback(:invalid_token)
   end
 
-  defp active_head!(did) do
+  defp session_limit(opts) do
+    limit = Keyword.get(opts, :max_sessions, Application.get_env(:atoll, :session_max_count, 100))
+
+    if is_integer(limit) and limit in 0..1000,
+      do: {:ok, limit},
+      else: {:error, :invalid_session_limit}
+  end
+
+  defp active_head!(did, update? \\ false) do
+    query = from h in Head, where: h.did == ^did
+
+    query =
+      if update?,
+        do: from(h in query, lock: "FOR UPDATE"),
+        else: from(h in query, lock: "FOR SHARE")
+
     head =
-      Repo.one(from h in Head, where: h.did == ^did, lock: "FOR SHARE") ||
+      Repo.one(query) ||
         Repo.rollback(:invalid_token)
 
     case Repositories.availability(head) do

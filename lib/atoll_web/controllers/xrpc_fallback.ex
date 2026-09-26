@@ -56,6 +56,15 @@ defmodule AtollWeb.XRPCFallback do
   def call(conn, {:error, :invalid_token}),
     do: error(conn, 401, "InvalidToken", "Invalid session token.")
 
+  def call(conn, {:error, :session_limit_exceeded}),
+    do:
+      error(
+        conn,
+        429,
+        "RateLimitExceeded",
+        "Account session limit reached; revoke a session before logging in again."
+      )
+
   def call(conn, {:error, :expired_token}),
     do: error(conn, 401, "ExpiredToken", "Session token has expired.")
 
