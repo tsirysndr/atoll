@@ -159,6 +159,48 @@ defmodule AtollWeb.RecordWriteControllerTest do
              |> json_response(200)
   end
 
+  test "upload detection drives descriptors, profile validation and download MIME", c do
+    bytes =
+      Base.decode64!(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII="
+      )
+
+    uploaded =
+      c.conn
+      |> put_req_header("authorization", "Bearer " <> c.pair.access_jwt)
+      |> put_req_header("content-type", "application/octet-stream")
+      |> post("/xrpc/com.atproto.repo.uploadBlob", bytes)
+      |> json_response(200)
+
+    avatar = uploaded["blob"]
+    assert avatar["mimeType"] == "image/png"
+    assert avatar["ref"]["$link"] == CID.create(bytes, :raw) |> CID.to_base32()
+    assert avatar["size"] == byte_size(bytes)
+    record = %{"$type" => "app.bsky.actor.profile", "avatar" => avatar}
+
+    input = %{
+      "repo" => @did,
+      "collection" => "app.bsky.actor.profile",
+      "rkey" => "self",
+      "record" => record
+    }
+
+    assert %{"validationStatus" => "valid"} = request(c, "putRecord", input) |> json_response(200)
+
+    downloaded =
+      get(c.conn, "/xrpc/com.atproto.sync.getBlob", %{did: @did, cid: avatar["ref"]["$link"]})
+
+    assert response(downloaded, 200) == bytes
+    assert get_resp_header(downloaded, "content-type") == ["image/png"]
+
+    {:ok, gif} = Atoll.Blobs.stage(@did, "GIF89a" <> "fixture", "image/png")
+    assert gif["mimeType"] == "image/gif"
+
+    assert %{"error" => "InvalidRequest"} =
+             request(c, "putRecord", %{input | "record" => Map.put(record, "avatar", gif)})
+             |> json_response(400)
+  end
+
   test "repository quota failures return a protocol error without publishing a write", c do
     previous = Application.fetch_env(:atoll, :repository_quota)
 

@@ -208,7 +208,7 @@ Lexicon policy.
 Blob schema checks use the declared MIME type and size; the repository independently
 requires ownership and matching stored metadata. Profile images allow PNG/JPEG up
 to 1,000,000 bytes, while post image limits follow the pinned schemas. This does not
-inspect media contents or raise the local 5 MiB upload cap, even where a video
+decode media contents or raise the local 5 MiB upload cap, even where a video
 schema permits larger files. Language tags use well-formed BCP 47 syntax without
 registry lookup or canonicalization. Schema validation does not enforce extra
 application semantics such as whether a facet range matches the text's bytes.
@@ -408,7 +408,8 @@ inventory to assess transfer progress first.
 - [x] Docker MinIO integration tests for signed storage operations, access isolation, and failure handling.
 - [x] Authenticated `com.atproto.repo.uploadBlob` with bounded raw-body reads, transactional session rechecks, and per-IP rate limiting.
 - [x] Lexicon MIME and size constraints for supported post/profile blob fields.
-- [ ] Media-content sniffing and media validation for additional record Lexicons.
+- [x] Bounded signature-based MIME detection for common binary media uploads.
+- [ ] Full media decoding/validation and media constraints for custom record Lexicons.
 - [x] Atomic nested record-reference tracking, ownership/metadata checks on writes, and withdrawal when the last reference is removed.
 - [x] Public `com.atproto.sync.getBlob` and paginated `listBlobs`, with `since` filtering, repository status checks, and restrictive content headers.
 - [x] Authenticated `com.atproto.repo.listMissingBlobs` with account-scoped CID pagination and referencing record URIs.
@@ -465,9 +466,23 @@ Trusted internal callers can use:
 Atoll.Blobs.get_staged(did, cid)
 ```
 
-The first MIME declaration for an account/CID is retained on repeat staging;
+The first stored MIME type for an account/CID is retained on repeat staging;
 declarations must be concrete `type/subtype` values without parameters. Bytes
-are never transformed. MIME syntax validation does not inspect media contents.
+are never transformed. MIME declarations are normalized, then up to the first 512 bytes are inspected
+for known binary signatures before new metadata is stored. Recognized PNG, JPEG,
+GIF, WebP, BMP, ICO/CUR, ID3-tagged MP3, Ogg, MIDI, AIFF, WAVE, AVI, and MP4
+signatures override the declaration; other content keeps the normalized declared
+type. MP4 detection requires a complete initial `ftyp` box within that prefix and
+an aligned `mp4` brand. The signature tables follow the
+[WHATWG MIME Sniffing Standard](https://mimesniff.spec.whatwg.org/); this is not a
+complete browser sniffing implementation (for example, WebM and untagged MP3 are
+not detected). HTML/SVG/text are not inferred from content.
+
+Clients must use the returned descriptor's MIME type when creating records.
+Detection preserves bytes, CID, and size, works with PostgreSQL and S3, and keeps
+already-stored per-account/CID metadata stable on repeat uploads. Existing blobs
+are not reclassified. Signature matches do not prove that a file is decodable or
+safe; full media decoding and malware scanning are not implemented.
 Existing PostgreSQL blobs remain readable when S3 is selected. Moving existing
 S3 objects to another endpoint, bucket, or backend requires a separate migration;
 retain their original S3 configuration until that is complete.

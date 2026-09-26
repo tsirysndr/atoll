@@ -5,7 +5,8 @@ defmodule Atoll.Blobs do
   Bytes are content-addressed in PostgreSQL or S3-compatible object storage. Ownership and
   MIME metadata belong to each repository. Public access requires a current
   record reference with matching metadata and an active repository.
-  MIME validation checks syntax only, not file contents. The local size limit is
+  MIME declarations are normalized and common binary media signatures are detected.
+  Detection does not decode or validate complete media files. The local size limit is
   5 MiB per blob. Expiration and queued cleanup have an opt-in scheduler;
   account quotas include staged and referenced ownership across both backends.
   Streaming and discovery of untracked orphan objects remain pending.
@@ -47,7 +48,8 @@ defmodule Atoll.Blobs do
   defp stage_for_status(did, bytes, content_type, opts, allow_deactivated?)
        when is_binary(did) and is_binary(bytes) do
     with :ok <- size(bytes, Keyword.get(opts, :content_length)),
-         {:ok, mime} <- normalize_mime(content_type),
+         {:ok, declared_mime} <- normalize_mime(content_type),
+         mime = Atoll.Blobs.MimeSniffer.detect(bytes, declared_mime),
          {:ok, _} <- Repositories.get_head(did),
          cid = CID.create(bytes, :raw) do
       Repo.transaction(fn ->
@@ -79,7 +81,7 @@ defmodule Atoll.Blobs do
           conflict_target: [:did, :cid]
         )
 
-        # The first MIME declaration for this account/CID remains authoritative.
+        # The first stored MIME type for this account/CID remains authoritative.
         descriptor(Repo.get_by!(Blob, did: did, cid: cid))
       end)
     end

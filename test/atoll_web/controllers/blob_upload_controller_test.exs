@@ -231,8 +231,9 @@ defmodule AtollWeb.BlobUploadControllerTest do
     )
 
     {:ok, _} = Repositories.set_status(@did, :deactivated)
-    bytes = :crypto.strong_rand_bytes(4096)
+    bytes = <<137, "PNG", 13, 10, 26, 10>> <> :crypto.strong_rand_bytes(4096)
     blob = upload(c.conn, c.pair.access_jwt, bytes) |> json_response(200) |> Map.fetch!("blob")
+    assert blob["mimeType"] == "image/png"
     cid = CID.create(bytes, :raw)
     assert Repo.get_by!(Blob, did: @did, cid: cid).backend == :s3
     assert Storage.get_block(cid) == {:error, :not_found}

@@ -28,6 +28,15 @@ defmodule Atoll.BlobsTest do
     assert {:ok, _} = Blobs.stage(@did, "", "application/octet-stream", @pg)
   end
 
+  test "detected MIME metadata is stable across repeat declarations" do
+    bytes = <<137, "PNG", 13, 10, 26, 10, "signature fixture">>
+    assert {:ok, descriptor} = Blobs.stage(@did, bytes, "application/octet-stream", @pg)
+    assert descriptor["mimeType"] == "image/png"
+    assert {:ok, ^descriptor} = Blobs.stage(@did, bytes, "image/jpeg", @pg)
+    cid = CID.create(bytes, :raw)
+    assert {:ok, %{bytes: ^bytes, blob: ^descriptor}} = Blobs.get_staged(@did, cid, @pg)
+  end
+
   test "validation rejects oversized content, length mismatches and invalid MIME declarations" do
     assert Blobs.stage(@did, String.duplicate("x", 5 * 1024 * 1024 + 1), "text/plain", @pg) ==
              {:error, :blob_too_large}
