@@ -593,7 +593,8 @@ locking protects shared objects when collectors overlap.
 
 - [x] Full repository export via `com.atproto.sync.getRepo` (in-memory, 64 MiB archive limit).
 - [x] Incremental repository exports using `since`, backed by per-repository revision block sets; unknown revisions return a full snapshot.
-- [ ] Revision-history compaction and scalable block-reference indexing (block sets are currently retained indefinitely).
+- [x] Transactional per-repository block reference counts for quota/status inventory and garbage-collection lookups.
+- [ ] Revision-history compaction (revision block sets are currently retained indefinitely).
 - [x] `getLatestCommit`, `getRepoStatus`, and paginated `listRepos` sync endpoints with persistent repository status.
 - [x] `com.atproto.sync.getRecord` compact signed existence and absence proofs.
 - [x] `com.atproto.sync.getBlocks` for current and retained historical repository blocks (1–100 CIDs; repeated `cids` query parameters).
@@ -2510,3 +2511,33 @@ serializes concurrent pruning across instances, without leader election. Configu
 the same retention policy on every node; a shorter policy on any enabled node can
 prune history earlier. Aggregate pruning throughput grows with enabled instances.
 No retention worker was enabled against development data during implementation.
+
+
+### Retained block reference index
+
+Migration `20260926152913` adds `repository_block_refs`, with one row per distinct
+repository/CID pair and a count of retained revisions referencing that CID. It
+backfills from existing revision block arrays and installs a PostgreSQL trigger
+that updates counts on revision insertion, replacement, and deletion. Duplicate
+CIDs in one revision count once. Index changes commit or roll back with the revision,
+and deleting an account removes its reference rows without affecting other owners.
+
+Quota and account-status block inventories now use this index instead of expanding
+all retained revision arrays on each read. Garbage collection uses the global CID
+index to test retained ownership, while preserving the existing independent checks
+for current heads, revision commits, and current records. Quota byte accounting
+still reads the sizes of distinct stored blocks; it is not a constant-time counter.
+
+Revision arrays remain available for export and signed-tree membership verification.
+The derived index does not authorize public block access and does not replace
+cryptographic proof checks. No revisions are compacted or blocks deleted by this
+migration. Future compaction must also protect blocks needed by retained stream
+events before removing revision ownership.
+
+The migration locks revision writes while backfilling and installing the trigger;
+large histories require a planned migration window. Back up and restore the index
+and trigger together with revision tables. Application code must not mutate the
+index directly or disable its trigger. Downgrading drops the derived index and
+trigger while retaining the authoritative revision arrays. This improves ownership
+lookups and inventory scaling; full-history arrays and rebuilding the complete MST
+on writes remain scalability limitations.

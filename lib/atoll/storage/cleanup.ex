@@ -2,7 +2,7 @@ defmodule Atoll.Storage.Cleanup do
   @moduledoc "Bounded collection of old DAG-CBOR blocks not owned by any retained repository revision."
   import Ecto.Query
   alias Atoll.{Repo, Storage.Block}
-  alias Atoll.Repositories.{Events, Head, Record, Revision}
+  alias Atoll.Repositories.{BlockReference, Events, Head, Record, Revision}
 
   def prune(opts \\ []) do
     limit = Keyword.get(opts, :limit, 500)
@@ -33,8 +33,8 @@ defmodule Atoll.Storage.Cleanup do
         Events.lock!()
 
         history =
-          from r in Revision,
-            where: fragment("? @> ARRAY[?]::bytea[]", r.blocks, parent_as(:block).cid),
+          from r in BlockReference,
+            where: r.cid == parent_as(:block).cid,
             select: 1
 
         heads = from h in Head, where: h.head == parent_as(:block).cid, select: 1

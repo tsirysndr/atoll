@@ -4,7 +4,7 @@ defmodule Atoll.Accounts.Status do
   alias Atoll.{CID, Repo}
   alias Atoll.Accounts.Sessions
   alias Atoll.Blobs.{Blob, Reference}
-  alias Atoll.Repositories.{Record, Revision}
+  alias Atoll.Repositories.{BlockReference, Record}
   alias Atoll.Storage.Block
 
   def get(token) do
@@ -22,17 +22,12 @@ defmodule Atoll.Accounts.Status do
             {:error, reason} -> Repo.rollback(reason)
           end
 
-        retained =
-          from r in Revision,
-            where: r.did == ^head.did,
-            select: %{cid: fragment("unnest(?)", r.blocks)}
-
         block_count =
           Repo.one(
             from b in Block,
-              join: r in subquery(retained),
-              on: r.cid == b.cid,
-              select: count(b.cid, :distinct)
+              join: r in BlockReference,
+              on: r.cid == b.cid and r.did == ^head.did,
+              select: count(b.cid)
           )
 
         %{
