@@ -2,7 +2,7 @@
 
 An AT Protocol Personal Data Server (PDS), built with Elixir, Phoenix, and PostgreSQL. Work in progress.
 
-Atoll currently provides server metadata and verified block storage. Account hosting, signed repositories, and federation are not implemented yet.
+Atoll currently provides server metadata, verified block storage, and internal APIs for signed repositories. Account hosting and federation are not implemented yet.
 
 ## Feature checklist
 
@@ -41,7 +41,7 @@ Checked items are implemented in this repository. Unchecked items are remaining 
 - [x] ATProto JSON representations and conversion (`$link` and `$bytes`).
 - [x] Syntax validation of DIDs, handles, NSIDs, record keys, and restricted AT URIs.
 - [x] TID parsing, formatting, and generation after a supplied previous revision.
-- [ ] TID generation and monotonically increasing repository revisions.
+- [x] TID generation and monotonically increasing repository revisions under a database row lock.
 
 ### Block storage
 
@@ -67,12 +67,14 @@ record Lexicons or grant access to account data.
 - [x] P-256 and secp256k1 in-memory key generation, compact low-S signing, and signature verification.
 - [x] Version-3 commit signing and verification with expected-DID and schema checks.
 - [ ] Persistent repository signing keys and secure key lifecycle management.
-- [ ] Repository heads and atomic record, tree, and commit updates.
+- [x] PostgreSQL repository heads and atomic record, tree, and commit updates with optional head compare-and-swap.
+- [x] Internal record create, put, delete, and read operations with collection/type checks (not Lexicon validation).
 - [ ] Record reads and listing (`getRecord`, `listRecords`).
 - [ ] Record writes and deletion (`createRecord`, `putRecord`, `deleteRecord`, `applyWrites`).
 - [ ] Repository description (`com.atproto.repo.describeRepo`).
 - [x] In-memory CARv1 encoding and decoding with block verification and resource limits.
-- [ ] Repository CAR import and export integration, including streaming large transfers.
+- [x] Consistent repository CAR export through the internal storage API.
+- [ ] Repository CAR import and streaming large transfers.
 
 ### Identity, accounts, and authentication
 
