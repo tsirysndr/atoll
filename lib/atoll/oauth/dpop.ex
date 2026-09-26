@@ -11,6 +11,17 @@ defmodule Atoll.OAuth.DPoP do
   @max_age 300
   @clock_skew 30
 
+  @doc "Reads an untrusted nonce solely for subsequent nonce/signature verification."
+  def peek_nonce([proof]) when is_binary(proof) and byte_size(proof) <= @max_size do
+    with [_, payload, _] <- String.split(proof, "."),
+         {:ok, claims} <- object(payload),
+         nonce when is_binary(nonce) <- claims["nonce"],
+         do: {:ok, nonce},
+         else: (_ -> {:error, :use_dpop_nonce})
+  end
+
+  def peek_nonce(_), do: {:error, :invalid_dpop_proof}
+
   def verify(headers, method, url, opts \\ [])
 
   def verify([proof], method, url, opts)

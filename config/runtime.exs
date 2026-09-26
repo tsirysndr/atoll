@@ -1,6 +1,10 @@
 import Config
 
 config :atoll,
+       :oauth_nonce_secret,
+       Atoll.OAuth.Nonce.secret_from_env!(System.get_env("ATOLL_OAUTH_NONCE_SECRET"))
+
+config :atoll,
        :reserved_signing_key_limit,
        Atoll.Accounts.SigningKeyReservations.limit_from_env!(
          System.get_env("ATOLL_RESERVED_SIGNING_KEY_LIMIT")

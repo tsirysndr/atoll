@@ -385,7 +385,8 @@ mutation. Deletes and empty batches need no record schema, even with `validate: 
 - [x] Opt-in taken-down session scopes and owner-only repository/blob exports.
 - [x] App password creation, metadata listing, revocation, restricted sessions, and privileged service delegation.
 - [x] Internal ES256 DPoP signature, request, nonce, and access-token binding verification.
-- [ ] OAuth nonce issuance, atomic DPoP replay rejection, and authorization/resource server integration.
+- [x] Internal issuer/role-bound OAuth nonce issuance and PostgreSQL-shared atomic DPoP replay rejection.
+- [ ] OAuth nonce challenges and proof admission integrated into authorization/resource server routes.
 - [ ] ATProto OAuth authorization and resource server support.
 - [x] Live-session and repository ownership checks for blob uploads and single/batch record writes.
 - [x] Operator Basic authentication for repository/blob exports, including inactive accounts.
@@ -4369,8 +4370,9 @@ server-issued nonce. For protected-resource requests it must supply both the
 validated access token and its bound `jkt`; the verifier checks both the SHA-256
 `ath` and key binding. Token validity, account state, consent and scopes remain the
 caller's responsibility. Successful proof verification must be followed by atomic
-replay rejection before executing a request. Nonce issuance, replay storage, and
-OAuth route integration remain unfinished.
+replay rejection before executing a request. The internal `Atoll.OAuth.Proofs`
+guard below provides nonce validation and replay admission. OAuth route integration
+remains unfinished.
 
 Proofs are bounded to 8 KiB. The verifier rejects duplicate HTTP headers, duplicate
 JSON members (including nested JWK members), excessive JSON nesting, noncanonical
@@ -4390,3 +4392,38 @@ forwarding headers.
 The implementation follows the mandatory ES256 requirement in the
 [ATProto OAuth profile](https://atproto.com/specs/oauth) and the proof checks in
 [RFC 9449 §4.3](https://www.rfc-editor.org/rfc/rfc9449.html#section-4.3).
+
+### OAuth server nonces and shared replay protection
+
+`Atoll.OAuth.Nonce.issue/2` issues unpredictable, HMAC-authenticated nonces bound
+to the public issuer and the `:authorization` or `:resource` server role. Configure
+`ATOLL_OAUTH_NONCE_SECRET` with a base64-encoded random 32-byte secret; instances
+serving the same issuer must share this secret and PostgreSQL database. The default
+issuer is `AtollWeb.Endpoint.url()`. Nonces expire five minutes after issuance,
+with five seconds of tolerance for clocks ahead at issuance. Changing the secret
+invalidates outstanding nonces. Missing configuration fails closed when used;
+it does not prevent startup while OAuth endpoints remain unimplemented.
+
+`Atoll.OAuth.Proofs.verify/5` validates the nonce and signed proof, then atomically
+admits its issuer/role/key-thumbprint/proof-ID digest into PostgreSQL. It uses the
+database clock, checks expiry again after acquiring its shared admission lock,
+and retains each marker until its nonce expires. Different signatures or a fresh
+nonce cannot bypass a retained proof-ID marker. Resource proofs require both a
+validated access token and its bound key thumbprint. The guard stores neither
+proofs nor tokens, and does not establish account, client, consent, or scope
+authorization.
+
+Call this guard before the request's mutation transaction: admission commits
+independently so a later request rollback cannot restore a consumed proof. Calls
+inside an existing transaction are rejected. Storage is capped globally at
+100,000 markers, with at most 1,000 expired markers reclaimed per successful
+admission. Capacity exhaustion and database failures reject admission, with no
+memory or Redis fallback. Queries use one-second lock and five-second statement
+timeouts. The serialized admission lock and table count bound this initial
+implementation's throughput; idle expired markers remain until new admissions
+reclaim them.
+
+Tests cover nonce expiry and issuer/role separation, token binding, concurrent
+admission through independent database transactions, rollback behavior, replay
+with a fresh nonce, and capacity exhaustion/reclamation. HTTP nonce challenges,
+OAuth authorization flows, and resource-route integration remain pending.
