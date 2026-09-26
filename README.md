@@ -157,6 +157,7 @@ The same `validate: true` restriction applies to batch requests.
 - [x] Email-authorized account deletion with credential/key removal, blob cleanup, and a deleted-account event.
 - [x] Internal PLC operation signing, genesis DID derivation, and predecessor signature checks.
 - [x] Internal PLC genesis submission with bounded responses and exact latest-operation confirmation.
+- [x] Durable genesis registration journal and encrypted PLC rotation-key retention.
 - [ ] Fresh DID signup.
 - [x] Internal DID-scoped password credentials with salted Argon2id hashes, bounded input, redacted inspection, and duplicate protection.
 - [x] Shared configurable Cloudflare Worker email delivery client.
@@ -982,7 +983,7 @@ signature rejection. These primitives do not validate recovery windows or audit-
 nullification, and are not yet used for public signup.
 Persist a signed genesis operation before attempting registration: signing it again
 can produce different bytes and therefore a different DID. Full audit validation,
-durable registration delivery/reconciliation, and fresh-account provisioning remain pending.
+automatic registration retries and fresh-account provisioning remain pending.
 
 
 ### PLC directory submission
@@ -1002,4 +1003,32 @@ are rejected. No directory requests run at startup. Tests use a mock transport.
 
 The caller must persist and reuse the signed genesis before calling this client.
 It does not store operations, reserve handles, schedule retries, or create accounts.
-A registration ledger and signup integration remain pending.
+`Atoll.Identity.PLC.Registrations` supplies the internal durable journal described
+below. Public signup integration and automatic retries remain pending.
+
+
+### Durable PLC registration journal
+
+`Registrations.stage/3` stores the exact signed genesis and a retained rotation key
+inside the caller's account-provisioning transaction. It requires a deactivated
+repository, a matching profile handle and repository public key, and a recoverable
+repository signing key. Profile uniqueness reserves the handle and email. The
+operation is insert-only; repeated staging of the same operation and rotation key
+preserves the existing encryption envelope.
+
+Rotation keys use AES-256-GCM with `ATOLL_KEY_ENCRYPTION_KEY`, a distinct purpose
+label, and authenticated DID, operation CID, curve and public key. Private keys
+are never stored in plaintext. Database backups require the master key to recover
+both repository and PLC rotation keys. Rotation/master-key migration is pending.
+
+After committing, `Registrations.submit/2` loads the stored operation, checks both
+keys remain recoverable, and uses the directory client. It rejects calls inside a
+repository transaction. Failed requests leave the journal available for an exact
+retry; confirmed submissions retain the first confirmation timestamp. Confirmation
+never activates an account or issues sessions, and is historical acceptance evidence,
+not a substitute for checking current identity state. Account deletion cascades to
+the local journal and encrypted rotation key; it does not tombstone the public DID.
+
+These APIs are internal and do not authorize callers. No registration scheduler or
+public fresh-signup route invokes them yet. No live PLC registrations are performed
+by the tests, migrations, or startup.
