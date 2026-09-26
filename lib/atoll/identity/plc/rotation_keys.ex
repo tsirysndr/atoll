@@ -32,46 +32,60 @@ defmodule Atoll.Identity.PLC.RotationKeys do
         if Repo.exists?(from u in Update, where: u.did == ^did and is_nil(u.completed_at)),
           do: Repo.rollback(:plc_update_pending)
 
-        case Repo.get(RotationKey, did, log: false) do
-          nil ->
-            if expected != :absent, do: Repo.rollback(:key_not_found)
+        before_key = Repo.get(RotationKey, did, log: false)
 
-            row = %RotationKey{
-              did: did,
-              curve: key.curve,
-              public_key: key.public,
-              verified_cid: state.cid
-            }
+        result =
+          case before_key do
+            nil ->
+              if expected != :absent, do: Repo.rollback(:key_not_found)
 
-            Repo.insert!(%{row | envelope: encrypt(row, key.private, master)}, log: false)
-            :installed
+              row = %RotationKey{
+                did: did,
+                curve: key.curve,
+                public_key: key.public,
+                verified_cid: state.cid
+              }
 
-          row when expected != :absent ->
-            {:ok, current} = Multikey.to_did_key(row.curve, row.public_key)
-            unless current == expected, do: Repo.rollback(:stale_rotation_key)
-            updated = %{row | curve: key.curve, public_key: key.public, verified_cid: state.cid}
+              Repo.insert!(%{row | envelope: encrypt(row, key.private, master)}, log: false)
+              :installed
 
-            row
-            |> Ecto.Changeset.change(
-              curve: key.curve,
-              public_key: key.public,
-              verified_cid: state.cid,
-              envelope: encrypt(updated, key.private, master)
-            )
-            |> Repo.update!(log: false)
+            row when expected != :absent ->
+              {:ok, current} = Multikey.to_did_key(row.curve, row.public_key)
+              unless current == expected, do: Repo.rollback(:stale_rotation_key)
+              updated = %{row | curve: key.curve, public_key: key.public, verified_cid: state.cid}
 
-            :replaced
+              row
+              |> Ecto.Changeset.change(
+                curve: key.curve,
+                public_key: key.public,
+                verified_cid: state.cid,
+                envelope: encrypt(updated, key.private, master)
+              )
+              |> Repo.update!(log: false)
 
-          %{curve: curve, public_key: public} = row
-          when curve == key.curve and public == key.public ->
-            case decrypt(row, master) do
-              {:ok, _} -> :unchanged
-              {:error, reason} -> Repo.rollback(reason)
-            end
+              :replaced
 
-          _ ->
-            Repo.rollback(:rotation_key_exists)
-        end
+            %{curve: curve, public_key: public} = row
+            when curve == key.curve and public == key.public ->
+              case decrypt(row, master) do
+                {:ok, _} -> :unchanged
+                {:error, reason} -> Repo.rollback(reason)
+              end
+
+            _ ->
+              Repo.rollback(:rotation_key_exists)
+          end
+
+        Atoll.Moderation.Audit.rotation_key!(
+          did,
+          expected,
+          state.cid,
+          before_key,
+          Repo.get!(RotationKey, did, log: false),
+          result
+        )
+
+        result
       end)
     else
       true -> {:error, :plc_update_inside_transaction}

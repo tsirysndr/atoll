@@ -727,6 +727,7 @@ observations do not produce duplicate events. The
 - [x] Transactional audit history for operator invite-code issuance and revocation, without redeemable codes.
 - [x] Audited operator account deletion with durable shared-safe blob cleanup.
 - [x] Operator account messages through the configurable email Worker, with attempt/outcome history.
+- [x] Atomic operator audit entries for PLC key installation, replacement, and unchanged retries, without private-key material.
 - [ ] Remaining administrative account controls and audit coverage for other operator actions.
 - [ ] Production configuration, HTTPS deployment, and signing-key protection.
 - [ ] Database and blob backup / restore workflow.
@@ -2922,3 +2923,21 @@ private key and expected public key. It does not recover a lost private key. Sig
 registration evidence and its original envelope remain intact; the installed key
 continues to take precedence. Replacement uses the active encryption master key.
 Directory recovery operations and repository signing-key transitions remain pending.
+
+
+### Rotation-key custody audit
+
+Operator key installation and explicit replacement now append an audit entry in
+the same database transaction as the key operation. Entries identify the account,
+operation, expected public key when replacing, freshly observed directory operation
+CID, result, and public before/after key metadata. Unchanged installation retries
+are recorded too. Failed authorization, stale expected keys, and pending-update
+rejections do not create successful-change entries. An audit insertion failure rolls
+back the key mutation.
+
+The actor is `operator`, distinct from shared HTTP `admin` credentials; it identifies
+the local operator path, not an individually authenticated person. Entries never
+include private scalars, encrypted envelopes, master keys, or key-file contents.
+They remain in the private operator audit history after account deletion. As with
+other audit entries, this is application-level history, not a tamper-proof database
+ledger or a record of directory key rotation.

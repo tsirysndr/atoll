@@ -4,6 +4,33 @@ defmodule Atoll.Moderation.Audit do
   alias Atoll.{Repo, Syntax}
   alias Atoll.Moderation.AuditEntry
 
+  @doc "Records local operator key custody changes using public metadata only."
+  def rotation_key!(did, expected, observed_cid, before_key, after_key, result) do
+    insert!(
+      if(expected == :absent,
+        do: "atoll.plc.installRotationKey",
+        else: "atoll.plc.replaceRotationKey"
+      ),
+      did,
+      %{kind: "plcRotationKey", did: did},
+      %{
+        expectedKey: if(expected == :absent, do: nil, else: expected),
+        observedOperationCid: observed_cid,
+        result: Atom.to_string(result)
+      },
+      rotation_key_state(before_key),
+      rotation_key_state(after_key),
+      "operator"
+    )
+  end
+
+  defp rotation_key_state(nil), do: %{installed: false}
+
+  defp rotation_key_state(row) do
+    {:ok, key} = Atoll.Multikey.to_did_key(row.curve, row.public_key)
+    %{installed: true, key: key, verifiedOperationCid: row.verified_cid}
+  end
+
   @doc "Records operator invite actions; server-wide actions have no account DID."
   def invite_codes!(operation, did, requested, before_state, after_state) do
     insert!(operation, did, %{kind: "inviteCodes"}, requested, before_state, after_state)
@@ -116,7 +143,7 @@ defmodule Atoll.Moderation.Audit do
     }
   end
 
-  defp insert!(operation, did, subject, requested, before_state, after_state) do
+  defp insert!(operation, did, subject, requested, before_state, after_state, actor \\ "admin") do
     unless Repo.in_transaction?(),
       do: raise(ArgumentError, "moderation audit requires a transaction")
 
@@ -126,7 +153,7 @@ defmodule Atoll.Moderation.Audit do
       %AuditEntry{
         did: did,
         subject: subject,
-        actor: "admin",
+        actor: actor,
         operation: operation,
         requested: requested,
         before_state: before_state,

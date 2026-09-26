@@ -183,6 +183,51 @@ defmodule Atoll.PLCRotationKeysTest do
     assert Repo.get!(RotationKey, ctx.did) == row
   end
 
+  test "operator audit records public before/after state including retries and survives account deletion" do
+    ctx = account(:p256)
+    directory(ctx)
+    {:ok, old_key} = Multikey.to_did_key(ctx.rotation.curve, ctx.rotation.public)
+    {:ok, new_key} = Multikey.to_did_key(ctx.repository.curve, ctx.repository.public)
+    assert {:ok, :installed} = install(ctx, ctx.rotation)
+    original = Repo.get!(RotationKey, ctx.did)
+    assert {:ok, :unchanged} = install(ctx, ctx.rotation)
+
+    assert {:ok, :replaced} =
+             RotationKeys.replace(ctx.did, old_key, ctx.repository, plug: {Req.Test, __MODULE__})
+
+    assert {:error, :stale_rotation_key} =
+             RotationKeys.replace(ctx.did, old_key, ctx.rotation, plug: {Req.Test, __MODULE__})
+
+    rows = Repo.all(from a in Atoll.Moderation.AuditEntry, order_by: a.id)
+    assert length(rows) == 3
+    [installed, unchanged, replaced] = rows
+    assert Enum.all?(rows, &(&1.actor == "operator" and &1.did == ctx.did))
+    assert installed.operation == "atoll.plc.installRotationKey"
+    assert installed.before_state == %{"installed" => false}
+    assert installed.after_state["key"] == old_key
+    assert unchanged.before_state == unchanged.after_state
+    assert unchanged.requested["result"] == "unchanged"
+    assert replaced.operation == "atoll.plc.replaceRotationKey"
+    assert replaced.requested["expectedKey"] == old_key
+    assert replaced.before_state["key"] == old_key
+    assert replaced.after_state["key"] == new_key
+
+    metadata =
+      Jason.encode!(
+        Enum.map(rows, &Map.take(&1, [:subject, :requested, :before_state, :after_state]))
+      )
+
+    for secret <- [ctx.rotation.private, ctx.repository.private, original.envelope] do
+      refute metadata =~ Base.encode64(secret)
+      refute metadata =~ Base.url_encode64(secret, padding: false)
+    end
+
+    refute metadata =~ "envelope"
+    refute metadata =~ "privateKey"
+    Repo.delete!(Repo.get!(Head, ctx.did))
+    assert Repo.aggregate(Atoll.Moderation.AuditEntry, :count) == 3
+  end
+
   defp install(ctx, key), do: RotationKeys.install(ctx.did, key, plug: {Req.Test, __MODULE__})
 
   defp account(curve) do
