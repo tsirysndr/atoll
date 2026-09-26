@@ -14,6 +14,12 @@ defmodule Atoll.OAuth.PAR do
   @scopes ~w(atproto transition:generic transition:chat.bsky transition:email)
   @lock 4_182_026_052
 
+  @doc false
+  def lock! do
+    unless Repo.in_transaction?(), do: raise(ArgumentError, "PAR lock requires a transaction")
+    Repo.query!("SELECT pg_advisory_xact_lock($1)", [@lock])
+  end
+
   def push(params, headers, opts \\ []) do
     issuer = Keyword.get(opts, :issuer, AtollWeb.Endpoint.url())
 
@@ -136,7 +142,7 @@ defmodule Atoll.OAuth.PAR do
     Repo.transaction(fn ->
       Repo.query!("SET LOCAL lock_timeout = '1s'")
       Repo.query!("SET LOCAL statement_timeout = '5s'")
-      Repo.query!("SELECT pg_advisory_xact_lock($1)", [@lock])
+      lock!()
 
       %{rows: [[now]]} =
         Repo.query!("SELECT floor(extract(epoch FROM clock_timestamp()))::bigint")

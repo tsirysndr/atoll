@@ -391,7 +391,8 @@ mutation. Deletes and empty batches need no record schema, even with `validate: 
 - [x] Internal ES256 JWT client assertions, supplied session-key binding checks, and PostgreSQL-shared assertion replay rejection.
 - [x] Internal S256 PKCE verification and pushed authorization admission with bound client/DPoP keys, short-lived references, and 24-hour challenge reuse prevention.
 - [x] `POST /oauth/par` with strict form parsing, pre-parser rate limits, DPoP nonce challenges, and browser CORS.
-- [ ] Authorization/consent flow and one-use conversion of pushed requests into authorization codes.
+- [x] Internal account-authorized approval/denial with atomic pushed-request consumption and bound authorization-code issuance.
+- [ ] Browser authorization/consent flow and one-use authorization-code redemption into OAuth sessions/tokens.
 - [ ] OAuth session binding persistence/revocation and localhost virtual client metadata.
 - [ ] OAuth nonce challenges and proof admission integrated into remaining authorization/resource server routes.
 - [ ] ATProto OAuth authorization and resource server support.
@@ -4578,8 +4579,8 @@ keys (`kid`, `alg`, `jkt`).
 
 `PAR.get/3` retrieves an unexpired request only for its original client and issuer.
 This read does not consume the request, establish consent, or issue a grant. A
-future authorization flow must atomically consume it during code issuance and
-enforce its stored parameters and bindings. Request expiry does not free its
+decision service below atomically consumes it during code issuance and preserves
+its stored parameters and bindings. The browser flow is still pending. Request expiry does not free its
 challenge reservation, and another client of the same issuer cannot reuse that
 challenge during the reservation period.
 
@@ -4596,7 +4597,7 @@ proofs. Calls inside a caller transaction are rejected.
 Tests cover both client types, key binding, client/issuer isolation, expiry,
 challenge reuse across clients, concurrent reservations, storage capacity, and
 bounded reclamation. The HTTP adapter below exposes PAR admission. Browser
-authorization and consent, one-use code issuance, and token exchange remain
+authorization and consent, code redemption, and token exchange remain
 unfinished. Protocol references:
 [PKCE (RFC 7636)](https://www.rfc-editor.org/rfc/rfc7636.html) and
 [PAR (RFC 9126)](https://datatracker.ietf.org/doc/html/rfc9126).
@@ -4607,7 +4608,7 @@ unfinished. Protocol references:
 and returns HTTP 201 with `request_uri` and `expires_in` after successful admission.
 Configure `ATOLL_OAUTH_NONCE_SECRET` as described above; without it this route
 returns HTTP 503 `temporarily_unavailable`. No complete OAuth server is advertised:
-discovery, browser authorization/consent, code issuance, and token routes still
+discovery, browser authorization/consent, code redemption, and token routes still
 need implementation, so the returned reference cannot yet complete a login.
 
 The boundary runs before general body parsing, method rewriting, and Phoenix
@@ -4636,3 +4637,50 @@ with `content-type` and `dpop`, and expose `dpop-nonce`/`retry-after`. OAuth err
 use the `error` field without reflecting assertion data or internal error details.
 Phoenix parameter filtering also covers assertions, verifiers, request references,
 state, and login hints for subsequent OAuth routes.
+
+### Account approval and pending authorization codes
+
+`Atoll.OAuth.AuthorizationCodes.decide/5` takes a full account access token,
+client ID, pushed-request URI, explicit `:deny` or `{:approve, granted_scope}`
+decision, and trusted options. It requires a live full-password session for an
+active account; app-password sessions, deactivated accounts, revoked sessions,
+and pending signups cannot approve. The future browser adapter must establish
+CSRF-protected, explicit user consent before invoking it. Login hints and client
+assertions never stand in for account authorization.
+
+Approval may narrow the originally requested scope but cannot add scopes or
+omit `atproto`; transitional chat scope still requires generic scope. Client
+metadata and confidential keys are refreshed before committing approval. The
+original callback and granted scopes must still be declared, public clients must
+remain public, and confidential clients must retain the same `kid`/`alg`/`jkt`.
+Denial requires account authorization but no client network lookup and returns
+`access_denied` for the original callback/state/issuer.
+
+Account and session locks are acquired before the shared PAR lock. After network
+retrieval and again after waiting for the PAR lock, authorization is rechecked;
+the request must still be unexpired and match the reviewed snapshot. Approval
+atomically deletes the request and inserts a random 256-bit code's SHA-256 digest.
+Denial deletes it without issuing a code. Concurrent decisions can consume it
+only once. Errors, including code-capacity exhaustion, leave the request available
+while its original lifetime permits. Its 24-hour PKCE reservation is retained.
+
+Pending codes expire after two minutes and retain the account DID, issuer,
+client ID, exact redirect, granted scope, PKCE challenge, DPoP key, any confidential
+client key binding, and whether the refreshed client declaration allows refresh
+tokens. Plaintext codes are returned only to the caller; they are not stored.
+The response also returns the original callback, state, and issuer for the future
+browser redirect adapter. Foreign keys remove pending codes when the account or
+authorizing password session is deleted, including session revocation/recovery.
+
+Code storage is capped at 10,000 rows globally under the PAR lock, reclaiming at
+most 1,000 expired rows per successful approval. SQL lock/statement timeouts are
+one/five seconds; database errors fail closed. Nested caller transactions are
+rejected so client metadata retrieval never occurs inside the commit transaction.
+Tests cover scope narrowing, account/session restrictions, changed client policy
+and keys, revocation during metadata retrieval, expiry, capacity rollback, and
+concurrent decisions through independent database connections.
+
+This service does not render login/consent or redeem codes. The next exchange
+layer must verify PKCE, DPoP, client and redirect bindings, redeem each code once,
+and revoke resulting sessions on detected code reuse. Browser consent, that
+exchange layer, OAuth session lifecycle, and token endpoints remain unfinished.
