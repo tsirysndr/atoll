@@ -66,6 +66,20 @@ defmodule Atoll.Accounts.Sessions do
     end
   end
 
+  @doc "Read-only account status authorization; accepts inactive repositories without granting write access."
+  def authenticate_status(token) do
+    with {:ok, claims} <- Tokens.verify(token, :access) do
+      Repo.transaction(fn ->
+        head =
+          Repo.one(from h in Head, where: h.did == ^claims["sub"], lock: "FOR SHARE") ||
+            Repo.rollback(:invalid_token)
+
+        session!(claims, [], false)
+        head
+      end)
+    end
+  end
+
   @doc "Revokes a session with its current refresh token, even while the repository is inactive."
   def revoke(token, opts \\ []) do
     with {:ok, claims} <- Tokens.verify(token, :refresh, opts) do

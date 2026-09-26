@@ -7,7 +7,11 @@ defmodule AtollWeb.SessionRequestPlug do
     @prefix <> "refreshSession",
     @prefix <> "deleteSession"
   ]
-  @queries [@prefix <> "getSession", "/xrpc/com.atproto.repo.listMissingBlobs"]
+  @queries [
+    @prefix <> "getSession",
+    @prefix <> "checkAccountStatus",
+    "/xrpc/com.atproto.repo.listMissingBlobs"
+  ]
   @parser Plug.Parsers.init(
             parsers: [:json],
             json_decoder: Jason,

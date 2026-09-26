@@ -19,6 +19,13 @@ defmodule AtollWeb.SessionController do
     end
   end
 
+  def status(conn, _params) do
+    with {:ok, token} <- bearer(conn),
+         {:ok, status} <- Atoll.Accounts.Status.get(token) do
+      json(conn, status)
+    end
+  end
+
   def refresh(conn, _params) do
     with {:ok, token} <- bearer(conn),
          {:ok, pair} <- Sessions.refresh(token) do

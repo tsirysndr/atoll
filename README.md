@@ -160,6 +160,7 @@ The same `validate: true` restriction applies to batch requests.
 - [x] Live-session and repository ownership checks for blob uploads and single/batch record writes.
 - [ ] Authorization for remaining account and repository operations.
 - [ ] Account migration, identity updates, and signing-key lifecycle.
+- [x] Authenticated `com.atproto.server.checkAccountStatus` with repository/blob inventory and DID service/key checks.
 
 `Atoll.Accounts.Credentials.create/2` is a trusted internal operation that attaches
 a password to an existing repository DID. It never replaces an existing credential.
@@ -231,7 +232,8 @@ remain valid until expiration or revocation. Revocation invalidates all access
 tokens for that session through the required database check.
 
 Creation, access verification, and refresh currently require an active repository;
-revocation is also allowed for inactive repositories. Sessions survive process
+revocation and read-only `checkAccountStatus` are also allowed for inactive repositories.
+Other authenticated operations still require an active repository. Sessions survive process
 restarts. Changing the signing key invalidates existing tokens. Key rotation with
 overlap, expired-session cleanup, session-count limits, and restricted sessions for
 inactive accounts remain pending. Write handlers recheck authorization inside the
@@ -509,6 +511,20 @@ scan; missing or corrupted backend objects require separate operational checks.
 It currently requires an active account and shares the session endpoint's
 300-request per-IP, per-five-minute limit. Pagination reflects current state
 rather than a snapshot across requests.
+
+`GET /xrpc/com.atproto.server.checkAccountStatus` accepts an existing access token,
+including for inactive accounts, and reports activation, current commit/revision,
+stored blocks referenced by retained repository revisions, current record count,
+distinct referenced blob CIDs, and account-owned blob count (including staged
+uploads). Counts describe database inventory, not backend byte integrity.
+`privateStateValues` is zero because private application state is not implemented.
+`validDid` checks the resolved signing key against the pinned repository key and
+the DID's PDS endpoint against Phoenix's configured public endpoint URL. Resolution
+failure returns `validDid: false`. PLC operation-log/rotation-key authority and
+private-key availability are not checked. Remote resolution runs before inventory
+locks; the session is checked again before returning account data. This endpoint
+shares the session query rate limit and does not grant inactive accounts write,
+import, upload, refresh, or new-login access.
 
 ### Validation
 

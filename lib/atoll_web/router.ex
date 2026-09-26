@@ -25,6 +25,7 @@ defmodule AtollWeb.Router do
     get "/com.atproto.server.describeServer", ServerController, :describe
     post "/com.atproto.server.createSession", SessionController, :create
     get "/com.atproto.server.getSession", SessionController, :show
+    get "/com.atproto.server.checkAccountStatus", SessionController, :status
     post "/com.atproto.server.refreshSession", SessionController, :refresh
     post "/com.atproto.server.deleteSession", SessionController, :delete
     get "/com.atproto.identity.resolveHandle", IdentityController, :resolve_handle
