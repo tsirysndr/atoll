@@ -4,8 +4,83 @@ defmodule Atoll.Identity.HandleChanges do
   alias Atoll.{Multikey, Repo, Syntax}
   alias Atoll.Accounts.{Profile, Sessions, Signup}
   alias Atoll.Identity.{Handle, HandleReservation, Resolver}
-  alias Atoll.Identity.PLC.{AuditLog, Client, Operation, Update, Updates}
+  alias Atoll.Identity.PLC.{AuditLog, Client, Operation, Registrations, Update, Updates}
   alias Atoll.Repositories.{Events, Head}
+
+  def update(token, params, opts \\ [])
+
+  def update(token, %{"handle" => handle} = params, opts) when map_size(params) == 1 do
+    with false <- Repo.in_transaction?(),
+         {:ok, head} <- Sessions.authenticate_management(token),
+         :ok <- active(head),
+         {:ok, handle} <- normalize(handle),
+         %Profile{} <- Repo.get(Profile, head.did),
+         {:ok, result} <- prepare_update(token, head, handle, opts) do
+      case result do
+        :unchanged ->
+          {:ok, %{did: head.did, handle: handle}}
+
+        %{cid: cid} ->
+          with {:ok, fresh} <- Sessions.authenticate_management(token),
+               :ok <- active(fresh),
+               {:ok, _} <- Updates.submit(head.did, cid, Keyword.take(opts, [:plug])),
+               do: complete(token, cid, opts)
+      end
+    else
+      true -> {:error, :plc_update_inside_transaction}
+      nil -> {:error, :account_not_found}
+      error -> error
+    end
+  end
+
+  def update(_, _, _), do: {:error, :invalid_request}
+
+  defp prepare_update(token, head, handle, opts) do
+    case Repo.get_by(HandleReservation, did: head.did) do
+      %{handle: ^handle, cid: cid} -> {:ok, %{cid: cid}}
+      %HandleReservation{} -> {:error, :plc_update_pending}
+      nil -> new_update(token, head, handle, opts)
+    end
+  end
+
+  defp new_update(token, head, handle, opts) do
+    with {:ok, %{entries: audit, state: state}} <-
+           Client.fetch_audit(head.did, Keyword.take(opts, [:plug])),
+         :ok <- forward_claim(handle, head.did, opts) do
+      unsigned =
+        state.operation
+        |> Map.delete("sig")
+        |> Map.put("prev", state.cid)
+        |> Map.put("alsoKnownAs", ["at://" <> handle])
+
+      with :ok <- handle_only(state, unsigned, handle, head) do
+        if state.operation["alsoKnownAs"] == ["at://" <> handle] and
+             match?(%Profile{handle: ^handle}, Repo.get(Profile, head.did)) do
+          Repo.transaction(fn ->
+            Events.lock!()
+
+            current =
+              Repo.one(from h in Head, where: h.did == ^head.did, lock: "FOR UPDATE") ||
+                Repo.rollback(:account_not_found)
+
+            unwrap!(Sessions.authenticate_management(token))
+            check!(active(current))
+            check!(handle_only(state, unsigned, handle, current))
+
+            unless match?(%Profile{handle: ^handle}, Repo.get(Profile, head.did)) and
+                     is_nil(Repo.get_by(HandleReservation, did: head.did)),
+                   do: Repo.rollback(:plc_update_pending)
+
+            :unchanged
+          end)
+        else
+          with {:ok, rotation} <- Registrations.rotation_key(head.did),
+               {:ok, operation} <- Operation.sign(unsigned, rotation),
+               do: stage(token, handle, audit, operation, opts)
+        end
+      end
+    end
+  end
 
   @doc "Checks current names and pending reservations; mutations must hold the Events lock."
   def claimed?(handle) do

@@ -3,6 +3,7 @@ defmodule AtollWeb.SessionRequestPlug do
   import Plug.Conn
   @prefix "/xrpc/com.atproto.server."
   @procedures [
+    "/xrpc/com.atproto.identity.updateHandle",
     "/xrpc/com.atproto.identity.refreshIdentity",
     @prefix <> "requestAccountDelete",
     @prefix <> "deleteAccount",
@@ -67,6 +68,7 @@ defmodule AtollWeb.SessionRequestPlug do
             {:identity_resolution, 60}
 
           path in [
+            "/xrpc/com.atproto.identity.updateHandle",
             "/xrpc/com.atproto.identity.refreshIdentity",
             @prefix <> "createSession",
             @prefix <> "createAccount",
@@ -98,6 +100,7 @@ defmodule AtollWeb.SessionRequestPlug do
 
   defp parse(conn, path)
        when path in [
+              "/xrpc/com.atproto.identity.updateHandle",
               "/xrpc/com.atproto.identity.refreshIdentity",
               @prefix <> "createSession",
               @prefix <> "createAccount",

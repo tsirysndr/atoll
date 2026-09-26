@@ -121,6 +121,27 @@ defmodule AtollWeb.XRPCFallback do
   def call(conn, {:error, :account_exists}),
     do: error(conn, 400, "InvalidRequest", "Account already exists.")
 
+  def call(conn, {:error, reason}) when reason in [:invalid_handle, :invalid_handle_update],
+    do: error(conn, 400, "InvalidRequest", "Invalid handle or incompatible identity state.")
+
+  def call(conn, {:error, reason}) when reason in [:plc_update_pending, :plc_update_completed],
+    do:
+      error(
+        conn,
+        409,
+        "InvalidRequest",
+        "An identity update requires reconciliation; retry its original handle."
+      )
+
+  def call(conn, {:error, reason})
+      when reason in [
+             :registration_not_found,
+             :key_decryption_failed,
+             :invalid_plc_log,
+             :plc_update_not_found
+           ],
+      do: error(conn, 503, "ServiceUnavailable", "Unable to update the account identity.")
+
   def call(conn, {:error, :handle_not_available}),
     do: error(conn, 400, "HandleNotAvailable", "Handle is already in use.")
 

@@ -299,7 +299,8 @@ mutation. Deletes and empty batches need no record schema, even with `validate: 
 - [x] HTTPS handle-resolution redirects with per-hop address validation and bounded hops.
 - [x] Bounded positive handle caching with forced refresh for authorization and identity updates.
 - [x] Internal full-session handle-change staging, durable reservations, and verified atomic completion.
-- [ ] Public handle-update endpoint and automatic operation signing.
+- [x] `com.atproto.identity.updateHandle` for hosted/custom handles on modern PLC accounts with a retained authorized rotation key.
+- [ ] Handle changes for legacy PLC/did:web identities and external-signing/recovery workflows.
 - [x] Authenticated account activation and deactivation with atomic status events.
 - [x] Service-authenticated `createAccount` for migration of an existing DID.
 - [x] Authenticated recommended DID credentials for the destination signing key and service.
@@ -2689,6 +2690,35 @@ reconciliation. Account deletion cascades reservations; it does not undo public 
 history. Existing resolver caches can retain old observations until their configured
 TTL; authorization lookups force refresh.
 
-These are internal workflow functions, not new HTTP endpoints. Public request
-orchestration, signing with the retained rotation key, and conflict recovery still
-need implementation. No real directory updates were submitted during tests.
+The public `updateHandle` procedure now orchestrates these functions and signs with
+the retained rotation key. Conflict recovery and other DID mutation workflows remain
+pending. No real directory updates were submitted during tests.
+
+
+### Public handle updates
+
+`POST /xrpc/com.atproto.identity.updateHandle` accepts a full active-account access
+token and JSON `{"handle":"new.example.com"}`. Success returns HTTP 200 with an
+empty body, following the [endpoint Lexicon](https://github.com/bluesky-social/atproto/blob/7a857989751ae31518509d69ab7194a922064f3d/lexicons/com/atproto/identity/updateHandle.json).
+Names are normalized to lowercase. Requests have a 4 KiB JSON limit and share the
+20-per-five-minute login/identity-mutation IP budget. App-password sessions are denied.
+
+New changes obtain fresh verified PLC history, verify local hosting/key continuity,
+sign with the encrypted retained rotation key, reserve the name and signed operation,
+submit, then perform the fresh completion checks described above. The retained key
+must still be authorized by the directory's current rotation-key list. Custom handles
+must resolve forward to this DID both before staging and before completion. Hosted
+handles use the advertised server domains. The old hosted name stops resolving when
+the new profile is committed.
+
+After a timeout or HTTP 503, retry the same handle: the reservation selects the exact
+persisted signed operation instead of creating a new signature. A different requested
+handle while one is pending returns HTTP 409. Repeating an already completed current
+handle checks fresh directory state and is a no-op, with no extra directory POST or
+identity event. A directory conflict leaves local state pending for reconciliation.
+
+This supports modern PLC accounts whose rotation key is retained by Atoll. Legacy
+PLC predecessors, did:web changes, and accounts needing external signing or recovery
+remain unsupported. Current configured directory/key availability is required;
+local confirmation history never substitutes for fresh completion checks. No live
+PLC writes are exercised by the test suite.

@@ -1,6 +1,19 @@
 defmodule AtollWeb.IdentityController do
   use AtollWeb, :controller
 
+  def update_handle(conn, params) do
+    opts =
+      Application.get_env(:atoll, :identity_resolution_options, [])
+      |> Keyword.merge(Application.get_env(:atoll, :plc_submission_options, []))
+
+    with {:ok, token} <- AtollWeb.BearerToken.get(conn),
+         {:ok, _} <- Atoll.Identity.HandleChanges.update(token, params, opts) do
+      send_resp(conn, 200, "")
+    else
+      error -> AtollWeb.XRPCFallback.call(conn, error)
+    end
+  end
+
   def refresh(conn, params) do
     opts = Application.get_env(:atoll, :identity_resolution_options, [])
 
