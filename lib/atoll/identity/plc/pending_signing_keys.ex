@@ -9,15 +9,27 @@ defmodule Atoll.Identity.PLC.PendingSigningKeys do
   import Ecto.Query
   alias Atoll.{CBOR, KeyVault, MasterKeys, Multikey, Repo, SigningKey}
   alias Atoll.Repositories.{Events, Head}
-  alias Atoll.Identity.PLC.{Operation, Update, Updates}
+  alias Atoll.Identity.PLC.{Operation, Recoveries, Update, Updates}
 
-  def stage(did, audit, operation, expected, %SigningKey{} = key) when is_map(operation) do
+  def stage(did, audit, operation, expected, key),
+    do: stage_key(did, audit, operation, expected, key, :ordinary)
+
+  @doc """
+  Stage supplied repository-key custody with a verified recovery fork. Unlike
+  ordinary rotation, the old envelope need not be readable and same-key repair
+  is allowed. The caller authorizes recovery and supplies fresh audit evidence.
+  """
+  def stage_recovery(did, audit, operation, expected, key, now \\ DateTime.utc_now()),
+    do: stage_key(did, audit, operation, expected, key, {:recovery, now})
+
+  defp stage_key(did, audit, operation, expected, %SigningKey{} = key, mode)
+       when is_map(operation) do
     with {:ok, master} <- MasterKeys.active(),
          {:ok, _} <- Multikey.from_did_key(expected),
          {:ok, derived} <- SigningKey.from_private(key.curve, key.private),
          true <- derived.public == key.public,
          {:ok, public} <- Multikey.to_did_key(key.curve, key.public),
-         true <- public != expected,
+         true <- mode != :ordinary or public != expected,
          true <- get_in(operation, ["verificationMethods", "atproto"]) == public,
          {:ok, cid} <- Operation.cid(operation) do
       Repo.transaction(fn ->
@@ -27,12 +39,20 @@ defmodule Atoll.Identity.PLC.PendingSigningKeys do
         unless Multikey.to_did_key(head.curve, head.public_key) == {:ok, expected},
           do: Repo.rollback(:stale_signing_key)
 
-        case KeyVault.fetch(did) do
-          {:ok, _} -> :ok
-          {:error, reason} -> Repo.rollback(reason)
+        if mode == :ordinary do
+          case KeyVault.fetch(did) do
+            {:ok, _} -> :ok
+            {:error, reason} -> Repo.rollback(reason)
+          end
         end
 
-        case Updates.stage(did, audit, operation) do
+        journal =
+          case mode do
+            :ordinary -> Updates.stage(did, audit, operation)
+            {:recovery, now} -> Recoveries.stage(did, audit, operation, now)
+          end
+
+        case journal do
           {:ok, _} -> :ok
           {:error, reason} -> Repo.rollback(reason)
         end
@@ -83,7 +103,7 @@ defmodule Atoll.Identity.PLC.PendingSigningKeys do
     end
   end
 
-  def stage(_, _, _, _, _), do: {:error, :invalid_key}
+  defp stage_key(_, _, _, _, _, _), do: {:error, :invalid_key}
 
   def fetch(did, cid) do
     with {:ok, master} <- MasterKeys.active() do

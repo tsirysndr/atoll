@@ -146,7 +146,8 @@ record Lexicons or grant access to account data.
 - [x] Internal durable recovery journal and head-bound submission with verified readback and exact retries.
 - [x] Operator recovery of the current local identity from signed forks, with credential revocation and resumable completion.
 - [x] Internal atomic repository key restoration with missing, corrupt, or lost-master-key custody.
-- [ ] Recovery with replacement private keys, pending-operation conflict resolution, and operator lost-key recovery.
+- [x] Durable encrypted repository-key custody for signed recovery forks, including same-key repair.
+- [ ] Operator recovery with replacement private keys, pending-operation conflict resolution, and lost-key recovery.
 - [x] Per-revision signing-key provenance for historical record and block verification.
 - [x] Internal atomic repository signing-key replacement with unchanged-tree commits and vault rollback.
 - [x] PostgreSQL repository heads and atomic record, tree, and commit updates with optional head compare-and-swap.
@@ -3599,5 +3600,29 @@ retry preserves its envelope. Master-key rewrapping remains a separate operation
 
 This cannot reconstruct private material from a public key. The caller must
 provide the authorized private key and an active encryption master key. Durable
-replacement-key custody and operator recovery orchestration for this primitive
-remain unfinished.
+replacement-key custody is described below; operator recovery orchestration for
+this primitive remains unfinished.
+
+### Repository-key custody during recovery
+
+`Atoll.Identity.PLC.PendingSigningKeys.stage_recovery/6` stores a supplied
+repository private key atomically with the verified signed recovery journal.
+It checks the expected current local public key, validates the supplied key pair,
+and requires the signed operation to authorize that public key. Recovery staging
+allows missing or unreadable old custody and permits the original key for
+same-key repair. Ordinary `stage/5` continues to require readable old custody
+and a different replacement public key.
+
+Recovery uses the existing authenticated pending-key envelope, binding the DID,
+operation CID, expected old public key, curve and supplied public key. Exact
+retries retain the envelope; the same pending-update and retained-key limits
+apply. Master-key rewrapping includes this custody even when the active repository
+vault is missing. The caller must still authorize recovery and supply fresh
+directory evidence before staging.
+
+After fresh verified directory acceptance, callers can restore the repository
+key, complete the recovery journal and release pending custody in one transaction.
+Failed publication retains the confirmed journal and encrypted key for retry;
+release requires matching readable installed custody and completed journal state.
+No operator command accepts a recovery private-key file yet. This increment
+provides durable custody for the remaining operator replacement-key workflow.
