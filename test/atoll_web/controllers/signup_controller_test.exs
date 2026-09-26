@@ -68,6 +68,95 @@ defmodule AtollWeb.SignupControllerTest do
     :ok
   end
 
+  test "operator resumes the exact pending signup without admission or session keys" do
+    Req.Test.expect(__MODULE__, &Req.Test.transport_error(&1, :timeout))
+    Req.Test.expect(__MODULE__, &Plug.Conn.send_resp(&1, 404, ""))
+    assert json_response(request(@params), 503)
+    row = Repo.one!(Registration)
+    Application.put_env(:atoll, :signup_enabled, false)
+    Application.delete_env(:atoll, :session_signing_key)
+    accept_registration(row.operation)
+
+    output =
+      ExUnit.CaptureIO.capture_io(fn ->
+        Mix.Tasks.Atoll.Accounts.ResumeSignup.run([row.did, row.cid])
+      end)
+
+    assert Jason.decode!(output) == %{
+             "did" => row.did,
+             "handle" => @params["handle"],
+             "active" => true,
+             "result" => "completed"
+           }
+
+    assert Repo.get!(Registration, row.did).operation == row.operation
+    assert Repo.get!(Registration, row.did).completed_at
+    assert Repo.aggregate(Session, :count) == 0
+    audit = Repo.one!(Atoll.Moderation.AuditEntry)
+    assert audit.operation == "atoll.accounts.resumeSignup"
+    assert audit.requested["genesisCid"] == row.cid
+    assert {:ok, _} = Atoll.Repositories.set_status(row.did, :deactivated)
+
+    assert {:ok, %{result: :already_completed, active: false}} =
+             Signup.resume_registration(row.did, row.cid)
+
+    assert Repo.get!(Head, row.did).status == :deactivated
+    assert Repo.aggregate(Atoll.Moderation.AuditEntry, :count) == 1
+  end
+
+  test "operator resume requires exact public metadata and custom handle ownership" do
+    custom = cleanup_reservation("resume", 0)
+    row = Repo.get!(Registration, custom.did)
+
+    opts = [
+      plug: {Req.Test, __MODULE__},
+      txt_lookup: fn _ -> [["did=did:web:wrong.example.com"]] end
+    ]
+
+    assert {:error, :stale_signup} = Signup.resume_registration(row.did, "wrong", opts)
+    assert {:error, :unverified_handle} = Signup.resume_registration(row.did, row.cid, opts)
+    refute Repo.get!(Registration, row.did).submission_started_at
+    original_profile = Repo.get!(Profile, row.did)
+    original_profile |> Ecto.Changeset.change(handle: "different.example.com") |> Repo.update!()
+    assert {:error, :invalid_request} = Signup.resume_registration(row.did, row.cid, opts)
+
+    Repo.get!(Profile, row.did)
+    |> Ecto.Changeset.change(handle: original_profile.handle)
+    |> Repo.update!()
+
+    accept_registration(row.operation)
+    opts = Keyword.put(opts, :txt_lookup, fn _ -> [["did=" <> row.did]] end)
+    assert {:ok, %{result: :completed}} = Signup.resume_registration(row.did, row.cid, opts)
+    assert Repo.aggregate(Session, :count) == 0
+  end
+
+  test "operator resume fences credential changes during publication", _ do
+    custom = cleanup_reservation("changed", 0)
+    row = Repo.get!(Registration, custom.did)
+    opts = [plug: {Req.Test, __MODULE__}, txt_lookup: fn _ -> [["did=" <> row.did]] end]
+
+    Req.Test.expect(__MODULE__, fn conn ->
+      assert conn.method == "POST"
+      {:ok, hash} = Atoll.Accounts.Credentials.hash("new operator reset password")
+
+      Repo.get!(Atoll.Accounts.Credential, row.did)
+      |> Ecto.Changeset.change(password_hash: hash)
+      |> Repo.update!(log: false)
+
+      Req.Test.expect(__MODULE__, &Req.Test.json(&1, row.operation))
+      Plug.Conn.send_resp(conn, 200, "")
+    end)
+
+    assert {:error, :handle_not_available} = Signup.resume_registration(row.did, row.cid, opts)
+    assert Repo.get!(Registration, row.did).confirmed_at
+    refute Repo.get!(Registration, row.did).completed_at
+    assert Repo.get!(Head, row.did).status == :deactivated
+    assert Repo.aggregate(Session, :count) == 0
+    accept_registration(row.operation)
+    assert {:ok, %{result: :completed}} = Signup.resume_registration(row.did, row.cid, opts)
+    assert {:ok, _} = Sessions.create(row.did, "new operator reset password")
+  end
+
   test "signup cleanup previews and deletes only expired unsubmitted reservations" do
     alias Atoll.Accounts.SignupCleanup
     old = cleanup_reservation("old", 8)

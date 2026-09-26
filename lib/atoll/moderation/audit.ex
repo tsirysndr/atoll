@@ -59,6 +59,19 @@ defmodule Atoll.Moderation.Audit do
     )
   end
 
+  @doc "Records operator completion of a pending signup without issuing a session."
+  def signup_resume!(did, cid) do
+    insert!(
+      "atoll.accounts.resumeSignup",
+      did,
+      %{kind: "signup", did: did},
+      %{genesisCid: cid},
+      %{completed: false},
+      %{completed: true, active: true},
+      "operator"
+    )
+  end
+
   @doc "Records why an unsubmitted signup reservation was selected for operator deletion."
   def signup_cleanup!(row, cutoff, actor) do
     insert!(

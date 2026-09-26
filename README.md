@@ -356,7 +356,8 @@ mutation. Deletes and empty batches need no record schema, even with `validate: 
 - [x] Opt-in custom-domain signup through operator DID reservation and verified `createAccount` completion.
 - [x] Bounded operator cleanup of expired signup reservations with no recorded PLC submission.
 - [x] Opt-in supervised scheduling of bounded unsubmitted-signup cleanup with telemetry.
-- [ ] Self-service custom-domain DID reservation, phone verification, and attempted-signup reconciliation/background retries.
+- [x] Operator resume of exact pending signup registrations without password input or session issuance.
+- [ ] Self-service custom-domain DID reservation, phone verification, and background signup retries/divergent-identity reconciliation.
 - [x] Internal DID-scoped password credentials with salted Argon2id hashes, bounded input, redacted inspection, and duplicate protection.
 - [x] Shared configurable Cloudflare Worker email delivery client.
 - [x] `requestPlcOperationSignature` email authorization with atomic single-use challenge consumption.
@@ -3900,7 +3901,7 @@ stays deactivated with no session until a valid retry. Normalized profile detail
 password proof, invite and recovery key must still match; publication/session
 failures retain the exact journal for retry. No configuration is enabled on the
 running deployment by adding this feature. Self-service custom-domain reservation,
-phone verification, and attempted-signup reconciliation remain unfinished. Bounded
+phone verification, and divergent-identity signup reconciliation remain unfinished. Bounded
 operator and scheduled cleanup of unsubmitted reservations are described below.
 
 
@@ -3933,8 +3934,9 @@ using confirmation time when available and migration time otherwise. Those
 legacy markers do not establish an actual historical submission time. Complete
 the upgrade on every writer before applying cleanup; older application versions
 do not write the marker. This workflow cannot detect a signed genesis published
-outside Atoll. Attempted and legacy registrations require separate reconciliation
-and are never automatically inferred safe to delete from a 404 response.
+outside Atoll. Attempted and legacy registrations can be resumed with the exact
+operator command below; they are never automatically inferred safe to delete
+from a 404 response. Divergent directory identities require separate reconciliation.
 
 Each applied page commits atomically. Cleanup records its age/eligibility decision
 and uses the audited account-deletion path: local profile, credentials, vaults,
@@ -3983,5 +3985,42 @@ Telemetry event `[:atoll, :accounts, :signup_cleanup]` reports `runs`, and on
 success `selected` and `deleted` counts. Metadata contains `result` (`ok`, `failed`,
 or `timeout`) and `more`. DIDs, handles, credentials and cutoff strings are excluded.
 Automatic startup is suppressed in tests; worker tests use supervised isolated
-instances, explicit timer delivery and mocked failures. Attempted/ambiguous signup
-reconciliation and automatic registration retries remain separate unfinished work.
+instances, explicit timer delivery and mocked failures. Exact pending signup
+resume is described below; divergent directory identities and automatic registration
+retries remain separate unfinished work.
+
+
+### Operator resume of a pending signup
+
+An operator can resume an admitted reservation after an ambiguous PLC response or
+interrupted activation without obtaining the account owner's password:
+
+```sh
+mix atoll.accounts.resume_signup did:plc:ACCOUNT EXPECTED_GENESIS_CID
+```
+
+This trusted operator command snapshots the stored profile, credential digest,
+invite redemption, recovery-key selection and signed genesis under account locks.
+It requires the exact expected genesis CID, a deactivated pending account, and
+matching local handle, repository public key and PDS endpoint. The current signup
+admission switches may be disabled: this completes an existing reservation and
+does not admit a new one. Missing credentials, changed public metadata, unavailable
+private custody or non-deactivated pending accounts prevent completion.
+
+Custom handles must freshly resolve to the reserved DID before publication and
+again before activation. The command retries only the original signed genesis,
+using the durable submission marker and directory readback. It never generates a
+replacement DID or silently follows a divergent directory head. Network failures
+retain the reservation for retry. Credential or profile changes during publication
+invalidate the captured proof, leaving the confirmed account pending until a new
+operator attempt captures and checks the updated state.
+
+Activation, completion and an operator audit entry commit atomically. No password,
+email, private key, access token or refresh token is printed; no session or email
+is created, and session-signing configuration is not required for this operation.
+The owner logs in through the normal session endpoint afterward. Completed retries
+only report current local status, without a network request, repeated audit, or
+reactivating an account subsequently deactivated or suspended. That read-only
+result does not assert fresh directory compatibility. Automated retry scheduling
+and reconciliation when the directory has advanced away from the stored genesis
+remain unfinished.

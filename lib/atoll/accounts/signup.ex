@@ -23,6 +23,82 @@ defmodule Atoll.Accounts.Signup do
     end
   end
 
+  @doc "Operator resume of an exact stored signup, without password input or session issuance."
+  def resume_registration(did, expected_cid, opts \\ []) do
+    with false <- Repo.in_transaction?(),
+         {:ok, snapshot} <- resume_snapshot(did, expected_cid) do
+      case snapshot do
+        {:completed, result} ->
+          {:ok, result}
+
+        {:pending, input, proof} ->
+          with :ok <- verify_custom_handle(input.handle, did, opts),
+               {:ok, _} <- Registrations.submit(did, Keyword.take(opts, [:plug])),
+               :ok <- verify_custom_handle(input.handle, did, opts),
+               do: finish(input, proof, false)
+      end
+    else
+      true -> {:error, :registration_inside_transaction}
+      error -> error
+    end
+  end
+
+  defp resume_snapshot(did, expected_cid) do
+    Repo.transaction(fn ->
+      Events.lock!()
+
+      head =
+        Repo.one(from h in Head, where: h.did == ^did, lock: "FOR UPDATE") ||
+          Repo.rollback(:account_not_found)
+
+      row = Repo.get(Registration, did, log: false) || Repo.rollback(:registration_not_found)
+      profile = Repo.get(Profile, did, log: false) || Repo.rollback(:account_not_found)
+      unless row.cid == expected_cid, do: Repo.rollback(:stale_signup)
+
+      if row.completed_at do
+        {:completed,
+         %{
+           did: did,
+           handle: profile.handle,
+           active: head.status == :active,
+           result: :already_completed
+         }}
+      else
+        head!(did)
+
+        credential =
+          Repo.get(Atoll.Accounts.Credential, did, log: false) ||
+            Repo.rollback(:invalid_credentials)
+
+        {:ok, local} = Multikey.to_did_key(row.rotation_curve, row.rotation_public_key)
+
+        recovery =
+          case row.operation["rotationKeys"] do
+            [^local] -> nil
+            [external, ^local] -> external
+            _ -> Repo.rollback(:invalid_request)
+          end
+
+        invite =
+          case Repo.get(Atoll.Accounts.InviteUse, did, log: false) do
+            nil -> nil
+            use -> use.code
+          end
+
+        input = %{
+          handle: profile.handle,
+          email: profile.email,
+          recovery: recovery,
+          invite: invite
+        }
+
+        proof = %{did: did, cid: row.cid, digest: :crypto.hash(:sha256, credential.password_hash)}
+        validate_retry!(input, did, proof.digest)
+        {:pending, input, proof}
+      end
+    end)
+  end
+
   @doc "Operator-only custom-domain reservation. Returns public setup details, never sessions or private keys."
   def reserve_custom(params) do
     with true <- Application.get_env(:atoll, :signup_enabled, false),
@@ -205,11 +281,15 @@ defmodule Atoll.Accounts.Signup do
     end
   end
 
-  defp finish(input, proof) do
+  defp finish(input, proof, issue_session \\ true) do
     Repo.transaction(fn ->
       Events.lock!()
       head!(proof.did)
       registration = validate_retry!(input, proof.did, proof.digest)
+
+      unless registration.cid == Map.get(proof, :cid, registration.cid),
+        do: Repo.rollback(:stale_signup)
+
       unless registration.confirmed_at, do: Repo.rollback(:plc_unavailable)
       unwrap!(KeyVault.fetch(proof.did))
       unwrap!(Registrations.rotation_key(proof.did))
@@ -219,15 +299,15 @@ defmodule Atoll.Accounts.Signup do
       |> Repo.update!(log: false)
 
       unwrap!(Repositories.set_status(proof.did, :active))
-      pair = unwrap!(Sessions.create_for_account(proof.did))
+      result = %{did: proof.did, handle: input.handle, active: true}
 
-      %{
-        did: proof.did,
-        handle: input.handle,
-        accessJwt: pair.access_jwt,
-        refreshJwt: pair.refresh_jwt,
-        active: true
-      }
+      if issue_session do
+        pair = unwrap!(Sessions.create_for_account(proof.did))
+        Map.merge(result, %{accessJwt: pair.access_jwt, refreshJwt: pair.refresh_jwt})
+      else
+        Atoll.Moderation.Audit.signup_resume!(proof.did, registration.cid)
+        Map.put(result, :result, :completed)
+      end
     end)
   end
 
@@ -244,7 +324,12 @@ defmodule Atoll.Accounts.Signup do
     {:ok, local_rotation} = Multikey.to_did_key(row.rotation_curve, row.rotation_public_key)
     expected = if input.recovery, do: [input.recovery, local_rotation], else: [local_rotation]
 
-    unless row.operation["rotationKeys"] == expected and
+    head = Repo.get!(Head, did)
+    {:ok, signing} = Multikey.to_did_key(head.curve, head.public_key)
+
+    unless row.operation["alsoKnownAs"] == ["at://" <> input.handle] and
+             get_in(row.operation, ["verificationMethods", "atproto"]) == signing and
+             row.operation["rotationKeys"] == expected and
              row.operation["services"]["atproto_pds"]["endpoint"] == AtollWeb.Endpoint.url(),
            do: Repo.rollback(:invalid_request)
 
