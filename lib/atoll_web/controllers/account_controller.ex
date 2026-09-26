@@ -3,6 +3,8 @@ defmodule AtollWeb.AccountController do
   alias Atoll.Accounts.Sessions
   alias Atoll.OAuth.SessionManagement
 
+  def dispatch(conn, "/account/signup"), do: AtollWeb.SignupController.dispatch(conn)
+
   def dispatch(conn, "/oauth/authorize"), do: AtollWeb.ConsentController.dispatch(conn)
 
   def dispatch(%{method: "GET"} = conn, "/account/login") do
@@ -240,7 +242,7 @@ defmodule AtollWeb.AccountController do
 
   def page(conn, status, title, content) do
     width =
-      if conn.request_path in ["/account/login", "/oauth/authorize"],
+      if conn.request_path in ["/account/login", "/account/signup", "/oauth/authorize"],
         do: "max-w-sm",
         else: "max-w-2xl"
 

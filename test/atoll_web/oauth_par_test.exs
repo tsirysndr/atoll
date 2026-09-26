@@ -62,6 +62,16 @@ defmodule AtollWeb.OAuthPARTest do
     assert get_resp_header(result, "access-control-expose-headers") == ["dpop-nonce, retry-after"]
   end
 
+  test "HTTP admission preserves create and rejects duplicate prompt fields", c do
+    params = Map.put(c.params, "prompt", "create")
+    assert send_form(c, URI.encode_query(params) <> "&pr%6fmpt=create") |> json_response(400)
+    assert Repo.aggregate(Atoll.OAuth.PushedRequest, :count) == 0
+    result = send_form(c, URI.encode_query(params)) |> json_response(201)
+    assert result["expires_in"] == 600
+    assert {:ok, row} = PAR.get(@id, result["request_uri"])
+    assert row.parameters["prompt"] == "create"
+  end
+
   test "nonce challenge happens before metadata fetch or assertion consumption", c do
     signing = JOSE.JWK.generate_key({:ec, :secp256r1})
     {_, public} = JOSE.JWK.to_public_map(signing)
@@ -90,6 +100,9 @@ defmodule AtollWeb.OAuthPARTest do
     body =
       URI.encode_query(
         Map.merge(c.params, %{
+          "prompt" => "create",
+          "login_hint" => "alice.example.com",
+          "dpop_jkt" => JOSE.JWK.thumbprint(c.key),
           "client_assertion" => assertion,
           "client_assertion_type" => "urn:ietf:params:oauth:client-assertion-type:jwt-bearer"
         })

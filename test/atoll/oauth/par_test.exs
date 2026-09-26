@@ -58,6 +58,24 @@ defmodule Atoll.OAuth.PARTest do
     refute other.request_uri == result.request_uri
   end
 
+  test "create prompt is preserved with a bounded signup lifetime", c do
+    c = %{c | params: Map.put(c.params, "prompt", "create")}
+    assert {:ok, result} = push(c)
+    assert result.expires_in == 600
+    assert {:ok, row} = PAR.get(@id, result.request_uri, c.opts)
+    assert row.parameters["prompt"] == "create"
+    assert Repo.one!(PKCEUse).expires_at - row.expires_at == 85_800
+  end
+
+  test "unsupported and combined prompts fail before proof admission", c do
+    for value <- ["", "none", "login", "create login", "create create", " create", "CREATE", nil] do
+      assert {:error, :invalid_request} = push(%{c | params: Map.put(c.params, "prompt", value)})
+    end
+
+    assert Repo.aggregate(PushedRequest, :count) == 0
+    assert Repo.aggregate(ProofUse, :count) == 0
+  end
+
   test "expiry of request does not release its 24-hour challenge reservation", c do
     assert {:ok, result} = push(c)
     Repo.one!(PushedRequest) |> Ecto.Changeset.change(expires_at: 1) |> Repo.update!()

@@ -9,8 +9,8 @@ defmodule Atoll.OAuth.PAR do
   alias Atoll.Repo
   alias Atoll.OAuth.{ClientMetadata, ClientAssertions, Proofs, PKCE, PKCEUse, PushedRequest}
   @prefix "urn:ietf:params:oauth:request_uri:"
-  @fields ~w(client_id response_type redirect_uri scope state code_challenge code_challenge_method login_hint dpop_jkt client_assertion_type client_assertion)
-  @stored ~w(client_id response_type redirect_uri scope state code_challenge code_challenge_method login_hint)
+  @fields ~w(client_id response_type redirect_uri scope state code_challenge code_challenge_method login_hint prompt dpop_jkt client_assertion_type client_assertion)
+  @stored ~w(client_id response_type redirect_uri scope state code_challenge code_challenge_method login_hint prompt)
   @scopes ~w(atproto transition:generic transition:chat.bsky transition:email)
   @lock 4_182_026_052
 
@@ -79,7 +79,7 @@ defmodule Atoll.OAuth.PAR do
     _ in [Postgrex.Error, DBConnection.ConnectionError] -> {:error, :oauth_par_store_unavailable}
   end
 
-  defp valid_input?(params) when is_map(params) and map_size(params) <= 11 do
+  defp valid_input?(params) when is_map(params) and map_size(params) <= 12 do
     Enum.all?(params, fn {k, v} ->
       k in @fields and is_binary(v) and byte_size(v) in 1..8192 and String.valid?(v)
     end) and
@@ -88,7 +88,8 @@ defmodule Atoll.OAuth.PAR do
       PKCE.challenge?(params["code_challenge"]) and text?(params["state"], 2048) and
       text?(params["client_id"], 2048) and text?(params["redirect_uri"], 2048) and
       text?(params["scope"], 4096) and
-      (not Map.has_key?(params, "login_hint") or text?(params["login_hint"], 2048))
+      (not Map.has_key?(params, "login_hint") or text?(params["login_hint"], 2048)) and
+      (not Map.has_key?(params, "prompt") or params["prompt"] == "create")
   end
 
   defp valid_input?(_), do: false
@@ -167,6 +168,7 @@ defmodule Atoll.OAuth.PAR do
            Repo.aggregate(PKCEUse, :count) >= 100_000,
          do: Repo.rollback(:oauth_par_store_full)
 
+      lifetime = if params["prompt"] == "create", do: 600, else: 90
       uri = @prefix <> Base.url_encode64(:crypto.strong_rand_bytes(32), padding: false)
       {:ok, digest} = request_digest(uri)
       Repo.insert!(%PKCEUse{digest: challenge_digest, expires_at: now + 86_400}, log: false)
@@ -179,12 +181,12 @@ defmodule Atoll.OAuth.PAR do
           parameters: Map.take(params, @stored),
           client_binding: binding,
           dpop_jkt: jkt,
-          expires_at: now + 90
+          expires_at: now + lifetime
         },
         log: false
       )
 
-      %{request_uri: uri, expires_in: 90}
+      %{request_uri: uri, expires_in: lifetime}
     end)
   end
 

@@ -412,7 +412,7 @@ mutation. Deletes and empty batches need no record schema, even with `validate: 
 - [x] Browser pushed-request authorization and explicit consent with optional scope narrowing and account-hint enforcement.
 - [x] Internal ES256 WebAuthn registration/assertion verification with a Chrome virtual-authenticator fixture.
 - [ ] Optional passkey enrollment, authentication, management, and recovery.
-- [ ] OAuth `prompt=create` account-creation flow, including pushed-request validation and browser signup.
+- [x] OAuth `prompt=create` account-creation flow, including pushed-request validation and browser signup.
 - [x] Internal RFC 6238 TOTP verification, authenticator provisioning URIs, and account-bound encrypted secret envelopes.
 - [x] Internal persistent TOTP enrollment and confirmation, one-time login codes, database attempt limits, and key rotation.
 - [x] Authenticator enrollment/management UI and single-use recovery codes (optional TOTP).
@@ -4613,7 +4613,7 @@ The HTTP form adapter rejects duplicate fields before producing a map.
 
 Successful admission atomically reserves the challenge for 24 hours and stores
 validated parameters, issuer/client ID, DPoP thumbprint, and any confidential
-client key binding. It returns a random 256-bit `request_uri` with `expires_in: 90`.
+client key binding. It returns a random 256-bit `request_uri` with `expires_in: 90` (600 for `prompt=create`).
 Only the reference's SHA-256 digest is stored, not its bearer value. Assertion and
 DPoP JWT bytes are excluded from request storage; parameters include private state
 and login hints, are redacted from struct inspection, and use queries without
@@ -4623,7 +4623,7 @@ keys (`kid`, `alg`, `jkt`).
 `PAR.get/3` retrieves an unexpired request only for its original client and issuer.
 This read does not consume the request, establish consent, or issue a grant. A
 decision service below atomically consumes it during code issuance and preserves
-its stored parameters and bindings. The browser flow is still pending. Request expiry does not free its
+its stored parameters and bindings. The browser flow is described below. Request expiry does not free its
 challenge reservation, and another client of the same issuer cannot reuse that
 challenge during the reservation period.
 
@@ -4655,7 +4655,7 @@ discovery, browser authorization/consent, and remaining resource authorization
 still need implementation, so the returned reference cannot yet complete a login.
 
 The boundary runs before general body parsing, method rewriting, and Phoenix
-controller parameter logging. Forms are flat, limited to 11 fields and 48 KiB of
+controller parameter logging. Forms are flat, limited to 12 fields and 48 KiB of
 encoded bytes, with a five-second body read timeout and the internal 16 KiB
 decoded-parameter cap. Duplicate names after percent decoding, invalid percent
 escapes/UTF-8, nested fields, query parameters, compressed bodies, and header-based
@@ -5204,8 +5204,9 @@ server discovery remains pending.
 Clients redirect to `GET /oauth/authorize` with exactly `client_id` and
 `request_uri` from the pushed authorization response. Unknown, expired, mismatched,
 extra or duplicate front-channel parameters fail locally without redirecting to
-an untrusted destination. The existing 90-second pushed-request expiry applies
-through login and consent; an expired flow must restart from the application.
+an untrusted destination. Pushed requests expire after 90 seconds, or 600 seconds
+for `prompt=create`, measured from admission through consent; an expired flow must
+restart from the application.
 
 The account browser stores a compact encrypted context containing the request
 reference, a client-ID hash and a random form identifier. Login preserves this
@@ -5244,6 +5245,48 @@ requests and duplicate/extra query fields. A transaction-level test verifies the
 displayed account cannot be replaced during code issuance. The shared login shell
 has been visually checked in desktop, mobile and dark mode; a complete browser
 OAuth interoperability run and discovery remain separate tasks.
+
+### OAuth account creation (`prompt=create`)
+
+Include `prompt=create` in the **pushed** request to `POST /oauth/par`. It is
+stored with the validated request; do not add it to the front-channel authorize
+URL. This starts the account-creation UI as described by the
+[Prompt Create extension](https://openid.net/specs/openid-connect-prompt-create-1_0.html).
+Atoll uses its ATProto authorization-code/DPoP flow, not OpenID ID tokens. Other
+prompt values and combinations are currently rejected with `invalid_request`.
+Discovery advertisement remains part of the pending authorization-server metadata work.
+
+`/account/signup` uses the shared purple Tailwind account shell. It requires a
+live browser-bound creation request, CSRF token and matching form identifier.
+The form collects a full handle, password, optional email and invitation code.
+Existing signup settings, hosted domains, invitation redemption, password rules,
+encrypted signing keys and confirmed PLC registration apply. A supplied login
+hint must equal the new handle before creation; consent still verifies the handle
+in both directions. Existing-account DID hints cannot be used to create another
+account. Client URLs and hints are escaped; credentials never appear in responses.
+
+Even an already signed-in browser starts at account creation. Successful signup
+renews the encrypted cookie and binds this request to the newly created DID;
+existing accounts cannot approve it instead. Switching accounts leaves the old
+account's sessions and connected applications intact. The new account must still
+explicitly allow or deny permissions. Signup alone issues no authorization code.
+The browser form shares the login budget of ten POST attempts per IP per five
+minutes and retains the 8 KiB body bound and duplicate-field rejection.
+
+Creation requests have a ten-minute lifetime without sliding renewal. Expired
+requests cannot start signup. If directory confirmation finishes after expiry,
+the account remains created and signed in, but the application must restart
+sign-in; no expired consent is accepted. Directory failures can resume the
+existing pending signup using exactly the same credentials, email and invitation,
+subject to the existing signup recovery policy. Disabled signup returns a local
+error without redirecting to the client.
+
+Tests exercise HTTP admission (including all twelve confidential-client fields),
+invalid/duplicate prompts, complete signup/consent/code exchange, existing-login
+isolation, CSRF and context tampering, invitation/hint checks, disabled signup,
+directory retry, and expiry both before and during registration. The rendered signup
+form has also been checked at desktop/mobile widths and in dark mode, without
+horizontal overflow.
 
 ### Authenticator cryptographic primitives
 

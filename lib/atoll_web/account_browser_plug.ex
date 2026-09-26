@@ -3,7 +3,7 @@ defmodule AtollWeb.AccountBrowserPlug do
   @behaviour Plug
   import Plug.Conn
 
-  @paths ~w(/account/login /account/sessions /account/sessions/revoke /account/logout /oauth/authorize /account/security /account/security/begin /account/security/confirm /account/security/recovery /account/security/disable)
+  @paths ~w(/account/signup /account/login /account/sessions /account/sessions/revoke /account/logout /oauth/authorize /account/security /account/security/begin /account/security/confirm /account/security/recovery /account/security/disable)
 
   def init(opts), do: opts
 
@@ -42,8 +42,13 @@ defmodule AtollWeb.AccountBrowserPlug do
 
   defp methods("/account/security"), do: ["GET"]
 
-  defp methods(path) when path in ["/account/login", "/account/sessions", "/oauth/authorize"],
-    do: if(path in ["/account/login", "/oauth/authorize"], do: ["GET", "POST"], else: ["GET"])
+  defp methods(path)
+       when path in ["/account/signup", "/account/login", "/account/sessions", "/oauth/authorize"],
+       do:
+         if(path in ["/account/signup", "/account/login", "/oauth/authorize"],
+           do: ["GET", "POST"],
+           else: ["GET"]
+         )
 
   defp methods(_), do: ["POST"]
 
@@ -52,6 +57,7 @@ defmodule AtollWeb.AccountBrowserPlug do
       conn.method == "POST" and
         path in [
           "/account/login",
+          "/account/signup",
           "/account/security/begin",
           "/account/security/confirm",
           "/account/security/recovery",

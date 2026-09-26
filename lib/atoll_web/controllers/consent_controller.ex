@@ -13,10 +13,13 @@ defmodule AtollWeb.ConsentController do
   ]
 
   def dispatch(%{method: "GET"} = conn) do
-    case context(conn) do
-      {:ok, context} ->
-        conn = put_session(conn, :oauth_pending, context)
+    with {:ok, context} <- context(conn),
+         {:ok, request} <- BrowserConsent.load(context) do
+      conn = put_session(conn, :oauth_pending, context)
 
+      if BrowserConsent.creation_required?(context, request) do
+        go(conn, "/account/signup")
+      else
         case Sessions.authenticate_management(get_session(conn, :account_access)) do
           {:ok, %{did: did, status: :active}} ->
             show(conn, context, did)
@@ -31,7 +34,8 @@ defmodule AtollWeb.ConsentController do
             |> delete_session(:account_expires_at)
             |> go("/account/login")
         end
-
+      end
+    else
       _ ->
         UI.message(
           conn,
@@ -49,6 +53,7 @@ defmodule AtollWeb.ConsentController do
          %{"view" => view, "did" => did, "uri" => uri} <- context,
          true <- p["view"] == view,
          {:ok, request} <- BrowserConsent.load(context),
+         true <- BrowserConsent.creation_matches?(context, request, did),
          :ok <- BrowserConsent.account_matches(request, did),
          {:ok, decision} <- decision(p, request),
          {:ok, result} <-
@@ -77,7 +82,17 @@ defmodule AtollWeb.ConsentController do
         with {:ok, _} <- BrowserConsent.load(context), do: {:ok, context}
 
       %{"client_id" => client, "request_uri" => uri} = params when map_size(params) == 2 ->
-        BrowserConsent.start(client, uri)
+        with {:ok, fresh} <- BrowserConsent.start(client, uri) do
+          client_hash = fresh["client"]
+
+          case get_session(conn, :oauth_pending) do
+            %{"uri" => ^uri, "client" => ^client_hash} = existing ->
+              {:ok, existing}
+
+            _ ->
+              {:ok, fresh}
+          end
+        end
 
       _ ->
         {:error, :invalid_request}
@@ -86,6 +101,7 @@ defmodule AtollWeb.ConsentController do
 
   defp show(conn, context, did) do
     with {:ok, request} <- BrowserConsent.load(context),
+         true <- BrowserConsent.creation_matches?(context, request, did),
          :ok <- BrowserConsent.account_matches(request, did) do
       scopes = String.split(request.parameters["scope"], " ")
 

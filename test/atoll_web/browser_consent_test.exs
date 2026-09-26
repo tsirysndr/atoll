@@ -157,6 +157,261 @@ defmodule AtollWeb.BrowserConsentTest do
     assert begin(c).status == 400
   end
 
+  test "create prompt registers an account then requires explicit consent and exchanges its code",
+       c do
+    c = create_request(c)
+    page = signup_page(c)
+    assert html_response(page, 200) =~ "Create an account"
+    assert get_resp_header(page, "cache-control") == ["no-store"]
+    assert get_resp_header(page, "content-security-policy") |> hd() =~ "style-src 'self'"
+    accept_registration()
+    signed = signup(page)
+    assert redirected_to(signed, 303) == "/oauth/authorize"
+    assert Repo.aggregate(AuthorizationCode, :count) == 0
+    assert {:ok, _} = PAR.get(@client, c.uri)
+    account = Repo.one!(Atoll.Accounts.Profile)
+    refute account.did == c.did
+    consent = begin(%{c | conn: browser(signed)})
+    assert html_response(consent, 200) =~ account.did
+    approved = submit(consent, %{"decision" => "approve"})
+
+    code =
+      redirected_to(approved, 303)
+      |> URI.parse()
+      |> Map.fetch!(:query)
+      |> URI.decode_query()
+      |> Map.fetch!("code")
+
+    tokens = exchange(c, code) |> json_response(200)
+    assert tokens["sub"] == account.did
+    assert tokens["scope"] == "atproto"
+    assert signup(page).status == 400
+  end
+
+  test "an existing browser login cannot bypass create or authorize the old account", c do
+    existing = consent_page(c)
+    c = create_request(%{c | conn: browser(existing)})
+    page = signup_page(c)
+    assert html_response(page, 200) =~ "Create an account"
+
+    assert post_form(page, "/oauth/authorize", %{
+             "view" => value(page, "view"),
+             "decision" => "approve"
+           }).status == 400
+
+    assert Repo.aggregate(AuthorizationCode, :count) == 0
+    accept_registration()
+    signed = signup(page)
+    consent = signed |> browser() |> get("/oauth/authorize")
+    assert html_response(consent, 200) =~ Repo.one!(Atoll.Accounts.Profile).did
+    refute consent.resp_body =~ "<strong>" <> c.did <> "</strong>"
+  end
+
+  test "signup requires a live create request, correct view and CSRF before side effects", c do
+    assert get(c.conn, "/account/signup").status == 400
+    ordinary = begin(c) |> browser() |> get("/account/signup")
+    assert ordinary.status == 400
+    c = create_request(c)
+    page = signup_page(c)
+
+    assert page
+           |> browser()
+           |> put_req_header("content-type", "application/x-www-form-urlencoded")
+           |> post("/account/signup", URI.encode_query(signup_params(page)))
+           |> response(403)
+
+    assert signup(page, %{"view" => "wrong"}).status == 400
+    assert signup(page, %{"redirect_uri" => "https://evil.example.com"}).status == 400
+    assert Repo.aggregate(Atoll.Accounts.Profile, :count) == 0
+  end
+
+  test "disabled signup and expired requests cannot create accounts", c do
+    c = create_request(c)
+    page = signup_page(c)
+    Application.put_env(:atoll, :signup_enabled, false)
+    assert signup(page).status == 403
+    Application.put_env(:atoll, :signup_enabled, true)
+    Repo.update_all(PushedRequest, set: [expires_at: 1])
+    assert signup(page).status == 400
+    assert Repo.aggregate(Atoll.Accounts.Profile, :count) == 0
+  end
+
+  test "invitation policy and login hints are enforced before directory publication", c do
+    c = create_request(c, %{"login_hint" => "different.users.example.com"})
+    page = signup_page(c)
+    assert signup(page).status == 400
+    assert Repo.aggregate(Atoll.Accounts.Profile, :count) == 0
+    Application.put_env(:atoll, :invite_code_required, true)
+    assert signup(page, %{"handle" => "different.users.example.com"}).status == 400
+    assert Repo.aggregate(Atoll.Accounts.Profile, :count) == 0
+    {:ok, invite} = Atoll.Accounts.Invites.create()
+
+    Application.put_env(:atoll, :identity_resolution_options,
+      txt_lookup: fn _ ->
+        [["did=" <> Repo.one!(Atoll.Accounts.Profile).did]]
+      end,
+      lookup: fn _ -> {:ok, {8, 8, 8, 8}} end,
+      request:
+        Req.new(
+          plug: fn conn ->
+            row = Repo.one!(Atoll.Identity.PLC.Registration)
+            {:ok, key} = Atoll.KeyVault.fetch(row.did)
+            {:ok, multikey} = Atoll.Multikey.encode(key.curve, key.public)
+
+            Req.Test.json(conn, %{
+              "id" => row.did,
+              "alsoKnownAs" => row.operation["alsoKnownAs"],
+              "verificationMethod" => [
+                %{
+                  "id" => row.did <> "#atproto",
+                  "type" => "Multikey",
+                  "controller" => row.did,
+                  "publicKeyMultibase" => multikey
+                }
+              ],
+              "service" => [
+                %{
+                  "id" => row.did <> "#atproto_pds",
+                  "type" => "AtprotoPersonalDataServer",
+                  "serviceEndpoint" => AtollWeb.Endpoint.url()
+                }
+              ]
+            })
+          end
+        )
+    )
+
+    accept_registration()
+
+    signed =
+      signup(page, %{"handle" => "different.users.example.com", "inviteCode" => invite.code})
+
+    assert redirected_to(signed, 303) == "/oauth/authorize"
+
+    assert signed |> browser() |> get("/oauth/authorize") |> html_response(200) =~
+             "Connect an application"
+  end
+
+  test "directory failure can resume the same reservation without creating another identity", c do
+    c = create_request(c)
+    page = signup_page(c)
+    Req.Test.expect(__MODULE__, &Req.Test.transport_error(&1, :timeout))
+    Req.Test.expect(__MODULE__, &Plug.Conn.send_resp(&1, 404, ""))
+    failed = signup(page)
+    assert html_response(failed, 503) =~ "Retry with the same handle"
+    reservation = Repo.one!(Atoll.Identity.PLC.Registration)
+    refute reservation.completed_at
+    accept_registration()
+    signed = signup(failed)
+    assert redirected_to(signed, 303) == "/oauth/authorize"
+    assert Repo.one!(Atoll.Accounts.Profile).did == reservation.did
+    assert Repo.get!(Atoll.Identity.PLC.Registration, reservation.did).completed_at
+  end
+
+  test "expiry during directory publication keeps the new account without issuing consent", c do
+    c = create_request(c)
+    page = signup_page(c)
+    accept_registration(fn -> Repo.update_all(PushedRequest, set: [expires_at: 1]) end)
+    signed = signup(page)
+    assert html_response(signed, 200) =~ "Account created"
+    assert signed.resp_body =~ "request expired"
+    assert Repo.aggregate(AuthorizationCode, :count) == 0
+
+    assert signed |> browser() |> get("/account/sessions") |> html_response(200) =~
+             "Connected applications"
+  end
+
+  defp create_request(c, extra \\ %{}) do
+    keys = [
+      :pds,
+      :signup_enabled,
+      :signup_retry,
+      :invite_code_required,
+      :plc_submission_options,
+      :identity_resolution_options
+    ]
+
+    previous = Map.new(keys, &{&1, Application.fetch_env(:atoll, &1)})
+    endpoint = Application.fetch_env!(:atoll, AtollWeb.Endpoint)
+
+    AtollWeb.Endpoint.config_change(
+      [
+        {AtollWeb.Endpoint,
+         Keyword.put(endpoint, :url, scheme: "https", host: "pds.example.com", port: 443)}
+      ],
+      []
+    )
+
+    on_exit(fn ->
+      AtollWeb.Endpoint.config_change([{AtollWeb.Endpoint, endpoint}], [])
+
+      for {key, value} <- previous do
+        case value do
+          {:ok, value} -> Application.put_env(:atoll, key, value)
+          :error -> Application.delete_env(:atoll, key)
+        end
+      end
+    end)
+
+    Application.put_env(:atoll, :pds,
+      did: "did:web:pds.example.com",
+      available_user_domains: [".users.example.com"]
+    )
+
+    Application.put_env(:atoll, :signup_enabled, true)
+    Application.put_env(:atoll, :signup_retry, enabled: false, delay_seconds: 300)
+    Application.put_env(:atoll, :invite_code_required, false)
+    Application.put_env(:atoll, :plc_submission_options, plug: {Req.Test, __MODULE__})
+    {:ok, nonce} = Nonce.issue(:authorization)
+
+    params =
+      c.params |> Map.delete("login_hint") |> Map.put("prompt", "create") |> Map.merge(extra)
+
+    # Use a new proof and PKCE challenge for a new pushed request.
+    verifier = random()
+
+    params =
+      Map.put(
+        params,
+        "code_challenge",
+        :crypto.hash(:sha256, verifier) |> Base.url_encode64(padding: false)
+      )
+
+    c = %{c | nonce: nonce, verifier: verifier, params: params}
+    Repo.delete_all(PushedRequest)
+    {:ok, %{request_uri: uri}} = PAR.push(params, [proof(c, "/oauth/par")])
+    %{c | uri: uri}
+  end
+
+  defp signup_page(c) do
+    start = begin(c)
+    assert redirected_to(start, 303) == "/account/signup"
+    start |> browser() |> get("/account/signup")
+  end
+
+  defp signup_params(page),
+    do: %{
+      "view" => value(page, "view"),
+      "handle" => "alice.users.example.com",
+      "email" => "alice@example.com",
+      "password" => "signup account password",
+      "inviteCode" => ""
+    }
+
+  defp signup(page, changes \\ %{}),
+    do: post_form(page, "/account/signup", Map.merge(signup_params(page), changes))
+
+  defp accept_registration(callback \\ fn -> :ok end) do
+    Req.Test.expect(__MODULE__, fn conn ->
+      assert conn.method == "POST"
+      {:ok, body, conn} = Plug.Conn.read_body(conn)
+      operation = Jason.decode!(body)
+      callback.()
+      Req.Test.expect(__MODULE__, &Req.Test.json(&1, operation))
+      Plug.Conn.send_resp(conn, 200, "")
+    end)
+  end
+
   defp consent_page(c) do
     start = begin(c)
     assert redirected_to(start, 303) == "/account/login"

@@ -22,6 +22,12 @@ defmodule Atoll.OAuth.BrowserConsent do
 
   def load(_), do: {:error, :invalid_request_uri}
 
+  def creation_required?(context, request),
+    do: request.parameters["prompt"] == "create" and not is_binary(context["created_did"])
+
+  def creation_matches?(context, request, did),
+    do: request.parameters["prompt"] != "create" or context["created_did"] == did
+
   def account_matches(request, did) do
     case request.parameters["login_hint"] do
       nil ->

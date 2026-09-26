@@ -3,7 +3,7 @@ defmodule Atoll.OAuth.Form do
   def decode(body) when is_binary(body) and byte_size(body) in 1..49_152 do
     pairs = String.split(body, "&")
 
-    if length(pairs) <= 11 and not Regex.match?(~r/%(?![0-9a-fA-F]{2})/, body) do
+    if length(pairs) <= 12 and not Regex.match?(~r/%(?![0-9a-fA-F]{2})/, body) do
       Enum.reduce_while(pairs, {:ok, %{}}, fn pair, {:ok, acc} ->
         case String.split(pair, "=", parts: 2) do
           [key, value] ->
