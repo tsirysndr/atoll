@@ -7,7 +7,8 @@ defmodule AtollWeb.RepoController do
     with :ok <- location(params),
          true <- Syntax.record_key?(params["rkey"]),
          {:ok, requested_cid} <- optional_cid(params["cid"]),
-         {:ok, record} <- fetch_record(params),
+         {:ok, did} <- repository_did(params["repo"]),
+         {:ok, record} <- fetch_record(did, params),
          :ok <- matches_cid(record.cid, requested_cid) do
       json(conn, public_record(record))
     else
@@ -21,8 +22,9 @@ defmodule AtollWeb.RepoController do
          {:ok, limit} <- limit(params["limit"]),
          {:ok, reverse} <- reverse(params["reverse"]),
          true <- is_nil(params["cursor"]) or Syntax.record_key?(params["cursor"]),
+         {:ok, did} <- repository_did(params["repo"]),
          {:ok, page} <-
-           Repositories.list_records(params["repo"], params["collection"],
+           Repositories.list_records(did, params["collection"],
              limit: limit,
              reverse: reverse,
              cursor: params["cursor"]
@@ -50,15 +52,29 @@ defmodule AtollWeb.RepoController do
   end
 
   defp location(%{"repo" => did, "collection" => collection}) when is_binary(collection) do
-    if Syntax.did?(did) and Syntax.repo_path?(collection <> "/self"),
+    if (Syntax.did?(did) or Syntax.handle?(did)) and Syntax.repo_path?(collection <> "/self"),
       do: :ok,
       else: {:error, :invalid_request}
   end
 
   defp location(_), do: {:error, :invalid_request}
 
-  defp fetch_record(params) do
-    case Repositories.get_record(params["repo"], params["collection"] <> "/" <> params["rkey"]) do
+  defp repository_did(identifier) do
+    if Syntax.did?(identifier) do
+      {:ok, identifier}
+    else
+      opts = Application.get_env(:atoll, :identity_resolution_options, [])
+
+      case Atoll.Identity.Handle.verify(identifier, opts) do
+        {:ok, identity} -> {:ok, identity.did}
+        {:error, :invalid_handle} -> {:error, :invalid_request}
+        {:error, _} -> {:error, :unverified_handle}
+      end
+    end
+  end
+
+  defp fetch_record(did, params) do
+    case Repositories.get_record(did, params["collection"] <> "/" <> params["rkey"]) do
       {:error, :not_found} -> {:error, :record_not_found}
       result -> result
     end

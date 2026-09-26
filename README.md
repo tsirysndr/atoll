@@ -71,8 +71,8 @@ record Lexicons or grant access to account data.
 - [ ] Signing-key rotation, master-key rotation, and recovery workflows.
 - [x] PostgreSQL repository heads and atomic record, tree, and commit updates with optional head compare-and-swap.
 - [x] Internal record create, put, delete, and read operations with collection/type checks (not Lexicon validation).
-- [x] Public `getRecord` and paginated `listRecords` for repository DIDs and current record versions.
-- [ ] Handle lookup and historical CID versions for record reads.
+- [x] Public `getRecord` and paginated `listRecords` for repository DIDs or bidirectionally verified handles and current record versions.
+- [ ] Historical CID versions for record reads.
 - [ ] Record writes and deletion (`createRecord`, `putRecord`, `deleteRecord`, `applyWrites`).
 - [ ] Repository description (`com.atproto.repo.describeRepo`).
 - [x] In-memory CARv1 encoding and decoding with block verification and resource limits.
@@ -90,7 +90,8 @@ record Lexicons or grant access to account data.
 - [x] DNS TXT handle resolution with HTTPS fallback, normalization, ambiguity checks, and reserved-domain rejection.
 - [x] Internal bidirectional handle verification against the resolved DID document.
 - [x] Public `com.atproto.identity.resolveHandle` forward lookup (does not assert bidirectional verification).
-- [ ] Handle updates, caching, redirect support, and handle-based repository API lookup.
+- [x] Handle-based repository reads with bidirectional verification and canonical DID record URIs.
+- [ ] Handle updates, caching, and redirect support.
 - [ ] Account creation, activation, deactivation, and deletion.
 - [ ] Password hashing, email verification, and account recovery.
 - [ ] Session creation, refresh, inspection, and revocation.
