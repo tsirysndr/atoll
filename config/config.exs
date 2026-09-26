@@ -16,6 +16,7 @@ config :tailwind,
 
 config :atoll,
   ecto_repos: [Atoll.Repo],
+  record_write_rate_limit: 300,
   generators: [timestamp_type: :utc_datetime]
 
 # Configure the endpoint

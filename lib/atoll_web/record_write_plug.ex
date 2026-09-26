@@ -18,6 +18,25 @@ defmodule AtollWeb.RecordWritePlug do
 
   def init(opts), do: opts
 
+  def rate_limit_from_env!(nil), do: 300
+
+  def rate_limit_from_env!(value) when is_binary(value) do
+    case Integer.parse(value) do
+      {limit, ""} when limit in 0..100_000 ->
+        limit
+
+      _ ->
+        raise ArgumentError,
+              "ATOLL_RECORD_WRITE_RATE_LIMIT must be an integer from 0 to 100000 (0 disables record-write rate limits)"
+    end
+  end
+
+  @doc false
+  def unlimited?("POST", nsid) when nsid in @methods,
+    do: Application.get_env(:atoll, :record_write_rate_limit, 300) == 0
+
+  def unlimited?(_, _), do: false
+
   def call(conn, _opts) do
     case Enum.map(conn.path_info, &URI.decode/1) do
       ["xrpc", method] when method in @methods ->
@@ -79,9 +98,18 @@ defmodule AtollWeb.RecordWritePlug do
   end
 
   defp limit(conn) do
-    case Atoll.Accounts.SessionLimiter.check({:record_write, conn.remote_ip}, 300) do
-      :ok -> :ok
-      {:error, seconds} -> {:error, {:rate_limited, seconds}}
+    case Application.get_env(:atoll, :record_write_rate_limit, 300) do
+      0 ->
+        :ok
+
+      limit when is_integer(limit) and limit in 1..100_000 ->
+        case Atoll.Accounts.SessionLimiter.check({:record_write, conn.remote_ip}, limit) do
+          :ok -> :ok
+          {:error, seconds} -> {:error, {:rate_limited, seconds}}
+        end
+
+      _ ->
+        {:error, :record_rate_limit_configuration}
     end
   end
 

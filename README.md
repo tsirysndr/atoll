@@ -298,8 +298,23 @@ registry lookup or canonicalization. Schema validation does not enforce extra
 application semantics such as whether a facet range matches the text's bytes.
 
 Request JSON is limited to 2 MiB; encoded records retain their 1 MB
-limit. Writes allow 300 requests per direct peer IP per five minutes using the
-same per-node limiter as sessions, and responses use `Cache-Control: no-store`.
+limit. Writes default to 300 requests per client IP per five minutes using the
+configured memory/PostgreSQL/Redis limiter, and responses use `Cache-Control: no-store`.
+Set `ATOLL_RECORD_WRITE_RATE_LIMIT` to an integer from 0 to 100000 to change the
+record-write budget. Application configuration uses
+`config :atoll, :record_write_rate_limit, 300`; the environment variable overrides
+this setting only when explicitly supplied. With a positive write budget, the
+general XRPC budget also applies independently.
+
+Set `ATOLL_RECORD_WRITE_RATE_LIMIT=0` (or `config :atoll, :record_write_rate_limit, 0`)
+to disable HTTP rate throttling entirely for POST `createRecord`, `putRecord`,
+`deleteRecord` and `applyWrites`. These requests bypass both the write bucket and
+the aggregate XRPC bucket, without contacting a rate-limit backend. Other routes,
+methods and CORS preflights retain their existing budgets. Authentication, DPoP
+proof checks, request/record size bounds, schemas, quotas and transaction checks
+still apply. Invalid environment values fail startup; invalid application values
+reject writes with HTTP 503. This changes policy only when configured; the default
+remains 300.
 
 `POST /xrpc/com.atproto.repo.applyWrites` accepts `repo`, `writes`, optional
 `swapCommit`, and optional `validate`. Each write has a `$type` of
@@ -788,6 +803,7 @@ observations do not produce duplicate events. The
 - [x] `mix precommit` checks compilation warnings, unused dependency locks, formatting, and tests.
 - [x] GitHub Actions runs checks and the Docker MinIO integration suite on every push (also available manually).
 - [x] Session, blob-upload, and record-write rate limits and bounded request bodies.
+- [x] Configurable record-write budget with an explicit zero setting to disable write throttling entirely.
 - [x] Configurable general XRPC request budget before parsing, in addition to specialized rate limits.
 - [x] Explicit trusted-proxy CIDRs and bounded client-IP extraction for all request rate limits.
 - [x] Optional PostgreSQL-shared request budgets across nodes, with bounded storage and fail-closed errors.
@@ -2090,6 +2106,8 @@ out-of-range environment values fail startup. Application configuration uses
 The budget applies before routing validation, query/body parsing, authentication,
 and WebSocket upgrade. All XRPC paths and methods share it, including unknown
 methods, malformed paths, encoded route spellings, errors, and CORS preflights.
+The explicit exception is POST record procedures when `ATOLL_RECORD_WRITE_RATE_LIMIT=0`;
+those writes bypass this budget as well as their specialized bucket.
 Existing login, write, blob, identity-resolution, and administrator limits still
 apply independently and may reject requests sooner. An admitted subscription
 handshake consumes one request; individual WebSocket frames do not consume this

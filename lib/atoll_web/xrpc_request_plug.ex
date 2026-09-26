@@ -20,7 +20,20 @@ defmodule AtollWeb.XRPCRequestPlug do
         conn = AtollWeb.XRPCCORS.headers(conn)
         limit = Application.get_env(:atoll, :xrpc_rate_limit, 3000)
 
-        case Atoll.Accounts.SessionLimiter.check({:xrpc, conn.remote_ip}, limit) do
+        # A zero write budget means no HTTP rate throttling for the four POST
+        # record procedures. Other methods/routes keep the aggregate budget.
+        admission =
+          case segments do
+            [nsid] ->
+              if AtollWeb.RecordWritePlug.unlimited?(conn.method, nsid),
+                do: :ok,
+                else: Atoll.Accounts.SessionLimiter.check({:xrpc, conn.remote_ip}, limit)
+
+            _ ->
+              Atoll.Accounts.SessionLimiter.check({:xrpc, conn.remote_ip}, limit)
+          end
+
+        case admission do
           :ok ->
             route(conn, segments)
 

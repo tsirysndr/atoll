@@ -13,7 +13,10 @@ defmodule AtollWeb.RecordWriteControllerTest do
             :key_encryption_key,
             :identity_resolution_options,
             :network_lexicons_enabled,
-            :lexicon_resolution_options
+            :lexicon_resolution_options,
+            :record_write_rate_limit,
+            :xrpc_rate_limit,
+            :rate_limit_backend
           ],
           do: {key, Application.fetch_env(:atoll, key)}
 
@@ -441,6 +444,105 @@ defmodule AtollWeb.RecordWriteControllerTest do
 
     assert %{"error" => "RateLimitExceeded"} =
              conn |> post("/xrpc/com.atproto.repo.%70utRecord", "{}") |> json_response(429)
+  end
+
+  test "configured write budgets are enforced and can be raised without restarting", c do
+    Application.put_env(:atoll, :record_write_rate_limit, 1)
+    assert request(c, "putRecord", body("budget", %{"record" => @record})) |> json_response(200)
+    rejected = request(c, "putRecord", body("budget", %{"record" => @record}))
+    assert %{"error" => "RateLimitExceeded"} = json_response(rejected, 429)
+    assert get_resp_header(rejected, "retry-after") != []
+    Application.put_env(:atoll, :record_write_rate_limit, 2)
+    assert request(c, "putRecord", body("budget", %{"record" => @record})) |> json_response(200)
+  end
+
+  test "zero disables both write and aggregate budgets only for record POSTs", c do
+    Application.put_env(:atoll, :record_write_rate_limit, 0)
+    Application.put_env(:atoll, :xrpc_rate_limit, 1)
+    assert :ok = Atoll.Accounts.SessionLimiter.check({:xrpc, c.conn.remote_ip}, 1)
+    assert :ok = Atoll.Accounts.SessionLimiter.check({:record_write, c.conn.remote_ip}, 1)
+
+    assert request(c, "createRecord", body("unlimited", %{"record" => @record}))
+           |> json_response(200)
+
+    assert request(c, "putRecord", body("unlimited", %{"record" => @record}))
+           |> json_response(200)
+
+    writes = %{
+      "repo" => @did,
+      "writes" => [
+        %{
+          "$type" => "com.atproto.repo.applyWrites#update",
+          "collection" => @collection,
+          "rkey" => "unlimited",
+          "value" => @record
+        }
+      ]
+    }
+
+    assert request(c, "applyWrites", writes) |> json_response(200)
+    assert request(c, "deleteRecord", body("unlimited")) |> json_response(200)
+
+    assert %{"error" => "RateLimitExceeded"} =
+             get(c.conn, "/xrpc/com.atproto.server.describeServer") |> json_response(429)
+
+    assert get(c.conn, path("putRecord")).status == 429
+    assert post(c.conn, path("putRecord") <> "/extra").status == 429
+
+    conn = c.conn |> put_req_header("content-type", "application/json")
+    assert %{"error" => "AuthRequired"} = post(conn, path("putRecord"), "{") |> json_response(401)
+    conn = put_req_header(conn, "authorization", "Bearer " <> c.pair.access_jwt)
+    assert post(conn, path("putRecord"), "{").status == 400
+    assert post(conn, "/xrpc/com.atproto.repo.%70utRecord", "{").status == 400
+    assert post(conn, path("putRecord"), String.duplicate("x", 2 * 1024 * 1024 + 1)).status == 413
+  end
+
+  test "disabled record writes do not contact any rate-limit backend", c do
+    Application.put_env(:atoll, :record_write_rate_limit, 0)
+    # Any limiter call would raise for this sentinel backend.
+    Application.put_env(:atoll, :rate_limit_backend, :unexpected_backend)
+
+    assert request(c, "putRecord", body("no-backend", %{"record" => @record}))
+           |> json_response(200)
+  end
+
+  test "runtime environment overrides the write budget only when supplied" do
+    previous = System.get_env("ATOLL_RECORD_WRITE_RATE_LIMIT")
+
+    on_exit(fn ->
+      if previous,
+        do: System.put_env("ATOLL_RECORD_WRITE_RATE_LIMIT", previous),
+        else: System.delete_env("ATOLL_RECORD_WRITE_RATE_LIMIT")
+    end)
+
+    System.delete_env("ATOLL_RECORD_WRITE_RATE_LIMIT")
+    config = Config.Reader.read!("config/runtime.exs", env: :test, target: :host)
+    refute Keyword.has_key?(config[:atoll], :record_write_rate_limit)
+    System.put_env("ATOLL_RECORD_WRITE_RATE_LIMIT", "0")
+    config = Config.Reader.read!("config/runtime.exs", env: :test, target: :host)
+    assert config[:atoll][:record_write_rate_limit] == 0
+    System.put_env("ATOLL_RECORD_WRITE_RATE_LIMIT", "bad")
+
+    assert_raise ArgumentError, fn ->
+      Config.Reader.read!("config/runtime.exs", env: :test, target: :host)
+    end
+  end
+
+  test "record limit configuration rejects bad values and fails closed", c do
+    assert AtollWeb.RecordWritePlug.rate_limit_from_env!(nil) == 300
+    assert AtollWeb.RecordWritePlug.rate_limit_from_env!("0") == 0
+    assert AtollWeb.RecordWritePlug.rate_limit_from_env!("100000") == 100_000
+
+    for value <- ["false", "-1", "", "1.5", "100001", "300junk"] do
+      assert_raise ArgumentError, fn -> AtollWeb.RecordWritePlug.rate_limit_from_env!(value) end
+    end
+
+    for value <- [false, -1, "0", nil, 100_001] do
+      Application.put_env(:atoll, :record_write_rate_limit, value)
+
+      assert %{"error" => "ServiceUnavailable"} =
+               request(c, "putRecord", body("bad-config")) |> json_response(503)
+    end
   end
 
   test "publishes uploaded blobs and withdraws them when a record is deleted", c do

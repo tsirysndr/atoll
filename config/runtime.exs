@@ -64,6 +64,14 @@ config :atoll,
        :xrpc_rate_limit,
        AtollWeb.XRPCRequestPlug.rate_limit_from_env!(System.get_env("ATOLL_XRPC_RATE_LIMIT"))
 
+case System.get_env("ATOLL_RECORD_WRITE_RATE_LIMIT") do
+  nil ->
+    :ok
+
+  value ->
+    config :atoll, :record_write_rate_limit, AtollWeb.RecordWritePlug.rate_limit_from_env!(value)
+end
+
 case Integer.parse(System.get_env("ATOLL_HANDLE_CACHE_TTL_SECONDS", "60")) do
   {ttl, ""} when ttl in 0..300 -> config :atoll, :handle_cache_ttl_seconds, ttl
   _ -> raise "ATOLL_HANDLE_CACHE_TTL_SECONDS must be an integer from 0 to 300"

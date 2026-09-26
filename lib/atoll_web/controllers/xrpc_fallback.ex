@@ -236,6 +236,9 @@ defmodule AtollWeb.XRPCFallback do
   def call(conn, {:error, :record_request_too_large}),
     do: error(conn, 413, "InvalidRequest", "Record request body exceeds 2 MiB.")
 
+  def call(conn, {:error, :record_rate_limit_configuration}),
+    do: error(conn, 503, "ServiceUnavailable", "Record-write rate limit is misconfigured.")
+
   def call(conn, {:error, :record_rate_limited}),
     do: error(conn, 429, "RateLimitExceeded", "Too many record writes.")
 
