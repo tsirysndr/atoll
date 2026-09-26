@@ -23,7 +23,8 @@ Checked items are implemented in this repository. Unchecked items are remaining 
 - [x] Public-origin XRPC CORS headers and route-aware browser preflight responses.
 - [x] Sanitized XRPC JSON responses for framework exceptions, including malformed requests and unexpected server failures.
 - [x] Lexicon-based parameter validation for all routed XRPC GET endpoints.
-- [ ] Lexicon-based procedure input and subscription parameter validation.
+- [x] JSON procedure envelope validation against pinned upstream Lexicons.
+- [ ] Lexicon-based subscription parameter validation.
 - [ ] Lexicon-based record validation.
 
 XRPC routing uses the [HTTP API specification](https://atproto.com/specs/xrpc).
@@ -32,7 +33,7 @@ return `501 MethodNotImplemented`. Implemented routes require their declared HTT
 method and otherwise return `405 MethodNotAllowed` with an `Allow` header, before
 body parsing or method override. These errors are JSON with `error` and `message`
 and are not cached. HTTP HEAD responses omit the body. Percent-encoded route
-spellings receive the same checks, including repository subscriptions. Procedure input and subscription Lexicon validation remain pending.
+spellings receive the same checks, including repository subscriptions. Subscription Lexicon validation remains pending.
 Framework failures rendered by Phoenix also use the XRPC error shape, with
 standard HTTP descriptions rather than exception details or stack traces. This
 applies in development as well as production; errors still propagate through
@@ -54,6 +55,15 @@ parameters, nested form keys, malformed percent escapes, and invalid UTF-8 retur
 existing `cids[]` alias. Values remain strings at the controller boundary after
 validation. These limits supplement the HTTP server's request-target limits.
 Subscriptions keep their existing cursor validation before WebSocket upgrade.
+
+JSON procedure bodies are validated after the existing bounded parsers and
+request guards. The pinned procedure schemas enforce required/nullable fields,
+JSON primitive types, identifier and datetime formats, and the closed batch-write
+union. Invalid envelopes return `400 InvalidRequest` before controller actions.
+Unknown extension fields remain available to endpoint-specific checks. Record
+objects and PLC operations still require the repository/identity layers' data and
+semantic checks; this does not implement application-record Lexicon validation.
+Blob/CAR uploads and bodyless procedures retain their dedicated request handlers.
 
 Browser clients can call XRPC from any origin using explicit authorization
 headers. Responses include `Access-Control-Allow-Origin: *`; cookie credentials

@@ -5,8 +5,10 @@ defmodule Atoll.Lexicon.Query do
   @files Path.wildcard(Path.expand("../../../priv/lexicons/*.json", __DIR__))
   for file <- @files, do: @external_resource(file)
 
-  @schemas Map.new(@files, fn file ->
-             doc = file |> File.read!() |> Jason.decode!()
+  @schemas @files
+           |> Enum.map(fn file -> file |> File.read!() |> Jason.decode!() end)
+           |> Enum.filter(&(get_in(&1, ["defs", "main", "type"]) == "query"))
+           |> Map.new(fn doc ->
              {doc["id"], get_in(doc, ["defs", "main", "parameters"]) || %{}}
            end)
 

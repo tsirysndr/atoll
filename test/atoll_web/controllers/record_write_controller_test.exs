@@ -30,6 +30,20 @@ defmodule AtollWeb.RecordWriteControllerTest do
     %{conn: conn, pair: pair, head: head}
   end
 
+  test "procedure schema failures leave the repository and event stream untouched", c do
+    seq = Atoll.Repositories.Events.latest_seq()
+
+    for changes <- [%{"validate" => "false"}, %{"swapCommit" => nil}, %{"record" => nil}] do
+      conn = request(c, "putRecord", Map.merge(body("schema-check"), changes))
+
+      assert %{"error" => "InvalidRequest", "message" => "Invalid procedure input."} =
+               json_response(conn, 400)
+
+      assert Repositories.get_head(@did) == {:ok, c.head}
+      assert Atoll.Repositories.Events.latest_seq() == seq
+    end
+  end
+
   test "repository quota failures return a protocol error without publishing a write", c do
     previous = Application.fetch_env(:atoll, :repository_quota)
 
