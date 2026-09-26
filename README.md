@@ -142,7 +142,8 @@ record Lexicons or grant access to account data.
 - [x] Operator PLC repository signing-key rotation with durable staging and resumable publication.
 - [x] Internal encrypted pending custody and atomic installation for PLC directory-authority replacement keys.
 - [x] Operator PLC authority-key rotation with preserved priority, durable staging, and resumable completion.
-- [ ] PLC recovery workflows.
+- [x] Signed PLC recovery preflight against verified history, with priority/window checks and displaced-operation reporting.
+- [ ] Durable PLC recovery staging, submission, and local reconciliation workflows.
 - [x] Per-revision signing-key provenance for historical record and block verification.
 - [x] Internal atomic repository signing-key replacement with unchanged-tree commits and vault rollback.
 - [x] PostgreSQL repository heads and atomic record, tree, and commit updates with optional head compare-and-swap.
@@ -3458,3 +3459,32 @@ one transaction. After interruption, keep the journal and retry the same CID;
 authority. A later conflicting directory operation fails closed with custody
 retained. Recovery forks, arbitrary priority changes, and recovery-key export
 are not implemented by this command.
+
+### Signed PLC recovery preflight
+
+`Atoll.Identity.PLC.RecoveryPlan.preview/4` validates an already signed recovery
+operation against supplied audit evidence and a proposed UTC receipt time
+(defaulting to the current time). It verifies the existing history, requires a
+fork from a surviving ancestor, computes the active suffix that would be
+nullified, and verifies the resulting hypothetical history with the existing
+recovery-aware audit verifier. Ordinary successors, repeated operations, and
+forks from nullified entries are rejected. At most 999 existing entries are
+accepted so the hypothetical history stays within the 1,000-entry verifier cap.
+
+The result contains public metadata: candidate CID, predecessor CID, observed
+head CID, signer, newly displaced CIDs, deadline, and resulting tombstone status.
+The higher-priority signature and 72-hour recovery window follow the
+[PLC recovery rules](https://web.plc.directory/spec/v0.1/did-plc#key-rotation--account-recovery).
+The deadline is computed from the first displaced operation, with the exact
+boundary accepted and the following microsecond rejected. Previous
+nullifications remain intact. A lower-priority tombstone can be displaced by a
+valid recovery from its surviving ancestor.
+
+`RecoveryPlan.from_directory/3` obtains fresh verified audit evidence and checks
+its head against the directory's latest operation before previewing. It refuses
+to perform network lookup within a database transaction. These are preflight
+primitives: they do not authorize an operator, store or submit operations, or
+change local identity. Directory timestamps and history completeness remain
+trusted. A preview cannot reserve the window or guarantee acceptance after an
+intervening operation; the directory uses its actual receipt time. Durable
+recovery staging, submission and local reconciliation remain pending.
