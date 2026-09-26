@@ -1,11 +1,48 @@
 defmodule Atoll.Moderation.Audit do
-  @moduledoc "Append-only application history of operator subject-status decisions. Not an authorization API."
+  @moduledoc "Append-only application history of supported operator decisions. Not an authorization API."
   import Ecto.Query
   alias Atoll.{Repo, Syntax}
   alias Atoll.Moderation.AuditEntry
 
   @doc "Append inside the moderation transaction, after taking the event lock. Never records credentials."
   def append!(did, subject, requested, before_state, after_state) do
+    insert!(
+      "com.atproto.admin.updateSubjectStatus",
+      did,
+      subject,
+      Map.take(requested, ["takedown", "deactivated"]),
+      before_state,
+      after_state
+    )
+  end
+
+  @doc "Records an operator email change without storing any email challenge or credential."
+  def email_change!(before_profile, after_profile, account) do
+    unless before_profile.did == after_profile.did,
+      do: raise(ArgumentError, "audit account mismatch")
+
+    did = after_profile.did
+
+    insert!(
+      "com.atproto.admin.updateAccountEmail",
+      did,
+      %{"$type" => "com.atproto.admin.defs#repoRef", "did" => did},
+      %{"account" => account, "email" => after_profile.email},
+      email_state(before_profile),
+      email_state(after_profile)
+    )
+  end
+
+  defp email_state(profile) do
+    %{
+      email: profile.email,
+      emailAuthFactor: profile.email_auth_factor,
+      emailConfirmedAt:
+        profile.email_confirmed_at && DateTime.to_iso8601(profile.email_confirmed_at)
+    }
+  end
+
+  defp insert!(operation, did, subject, requested, before_state, after_state) do
     unless Repo.in_transaction?(),
       do: raise(ArgumentError, "moderation audit requires a transaction")
 
@@ -16,8 +53,8 @@ defmodule Atoll.Moderation.Audit do
         did: did,
         subject: subject,
         actor: "admin",
-        operation: "com.atproto.admin.updateSubjectStatus",
-        requested: Map.take(requested, ["takedown", "deactivated"]),
+        operation: operation,
+        requested: requested,
         before_state: before_state,
         after_state: after_state,
         time: DateTime.utc_now()

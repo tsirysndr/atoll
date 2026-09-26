@@ -688,6 +688,7 @@ events. The `[:atoll, :identity, :refresh]` telemetry event reports a count and
 - [x] Operator record takedowns for JSON record reads and listings (signed sync data remains available).
 - [x] Transactional history of successful account/record/blob subject-status decisions, with bounded operator export.
 - [x] Operator account inspection, singly and in bounded batches, with private metadata and invite histories.
+- [x] Audited operator email correction with invalidation of old email challenges.
 - [ ] Remaining administrative account controls and audit coverage for other operator actions.
 - [ ] Production configuration, HTTPS deployment, and signing-key protection.
 - [ ] Database and blob backup / restore workflow.
@@ -1622,11 +1623,14 @@ recorded in the audit history described below.
 
 ### Moderation decision history
 
-Every successful `com.atproto.admin.updateSubjectStatus` call records an audit
-entry in the same database transaction as its account, record, or blob change.
+Every successful `com.atproto.admin.updateSubjectStatus` or
+`com.atproto.admin.updateAccountEmail` call records an audit entry in the same
+database transaction as its account, record, blob, or email change.
 Entries include the subject, requested attributes, before/after state, UTC time,
 and the shared operator identity `admin`. Account snapshots also include effective
 and underlying availability, so deactivation changes beneath a takedown are visible.
+Email snapshots contain the old/new private address, confirmation timestamp, and
+email-factor setting, but never challenge codes, digests, or credentials.
 Repeated decisions and private reference changes are recorded even when no public
 event is emitted. Validation errors, stale CIDs, failed authorization, and rolled-back
 transactions do not create decision entries.
@@ -1732,3 +1736,22 @@ entries across all account views, including repeated appearances of a shared
 `invitedBy` code. Oversized histories return an explicit error instead of a partial
 account view. Use smaller DID batches or `com.atproto.admin.getInviteCodes`
 pagination to inspect large invite histories.
+
+### Operator email correction
+
+`POST com.atproto.admin.updateAccountEmail` accepts JSON `account` (local DID or
+handle) and `email`, with the configured operator Basic credential. It returns an
+empty 200 response. Addresses are normalized using the same rules as owner email
+updates; an address already held by another account is rejected.
+
+Changing the address clears email confirmation, disables the email login factor,
+and invalidates all outstanding confirmation, email-change, password-reset, login,
+and deletion codes and their cooldowns. Passwords, app passwords, and existing
+sessions remain valid. The operation works on inactive accounts without changing
+their availability. Repeating the same normalized address preserves confirmation
+and pending codes. Both changes and no-ops enter the private operator audit history;
+no public repository event is emitted.
+
+This endpoint does not send a message automatically. The owner can request
+confirmation using `com.atproto.server.requestEmailConfirmation`; that request and
+all subsequent email flows use the configured Cloudflare Worker and the new address.

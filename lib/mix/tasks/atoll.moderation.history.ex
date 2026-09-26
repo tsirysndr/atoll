@@ -2,7 +2,7 @@ defmodule Mix.Tasks.Atoll.Moderation.History do
   use Mix.Task
   @shortdoc "Exports one bounded page of private moderation decision history"
   @moduledoc """
-  Reads operator subject-status decisions from the configured database as JSON.
+  Reads operator subject-status and email-change decisions from the configured database as JSON.
 
       mix atoll.moderation.history --limit 100 --after 0
       mix atoll.moderation.history --did did:plc:example
@@ -10,7 +10,7 @@ defmodule Mix.Tasks.Atoll.Moderation.History do
   `--limit` is 1..1000 (default 100); `--after` is an exclusive nonnegative audit
   ID (default 0). A `cursor` is returned when more entries exist. Pass it as
   `--after` for the next page. IDs are JSON strings to retain integer precision.
-  This read-only operator task includes private moderation references and retained
+  This read-only operator task includes private email addresses, moderation references, and retained
   history for deleted accounts. It does not accept or print admin credentials.
   """
   @impl true
