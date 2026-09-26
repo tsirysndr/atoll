@@ -82,6 +82,8 @@ record Lexicons or grant access to account data.
 
 ### Identity, accounts, and authentication
 
+- [x] P-256 and secp256k1 multikey / `did:key` encoding and decoding with curve-point validation.
+- [x] Modern DID-document parsing for expected identity, signing key, HTTPS PDS endpoint, and unverified handle claim.
 - [ ] DID document resolution and verification (`did:plc` and `did:web`).
 - [ ] Handle resolution, verification, and updates.
 - [ ] Account creation, activation, deactivation, and deletion.
