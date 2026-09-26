@@ -7,9 +7,10 @@ defmodule AtollWeb.AdminRequestPlug do
     "/xrpc/com.atproto.server.createInviteCodes",
     "/xrpc/com.atproto.admin.disableInviteCodes",
     "/xrpc/com.atproto.admin.disableAccountInvites",
-    "/xrpc/com.atproto.admin.enableAccountInvites"
+    "/xrpc/com.atproto.admin.enableAccountInvites",
+    "/xrpc/com.atproto.admin.updateSubjectStatus"
   ]
-  @query "/xrpc/com.atproto.admin.getInviteCodes"
+  @queries ["/xrpc/com.atproto.admin.getInviteCodes", "/xrpc/com.atproto.admin.getSubjectStatus"]
   @parser Plug.Parsers.init(
             parsers: [:json],
             json_decoder: Jason,
@@ -22,13 +23,13 @@ defmodule AtollWeb.AdminRequestPlug do
   def call(conn, _) do
     path = "/" <> Enum.map_join(conn.path_info, "/", &URI.decode/1)
 
-    if path in @paths or path == @query do
+    if path in @paths or path in @queries do
       conn =
         conn
         |> put_resp_header("cache-control", "no-store")
         |> put_resp_header("pragma", "no-cache")
 
-      method = if path == @query, do: "GET", else: "POST"
+      method = if path in @queries, do: "GET", else: "POST"
 
       if conn.method == method do
         case Atoll.Accounts.SessionLimiter.check({:admin, conn.remote_ip}, 60) do

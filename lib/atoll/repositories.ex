@@ -234,7 +234,12 @@ defmodule Atoll.Repositories do
       if head.status == status do
         head
       else
-        updated = head |> Ecto.Changeset.change(status: status) |> Repo.update!()
+        attrs =
+          if status == :takendown,
+            do: [status: status, pre_takedown_status: head.status],
+            else: [status: status, pre_takedown_status: nil, takedown_ref: nil]
+
+        updated = head |> Ecto.Changeset.change(attrs) |> Repo.update!()
 
         Events.append!(:account, updated, %{
           "active" => status == :active,

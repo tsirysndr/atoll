@@ -1,6 +1,12 @@
 defmodule AtollWeb.XRPCFallback do
   use AtollWeb, :controller
 
+  def call(conn, {:error, :subject_not_found}),
+    do: error(conn, 400, "NotFound", "Subject not found.")
+
+  def call(conn, {:error, :unsupported_moderation_subject}),
+    do: error(conn, 400, "InvalidRequest", "Only local repository subjects are supported.")
+
   def call(conn, {:error, :invalid_invite_allocation}),
     do: error(conn, 503, "ServiceUnavailable", "Invite allocation is misconfigured.")
 
@@ -14,7 +20,7 @@ defmodule AtollWeb.XRPCFallback do
       )
 
   def call(conn, {:error, :admin_busy}),
-    do: error(conn, 503, "ServiceUnavailable", "Invite service is busy; retry later.")
+    do: error(conn, 503, "ServiceUnavailable", "Administrative service is busy; retry later.")
 
   def call(conn, {:error, :invalid_invite_code}),
     do: error(conn, 400, "InvalidInviteCode", "A valid, available invite code is required.")

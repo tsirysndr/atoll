@@ -43,7 +43,7 @@ Phoenix for server-side reporting. Non-XRPC routes retain their existing error
 format. Failures rejected by the HTTP adapter before reaching Phoenix and errors
 after a response or WebSocket upgrade has begun are outside this JSON renderer.
 
-Routed GET query parameters are checked against 21 unmodified upstream Lexicons
+Routed GET query parameters are checked against 22 unmodified upstream Lexicons
 vendored in `priv/lexicons`, pinned to the revision recorded there with its MIT
 license. Validation covers required parameters, string identifier formats and
 lengths, integer bounds, booleans, and repeated-key arrays. Controller-specific
@@ -683,7 +683,8 @@ events. The `[:atoll, :identity, :refresh]` telemetry event reports a count and
 - [x] GitHub Actions runs checks and the Docker MinIO integration suite on every push (also available manually).
 - [x] Session, blob-upload, and record-write rate limits and bounded request bodies.
 - [ ] General API rate limits, distributed limits, and trusted-proxy client IP handling.
-- [ ] Administrative account controls and takedowns.
+- [x] Operator account status reads, takedowns, restoration, and deactivation.
+- [ ] Record/blob takedowns, remaining administrative account controls, and full moderation audit history.
 - [ ] Production configuration, HTTPS deployment, and signing-key protection.
 - [ ] Database and blob backup / restore workflow.
 - [x] `GET /health/ready` database connectivity readiness with bounded queries and outcome telemetry.
@@ -1379,8 +1380,9 @@ failed authentication includes a Basic challenge. A separate per-node, direct-IP
 bucket allows 60 admin attempts per five minutes, including failed authentication;
 forwarded client addresses do not change it. Account-wide disabling has a
 one-second lock timeout and five-second statement timeout, rolling back on timeout.
-Invite codes are filtered from request-parameter logs. General account moderation,
-and other administrative methods remain pending.
+Invite codes are filtered from request-parameter logs. Account moderation uses
+the same operator authentication, as described below; other administrative methods
+remain pending.
 
 
 ### Invite-code listings
@@ -1470,3 +1472,52 @@ is idempotent. An omitted note clears the previous note on a change. Notes are
 redacted in schema inspection and request logs and are not returned in invite lists.
 This stores the latest control reason; a complete administrator audit log remains
 pending. No email is sent for these controls.
+
+
+### Administrative account status
+
+`GET com.atproto.admin.getSubjectStatus?did=...` returns a local repository subject
+(`com.atproto.admin.defs#repoRef`) and its `takedown` and `deactivated` attributes.
+Each attribute includes `applied`; a takedown can also contain an operator's private
+`ref`. Missing local repositories return `400 NotFound`.
+
+`POST com.atproto.admin.updateSubjectStatus` accepts the same repository subject
+and optional `takedown` and `deactivated` attributes. For example:
+
+```json
+{
+  "subject": {
+    "$type": "com.atproto.admin.defs#repoRef",
+    "did": "did:plc:example"
+  },
+  "takedown": {"applied": true, "ref": "case-123"}
+}
+```
+
+Set `takedown.applied` to `false` to lift it. A takedown preserves the underlying
+active, deactivated, or suspended state. Lifting it restores that state; it cannot
+accidentally publish a previously deactivated or suspended repository. Operators
+can change deactivation while a takedown is in effect, but cannot apply a takedown
+and request activation in the same call. This endpoint cannot clear a suspension.
+Existing takedowns created before migration `20260926131424` have no recorded prior
+state and conservatively restore to deactivated. Explicit operator activation is
+an administrative override; it does not perform the owner's DID/key readiness checks.
+
+Changes take the event lock before the repository row lock and commit atomically
+with an account event when public availability changes. Repeating a state change
+or editing a private reference does not duplicate events. Existing public-read,
+export, blob, write, and session checks immediately enforce takedown. Stored data
+and sessions are retained, and usable sessions resume when availability is restored.
+The account owner cannot lift a takedown using activation/deactivation endpoints.
+
+These routes require the separate operator Basic credentials above, authenticate
+before parsing, share the 60-attempt/five-minute admin rate limit, and return
+`no-store` responses. JSON updates are limited to 16 KiB; writes have one-second
+lock and five-second statement timeouts. Takedown references are UTF-8 strings of
+at most 2000 bytes, excluded from request-parameter logs and public events. Applying
+a takedown without `ref` clears the previous reference; lifting it also clears it.
+`deactivated.ref` is accepted metadata but is not retained. This stores current
+state, not a complete moderation audit history.
+
+Record and blob subjects are explicitly rejected until their takedown enforcement
+is implemented; no successful response implies that such content has been hidden.

@@ -33,6 +33,7 @@ config :phoenix, :json_library, Jason
 config :phoenix, :filter_parameters, [
   "inviteCode",
   "note",
+  "ref",
   "code",
   "codes",
   "cursor",
