@@ -6,7 +6,7 @@ defmodule Atoll.Blobs do
   MIME metadata belong to each repository. Public access requires a current
   record reference with matching metadata and an active repository.
   MIME validation checks syntax only, not file contents. The local size limit is
-  5 MiB per blob. Internal expiration and queued cleanup are available; scheduling,
+  5 MiB per blob. Expiration and queued cleanup have an opt-in scheduler;
   streaming, quotas, and discovery of untracked orphan objects remain pending.
   """
   import Ecto.Query

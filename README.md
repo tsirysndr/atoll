@@ -110,7 +110,8 @@ record Lexicons or grant access to account data.
 - [x] Public `com.atproto.sync.getBlob` and paginated `listBlobs`, with `since` filtering, repository status checks, and restrictive content headers.
 - [x] Internal staged-blob expiration with a 24-hour default grace period and a one-hour minimum.
 - [x] Durable cleanup queue for withdrawn/expired blob ownership, shared-owner checks, PostgreSQL/S3 deletion, and retryable S3 failures.
-- [ ] Automatic cleanup scheduling, untracked-object inventory, and storage quotas.
+- [x] Opt-in supervised cleanup scheduling with bounded batches, task deadlines, failure recovery, and outcome telemetry.
+- [ ] Untracked-object inventory and storage quotas.
 
 Staged blobs are private until referenced by a current record with matching
 metadata. Imports may reference missing blobs; matching uploads make those blobs
@@ -168,10 +169,24 @@ Expiration removes only old, unreferenced ownership metadata and queues its byte
 Re-uploading renews the staging grace period. Collection rechecks all accounts for
 ownership of that backend/CID before deleting bytes, and leaves failed S3 deletes
 queued for retry. Run collection outside any caller transaction: S3 deletion cannot
-be rolled back. Collection is not automatically scheduled and does not discover
-objects orphaned before this queue was introduced. Versioned S3 buckets retain
+be rolled back. Collection does not discover objects orphaned before this queue
+was introduced. Versioned S3 buckets retain
 older object versions behind delete markers; bucket lifecycle/version cleanup is
 separate from this collector.
+
+Set `ATOLL_BLOB_CLEANUP_ENABLED=true` before starting Atoll to enable the cleanup
+worker. It starts after one minute, expires up to 100 staged uploads using the
+24-hour grace period, and processes up to 10 queued deletions per batch. It waits
+one minute after each batch and never overlaps its own tasks. A three-minute task
+deadline bounds a stalled batch; completed item transactions remain committed,
+and unfinished work remains eligible for subsequent batches. The worker is
+disabled automatically in the test environment; worker tests start isolated
+instances explicitly.
+
+The `[:atoll, :blobs, :cleanup]` telemetry event reports run outcome and, for
+completed batches, expired, deleted, retained, failed, and skipped counts.
+Enable one worker instance per deployment to avoid redundant scans; database
+locking protects shared objects when collectors overlap.
 
 ### Synchronization and federation
 

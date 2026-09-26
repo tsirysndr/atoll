@@ -1,6 +1,6 @@
 defmodule Atoll.Blobs.Cleanup do
   @moduledoc """
-  Internal bounded expiration and durable byte cleanup. Not scheduled automatically.
+  Internal bounded expiration and durable byte cleanup, with an opt-in scheduler.
 
   Uploads, withdrawals, expiration and collection share the repository write lock.
   S3 deletion runs under that lock and only when no account owns that backend/CID.

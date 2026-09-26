@@ -1,5 +1,11 @@
 import Config
 
+case System.get_env("ATOLL_BLOB_CLEANUP_ENABLED", "false") do
+  "true" -> config :atoll, :blob_cleanup_enabled, config_env() != :test
+  "false" -> config :atoll, :blob_cleanup_enabled, false
+  _ -> raise "ATOLL_BLOB_CLEANUP_ENABLED must be true or false"
+end
+
 case System.get_env("ATOLL_BLOB_STORAGE", "postgres") do
   "postgres" ->
     config :atoll, :blob_storage, backend: :postgres

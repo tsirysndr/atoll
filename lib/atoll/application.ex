@@ -23,14 +23,28 @@ defmodule Atoll.Application do
     refresh_children =
       if Application.get_env(:atoll, :identity_refresh_enabled, false) do
         [
-          {Task.Supervisor, name: Atoll.Identity.TaskSupervisor},
+          Supervisor.child_spec({Task.Supervisor, name: Atoll.Identity.TaskSupervisor},
+            id: Atoll.Identity.TaskSupervisor
+          ),
           {Atoll.Identity.RefreshWorker, []}
         ]
       else
         []
       end
 
-    Supervisor.start_link(children ++ refresh_children, opts)
+    cleanup_children =
+      if Application.get_env(:atoll, :blob_cleanup_enabled, false) do
+        [
+          Supervisor.child_spec({Task.Supervisor, name: Atoll.Blobs.TaskSupervisor},
+            id: Atoll.Blobs.TaskSupervisor
+          ),
+          {Atoll.Blobs.CleanupWorker, []}
+        ]
+      else
+        []
+      end
+
+    Supervisor.start_link(children ++ refresh_children ++ cleanup_children, opts)
   end
 
   # Tell Phoenix to update the endpoint configuration

@@ -32,5 +32,5 @@ if [[ "$ready" != true ]]; then
 fi
 
 # Keep unrelated runtime options from enabling external services during this test.
-ATOLL_IDENTITY_REFRESH_ENABLED=false ATOLL_BLOB_STORAGE=postgres \
+ATOLL_BLOB_CLEANUP_ENABLED=false ATOLL_IDENTITY_REFRESH_ENABLED=false ATOLL_BLOB_STORAGE=postgres \
   mix test --only minio test/atoll/blobs_minio_test.exs

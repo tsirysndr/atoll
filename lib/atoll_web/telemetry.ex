@@ -22,6 +22,11 @@ defmodule AtollWeb.Telemetry do
   def metrics do
     [
       sum("atoll.identity.refresh.count", tags: [:result]),
+      sum("atoll.blobs.cleanup.runs", tags: [:result]),
+      sum("atoll.blobs.cleanup.expired"),
+      sum("atoll.blobs.cleanup.deleted"),
+      sum("atoll.blobs.cleanup.retained"),
+      sum("atoll.blobs.cleanup.failed"),
       # Phoenix Metrics
       summary("phoenix.endpoint.start.system_time",
         unit: {:native, :millisecond}
