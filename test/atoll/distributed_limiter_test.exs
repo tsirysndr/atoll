@@ -52,7 +52,7 @@ defmodule Atoll.DistributedLimiterTest do
     assert SessionLimiter.backend_from_env!("memory") == :memory
     assert SessionLimiter.backend_from_env!("postgres") == :postgres
 
-    for value <- ["", "redis", "POSTGRES", "disabled"],
+    for value <- ["", "REDIS", "POSTGRES", "disabled"],
         do: assert_raise(ArgumentError, fn -> SessionLimiter.backend_from_env!(value) end)
   end
 

@@ -94,7 +94,8 @@ defmodule Atoll.Application do
       end
 
     Supervisor.start_link(
-      children ++
+      Atoll.Redis.children() ++
+        children ++
         refresh_children ++
         cleanup_children ++ account_cleanup_children ++ relay_children ++ retention_children,
       opts

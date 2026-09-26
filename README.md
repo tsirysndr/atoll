@@ -724,6 +724,7 @@ observations do not produce duplicate events. The
 - [x] Configurable general XRPC request budget before parsing, in addition to specialized rate limits.
 - [x] Explicit trusted-proxy CIDRs and bounded client-IP extraction for all request rate limits.
 - [x] Optional PostgreSQL-shared request budgets across nodes, with bounded storage and fail-closed errors.
+- [x] Optional Redis-shared request budgets; in-memory remains the default.
 - [x] Operator account status reads, takedowns, restoration, and deactivation.
 - [x] Account-scoped blob takedowns across PostgreSQL/S3 serving, uploads, references, and cleanup.
 - [x] Operator record takedowns for JSON record reads and listings (signed sync data remains available).
@@ -3095,3 +3096,44 @@ complete archive are no longer accumulated. The streaming callback must finish
 consuming the enumerable before returning. CAR decoding and imports remain
 buffered. Tests compare full and incremental block sets with the buffered codec,
 exercise cancellation/corruption, and stream a repository larger than 64 MiB.
+
+### Optional Redis
+
+Atoll requires no Redis by default: request budgets remain in memory. For shared
+budgets across multiple instances, choose Redis explicitly:
+
+```sh
+export ATOLL_RATE_LIMIT_BACKEND=redis
+export ATOLL_REDIS_URL='redis://127.0.0.1:6379/0'
+export ATOLL_REDIS_NAMESPACE=atoll
+```
+
+Use `rediss://` for TLS; URLs may include Redis username/password credentials and
+a database number. Redix verifies TLS certificates and hostnames using the system
+CA store. Keep credentials in your secret configuration. All instances sharing a
+budget must use the same Redis database and namespace. The namespace defaults to
+`atoll` and accepts 1–64 letters, digits, underscores, or hyphens. `memory` remains
+the default backend; the existing `postgres` backend is still available. Redis is
+not connected unless selected. Identity caches remain bounded node-local memory;
+PostgreSQL remains authoritative for accounts, sessions, and repositories.
+
+A single Lua script atomically admits requests using Redis server time, fixed
+five-minute windows, and SHA-256 digests of the existing request-budget keys.
+Two keys sharing a Redis hash tag hold counts and expiry times. Storage is capped
+at 10,000 buckets per namespace, expired entries are reclaimed in bounded batches,
+and idle limiter state expires after five minutes. Configure Redis with a
+`noeviction` memory policy: eviction or clearing its state resets budgets. Redis
+outages, command timeouts, or inconsistent state fail closed with a short retry
+interval; there is no automatic fallback that would grant new local budgets.
+The client reconnects automatically. Redis replication/failover can lose recent
+budget updates; this is operational rate limiting, not durable account state.
+
+Real Redis tests are opt-in, using an isolated test instance/database:
+
+```sh
+ATOLL_TEST_REDIS_URL=redis://127.0.0.1:6379/0 \
+  mix test test/atoll/redis_limiter_test.exs --include redis
+```
+
+Tests use unique namespaces and delete their own keys on completion. Normal
+`mix precommit` requires neither Redis nor Docker.

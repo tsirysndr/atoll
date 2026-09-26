@@ -34,6 +34,15 @@ config :atoll,
        Atoll.Accounts.SessionLimiter.backend_from_env!(System.get_env("ATOLL_RATE_LIMIT_BACKEND"))
 
 config :atoll,
+       :redis,
+       Atoll.Redis.config!(
+         System.get_env(),
+         Atoll.Accounts.SessionLimiter.backend_from_env!(
+           System.get_env("ATOLL_RATE_LIMIT_BACKEND")
+         )
+       )
+
+config :atoll,
        :trusted_proxies,
        AtollWeb.ClientIP.parse_trusted_proxies!(System.get_env("ATOLL_TRUSTED_PROXY_CIDRS"))
 

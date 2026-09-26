@@ -1,5 +1,5 @@
 defmodule Atoll.Accounts.SessionLimiter do
-  @moduledoc "Request budgets backed by bounded node-local memory or shared PostgreSQL state."
+  @moduledoc "Request budgets backed by bounded node-local memory, PostgreSQL, or Redis."
   use GenServer
   @window 300_000
 
@@ -10,6 +10,7 @@ defmodule Atoll.Accounts.SessionLimiter do
     case Application.get_env(:atoll, :rate_limit_backend, :memory) do
       :memory -> check(key, limit, __MODULE__)
       :postgres -> Atoll.Accounts.DistributedLimiter.check(key, limit)
+      :redis -> Atoll.Accounts.RedisLimiter.check(key, limit)
     end
   end
 
@@ -19,9 +20,10 @@ defmodule Atoll.Accounts.SessionLimiter do
   def backend_from_env!(nil), do: :memory
   def backend_from_env!("memory"), do: :memory
   def backend_from_env!("postgres"), do: :postgres
+  def backend_from_env!("redis"), do: :redis
 
   def backend_from_env!(_),
-    do: raise(ArgumentError, "ATOLL_RATE_LIMIT_BACKEND must be memory or postgres")
+    do: raise(ArgumentError, "ATOLL_RATE_LIMIT_BACKEND must be memory, postgres, or redis")
 
   @impl true
   def init(opts) do

@@ -47,6 +47,7 @@ defmodule Atoll.MixProject do
       {:telemetry_poller, "~> 1.0"},
       {:jason, "~> 1.2"},
       {:req, "~> 0.7.4"},
+      {:redix, "~> 1.9"},
       {:argon2_elixir, "~> 4.1"},
       {:jose, "~> 1.11"},
       {:dns_cluster, "~> 0.2.0"},
