@@ -3,7 +3,9 @@ defmodule AtollWeb.AccountBrowserPlug do
   @behaviour Plug
   import Plug.Conn
 
-  @paths ~w(/account/signup /account/login /account/sessions /account/sessions/revoke /account/logout /oauth/authorize /account/security /account/security/begin /account/security/confirm /account/security/recovery /account/security/disable)
+  @passkey_paths ~w(/account/passkeys /account/passkeys/register/begin /account/passkeys/register/finish /account/passkeys/login/begin /account/passkeys/login/finish /account/passkeys/revoke)
+  @paths @passkey_paths ++
+           ~w(/account/signup /account/login /account/sessions /account/sessions/revoke /account/logout /oauth/authorize /account/security /account/security/begin /account/security/confirm /account/security/recovery /account/security/disable)
 
   def init(opts), do: opts
 
@@ -40,7 +42,7 @@ defmodule AtollWeb.AccountBrowserPlug do
     end
   end
 
-  defp methods("/account/security"), do: ["GET"]
+  defp methods(path) when path in ["/account/security", "/account/passkeys"], do: ["GET"]
 
   defp methods(path)
        when path in ["/account/signup", "/account/login", "/account/sessions", "/oauth/authorize"],
@@ -55,14 +57,15 @@ defmodule AtollWeb.AccountBrowserPlug do
   defp limited(conn, path) do
     login? =
       conn.method == "POST" and
-        path in [
-          "/account/login",
-          "/account/signup",
-          "/account/security/begin",
-          "/account/security/confirm",
-          "/account/security/recovery",
-          "/account/security/disable"
-        ]
+        (path in @passkey_paths or
+           path in [
+             "/account/login",
+             "/account/signup",
+             "/account/security/begin",
+             "/account/security/confirm",
+             "/account/security/recovery",
+             "/account/security/disable"
+           ])
 
     bucket = if login?, do: :account_login, else: :account_browser
     limit = if login?, do: 10, else: 100
@@ -96,11 +99,17 @@ defmodule AtollWeb.AccountBrowserPlug do
   end
 
   defp parse(conn, path) do
+    limit =
+      if path in ["/account/passkeys/register/finish", "/account/passkeys/login/finish"],
+        do: 49_152,
+        else: 8192
+
     with true <- conn.query_string == "",
          true <- get_req_header(conn, "content-encoding") in [[], ["identity"]],
          [type] <- get_req_header(conn, "content-type"),
          {:ok, "application", "x-www-form-urlencoded", _} <- Plug.Conn.Utils.media_type(type),
-         {:ok, body, conn} <- read_body(conn, length: 8192, read_length: 8193, read_timeout: 5000),
+         {:ok, body, conn} <-
+           read_body(conn, length: limit, read_length: limit + 1, read_timeout: 5000),
          {:ok, params} <- Atoll.OAuth.Form.decode(body) do
       dispatch(%{conn | body_params: params, params: params}, path)
     else

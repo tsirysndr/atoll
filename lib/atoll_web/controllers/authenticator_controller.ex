@@ -130,7 +130,7 @@ defmodule AtollWeb.AuthenticatorController do
           "Account security",
           "<p role=\"status\">" <>
             e(notice) <>
-            "</p>" <>
+            "</p><p><a href=\"/account/passkeys\">Manage passkeys</a></p>" <>
             content <>
             "<p>Existing sessions and app passwords stay active when you change authenticator settings. " <>
             "If a device was lost, review connected applications.</p>" <> back()

@@ -66,7 +66,7 @@ defmodule Atoll.MixProject do
     [
       setup: ["deps.get", "ecto.setup", "assets.setup", "assets.build"],
       "assets.setup": ["tailwind.install --if-missing"],
-      "assets.build": ["tailwind atoll --minify"],
+      "assets.build": ["tailwind atoll --minify", "atoll.assets"],
       "assets.deploy": ["assets.build", "phx.digest"],
       "ecto.setup": ["ecto.create", "ecto.migrate", "run priv/repo/seeds.exs"],
       "ecto.reset": ["ecto.drop", "ecto.setup"],

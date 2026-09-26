@@ -3,6 +3,9 @@ defmodule AtollWeb.AccountController do
   alias Atoll.Accounts.Sessions
   alias Atoll.OAuth.SessionManagement
 
+  def dispatch(conn, "/account/passkeys" <> _ = path),
+    do: AtollWeb.PasskeyController.dispatch(conn, path)
+
   def dispatch(conn, "/account/signup"), do: AtollWeb.SignupController.dispatch(conn)
 
   def dispatch(conn, "/oauth/authorize"), do: AtollWeb.ConsentController.dispatch(conn)
@@ -43,17 +46,7 @@ defmodule AtollWeb.AccountController do
            true <- p["authFactorToken"] in [nil, ""] or byte_size(p["authFactorToken"]) == 32,
            {:ok, pair} <- authenticate(identifier, password, p["authFactorToken"], p["totpCode"]),
            :ok <- full_account(pair) do
-        pending = get_session(conn, :oauth_pending)
-        Plug.CSRFProtection.delete_csrf_token()
-
-        conn
-        |> clear_session()
-        |> configure_session(renew: true)
-        |> put_session(:account_access, pair.access_jwt)
-        |> put_session(:account_refresh, pair.refresh_jwt)
-        |> put_session(:account_expires_at, System.system_time(:second) + 3600)
-        |> put_session(:oauth_pending, pending)
-        |> go(if(pending, do: "/oauth/authorize", else: "/account/sessions"))
+        signed_in(conn, pair)
       else
         {:error, :totp_required} ->
           login_form(
@@ -83,6 +76,21 @@ defmodule AtollWeb.AccountController do
           )
       end
     end
+  end
+
+  @doc false
+  def signed_in(conn, pair) do
+    pending = get_session(conn, :oauth_pending)
+    Plug.CSRFProtection.delete_csrf_token()
+
+    conn
+    |> clear_session()
+    |> configure_session(renew: true)
+    |> put_session(:account_access, pair.access_jwt)
+    |> put_session(:account_refresh, pair.refresh_jwt)
+    |> put_session(:account_expires_at, System.system_time(:second) + 3600)
+    |> put_session(:oauth_pending, pending)
+    |> go(if(pending, do: "/oauth/authorize", else: "/account/sessions"))
   end
 
   defp after_login(conn),
@@ -219,8 +227,17 @@ defmodule AtollWeb.AccountController do
         if(status == 200, do: "", else: " open") <>
         "><summary>Two-factor authentication</summary><label>Email sign-in code (if requested)<input name=\"authFactorToken\" autocomplete=\"one-time-code\" maxlength=\"32\"></label>" <>
         "<label>Authenticator or recovery code (if enabled)<input name=\"totpCode\" pattern=\"([0-9]{6}|[A-Z2-7]{26})\" autocomplete=\"one-time-code\" maxlength=\"26\"></label>" <>
-        "</details><button>Sign in</button></form>"
+        "</details><button>Sign in</button></form>" <> passkey_login()
     )
+  end
+
+  defp passkey_login do
+    if Atoll.Accounts.Passkeys.enabled?(),
+      do:
+        "<form method=\"post\" action=\"/account/passkeys/login/begin\">" <>
+          csrf() <>
+          "<button>Sign in with a passkey</button></form>",
+      else: ""
   end
 
   def message(conn, status, text),
@@ -242,16 +259,26 @@ defmodule AtollWeb.AccountController do
 
   def page(conn, status, title, content) do
     width =
-      if conn.request_path in ["/account/login", "/account/signup", "/oauth/authorize"],
-        do: "max-w-sm",
-        else: "max-w-2xl"
+      if conn.assigns[:passkey_script] ||
+           conn.request_path in ["/account/login", "/account/signup", "/oauth/authorize"],
+         do: "max-w-sm",
+         else: "max-w-2xl"
+
+    script =
+      if conn.assigns[:passkey_script],
+        do:
+          "<script defer src=\"" <>
+            e(AtollWeb.Endpoint.static_path("/assets/passkeys.js")) <> "\"></script>",
+        else: ""
 
     html =
       "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>" <>
         e(title) <>
         "</title><link rel=\"stylesheet\" href=\"" <>
         e(AtollWeb.Endpoint.static_path("/assets/account.css")) <>
-        "\"></head><body class=\"account-background\"><div class=\"flex min-h-svh flex-col items-center justify-center p-6 md:p-10\"><main class=\"w-full " <>
+        "\">" <>
+        script <>
+        "</head><body class=\"account-background\"><div class=\"flex min-h-svh flex-col items-center justify-center p-6 md:p-10\"><main class=\"w-full " <>
         width <>
         " overflow-hidden rounded-xl border border-edge bg-surface pt-4\"><header class=\"mb-4 px-4 pt-2 text-center font-medium\">Atoll PDS</header><div class=\"px-4\"><h1>" <>
         e(title) <>

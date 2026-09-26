@@ -13,7 +13,7 @@ concurrency:
 
 jobs:
   test:
-    name: Elixir tests and MinIO integration
+    name: Elixir, browser and MinIO tests
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     env:
@@ -62,6 +62,11 @@ jobs:
       # The test alias creates and migrates the database automatically.
       - name: Run project checks and tests
         run: mix precommit
+
+      - name: Run passkey browser integration
+        env:
+          CHROME_BIN: google-chrome
+        run: mix test --include browser test/atoll_web/passkey_browser_e2e_test.exs
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4

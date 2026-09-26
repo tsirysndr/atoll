@@ -321,6 +321,60 @@ defmodule AtollWeb.BrowserConsentTest do
              "Connected applications"
   end
 
+  test "passkey sign-in preserves the pushed request and resumes explicit consent", c do
+    alias Atoll.Accounts.{Passkeys, Sessions}
+    alias Atoll.PasskeyFixtures, as: Fixture
+    {:ok, pair} = Sessions.create(c.did, "browser password")
+    binding = random()
+
+    {:ok, request} =
+      Passkeys.begin_registration(pair.access_jwt, "browser password", binding, "OAuth key")
+
+    fixture = Fixture.new(request.public_key)
+
+    {:ok, key} =
+      Passkeys.complete_registration(
+        pair.access_jwt,
+        binding,
+        request.reference,
+        Fixture.registration(fixture)
+      )
+
+    login = begin(c) |> browser() |> get("/account/login")
+    ceremony = post_form(login, "/account/passkeys/login/begin", %{})
+    [_, raw] = Regex.run(~r/data-public-key="([^"]+)"/, ceremony.resp_body)
+
+    options =
+      raw |> String.replace("&quot;", "\"") |> String.replace("&amp;", "&") |> Jason.decode!()
+
+    fixture = %{
+      fixture
+      | context: Fixture.context(%{challenge: options["challenge"], rpId: options["rpId"]})
+    }
+
+    signed =
+      post_form(ceremony, "/account/passkeys/login/finish", %{
+        "credential" => Jason.encode!(Fixture.assertion(fixture))
+      })
+
+    assert redirected_to(signed, 303) == "/oauth/authorize"
+    page = signed |> browser() |> get("/oauth/authorize")
+    assert html_response(page, 200) =~ "Connect an application"
+    assert Repo.aggregate(AuthorizationCode, :count) == 0
+    approved = submit(page, %{"decision" => "approve"})
+
+    code =
+      redirected_to(approved, 303)
+      |> URI.parse()
+      |> Map.fetch!(:query)
+      |> URI.decode_query()
+      |> Map.fetch!("code")
+
+    assert exchange(c, code) |> json_response(200) |> Map.fetch!("sub") == c.did
+    assert {:ok, :revoked} = Passkeys.revoke(pair.access_jwt, "browser password", key.id)
+    assert Repo.aggregate(Atoll.OAuth.Session, :count) == 0
+  end
+
   defp create_request(c, extra \\ %{}) do
     keys = [
       :pds,

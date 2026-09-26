@@ -412,7 +412,7 @@ mutation. Deletes and empty batches need no record schema, even with `validate: 
 - [x] Browser pushed-request authorization and explicit consent with optional scope narrowing and account-hint enforcement.
 - [x] Internal ES256 WebAuthn registration/assertion verification with a Chrome virtual-authenticator fixture.
 - [x] Internal persisted passkey enrollment, one-use ceremonies, user-verified login, inventory and cascading revocation.
-- [ ] Optional passkey browser enrollment, authentication, management, and recovery.
+- [x] Optional passkey browser enrollment, authentication, management, and password-based recovery.
 - [x] OAuth `prompt=create` account-creation flow, including pushed-request validation and browser signup.
 - [x] Internal RFC 6238 TOTP verification, authenticator provisioning URIs, and account-bound encrypted secret envelopes.
 - [x] Internal persistent TOTP enrollment and confirmation, one-time login codes, database attempt limits, and key rotation.
@@ -5238,7 +5238,7 @@ and account pages state this behavior. Browser cookie expiry alone does not
 revoke grants. Individually revoked applications and independently created grants
 retain their existing behavior. Authenticator login enforcement is described below;
 its enrollment and recovery screens are available at `/account/security`. Optional
-passkeys remain on the roadmap.
+passkeys are available as described below.
 
 HTTP tests cover login resumption, permission narrowing, code exchange, a resource
 read, denial, logout cascades, CSRF and form tampering, hint mismatches, expired
@@ -5320,7 +5320,7 @@ password. It stores an encrypted pending secret for ten minutes; `confirm/2`
 enables the factor only after a valid code and consumes that code. The browser
 flow at `/account/security` displays a manual setup key for Google Authenticator
 and compatible apps, then requires a code to finish setup. Accounts without a
-confirmed factor retain password login behavior. Passkeys remain pending.
+confirmed factor retain password login behavior. Passkey login is described below.
 
 Confirmed factors require a six-digit authenticator code or a 26-character
 recovery code on browser password login and on
@@ -5373,7 +5373,8 @@ runs a Tailwind watcher. Use `mix assets.build` after changes to the stylesheet 
 screen markup. `mix precommit` builds assets before tests, so CI checks that the
 build succeeds. Before making a production release, run `MIX_ENV=prod mix assets.deploy` to build and digest the stylesheet. Generated assets are ignored
 by Git and must be included in the release. The pages load no third-party styles,
-scripts, fonts or QR services. CSP permits only same-origin styles.
+scripts, fonts or QR services. CSP permits same-origin styles; only passkey ceremony
+pages additionally permit the local passkey script.
 
 ### WebAuthn verification foundation
 
@@ -5395,8 +5396,7 @@ bytes, oversized/deep structures, tags, indefinite lengths and unsupported types
 Client-data JSON rejects duplicate top-level keys. This profile does not assert
 hardware provenance, accept attestation certificates, or offer other algorithms.
 
-This verifier is connected to the internal lifecycle below; public browser passkey
-screens remain pending.
+This verifier is connected to the persistent lifecycle and browser screens below.
 Callers must supply trusted context and stored credentials; verification alone
 cannot prevent challenge replay or authorize a session.
 
@@ -5415,7 +5415,7 @@ origins, user verification, backup flags, extension framing and counter reuse.
 `Atoll.Accounts.Passkeys` connects the WebAuthn verifier to PostgreSQL and account
 sessions. It is an internal API: browser controllers must supply a random 256-bit
 cookie binding, enforce CSRF and rate limits, and never accept trusted admission
-state from a request. The browser interface is not implemented yet.
+state from a request. The browser adapter described below enforces these boundaries.
 
 `begin_registration/5` requires a live full-account session, fresh password and,
 when enabled, an unused authenticator or recovery code via `:totp_code`. Its
@@ -5466,3 +5466,56 @@ password/session/factor changes, counter regression, bad signatures, expiry,
 challenge/account caps, session-cap failures and cascading OAuth revocation.
 Independent database connections race both enrollment and zero-counter login:
 exactly one request succeeds for each shared challenge.
+
+
+### Passkeys in the browser
+
+Open **Account security → Manage passkeys** (`/account/passkeys`) after signing
+in. Add a name, re-enter your password and provide an unused authenticator or
+recovery code if TOTP is enabled. Choose **Continue with passkey** and follow the
+device prompt. You can use a platform authenticator, a synced passkey provider or
+a compatible security key; the authenticator must support discoverable ES256 keys
+and user verification. Enrollment is optional and password sign-in remains available.
+
+The login page offers **Sign in with a passkey** while passkeys are enabled.
+The browser asks the authenticator to select a credential without sending an
+account identifier. Successful verification renews the account cookie and resumes
+any pending OAuth request at explicit consent. A passkey does not bypass
+`prompt=create`, account-hint matching or permission approval. If a passkey is
+lost, sign in with the password and any configured email/TOTP factor, remove the
+lost key from the management page and enroll a replacement. Removing the key used
+for the current browser session signs that browser out too.
+
+All begin, finish and removal actions are CSRF-protected, canonical POST forms
+sharing the ten-attempt/five-minute login budget. The encrypted cookie holds the
+ceremony reference, purpose and fresh random browser binding; these are never
+accepted as form parameters. Finish forms allow up to 48 KiB for WebAuthn data;
+other account forms retain their 8 KiB limit. Credential JSON must contain exactly
+the expected fields without duplicate keys. Invalid, expired and wrong-browser
+responses fail locally. Names and public options are HTML-escaped, and passwords
+are not reflected into responses.
+
+The local `assets/js/passkeys.js` calls `navigator.credentials.create/get`,
+serializes the credential and submits a same-origin form. It makes no fetch calls
+and requires no npm packages. Unsupported browsers show a password fallback;
+cancelled device prompts can be retried within the ceremony lifetime. Only these
+ceremony pages permit `script-src 'self'`, with no inline scripts or external
+resources. Framing is blocked and responses remain uncached. `mix assets.build`
+copies the script into static assets; `mix assets.deploy` also fingerprints it.
+Run the asset build after editing the script.
+
+HTTP tests cover enrollment, login, password recovery, current-key revocation,
+CSRF/browser binding, JSON ambiguity, escaping, expiry, disabled policy and request
+bounds. An OAuth integration test confirms passkey login resumes consent and key
+removal revokes the resulting grant. A real Chrome test uses a fresh temporary
+profile and CTAP2 virtual authenticator to exercise the rendered forms and shipped
+JavaScript, including desktop/mobile/dark rendering checks. No real credentials
+or browser profiles are used.
+
+Run `mix assets.build`, then
+`mix test --include browser test/atoll_web/passkey_browser_e2e_test.exs` with Node
+22+ and Chrome/Chromium (`CHROME_BIN` overrides the executable). The ordinary
+suite excludes this `:browser` test; GitHub CI runs it as a separate step using
+the runner's installed browser. Screenshots are written as `atoll-passkey-*.png`
+in the system temporary directory. This verifies the passkey browser flow, not
+complete ATProto federation or third-party client interoperability.
