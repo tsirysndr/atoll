@@ -29,6 +29,7 @@ defmodule Atoll.Repositories.Takedowns do
         Events.lock!()
         lock_head!(did, true)
         {record, marker} = subject!(did, path)
+        before_state = %{takedown: attribute(marker)}
         # Never apply an operator decision to a record that changed after review.
         unless cid == (record || marker).cid, do: Repo.rollback(:invalid_swap)
 
@@ -48,6 +49,10 @@ defmodule Atoll.Repositories.Takedowns do
               Repo.delete_all(from t in Takedown, where: t.did == ^did and t.path == ^path)
               nil
           end
+
+        Atoll.Moderation.Audit.append!(did, subject, params, before_state, %{
+          takedown: attribute(marker)
+        })
 
         # A deleted record can still have its retained marker lifted.
         %{subject: subject, takedown: attribute(marker)}

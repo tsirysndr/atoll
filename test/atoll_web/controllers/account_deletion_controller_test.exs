@@ -68,11 +68,20 @@ defmodule AtollWeb.AccountDeletionControllerTest do
     assert response(written, 200)
     {:ok, app} = AppPasswords.create(c.pair.access_jwt, %{"name" => "client"})
     {:ok, app_session} = Sessions.create(@did, app.password)
+    # A harmless operator decision still has a private audit record after deletion.
+    assert {:ok, _} =
+             Atoll.Accounts.SubjectStatus.update(%{
+               "subject" => %{"$type" => "com.atproto.admin.defs#repoRef", "did" => @did}
+             })
+
+    {:ok, audit_before} = Atoll.Moderation.Audit.list(100, 0, @did)
+    assert length(audit_before.entries) == 1
     code = deletion_code(c)
     cursor = Events.latest_seq()
     assert response(delete_account(c, code), 200) == ""
     assert is_nil(Repo.get(Head, @did))
     assert is_nil(Repo.get(Profile, @did))
+    assert Atoll.Moderation.Audit.list(100, 0, @did) == {:ok, audit_before}
 
     for schema <- [
           Atoll.Accounts.Credential,

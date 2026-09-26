@@ -87,6 +87,14 @@ defmodule Atoll.Accounts.SubjectStatus do
         })
       end
 
+      Atoll.Moderation.Audit.append!(
+        did,
+        view(updated).subject,
+        params,
+        audit_state(head),
+        audit_state(updated)
+      )
+
       Map.take(view(updated), [:subject, :takedown])
     end)
   rescue
@@ -94,6 +102,16 @@ defmodule Atoll.Accounts.SubjectStatus do
       if e.postgres[:code] in [:lock_not_available, :query_canceled],
         do: {:error, :admin_busy},
         else: reraise(e, __STACKTRACE__)
+  end
+
+  defp audit_state(head) do
+    head
+    |> view()
+    |> Map.delete(:subject)
+    |> Map.merge(%{
+      availability: Atom.to_string(head.status),
+      underlyingAvailability: Atom.to_string(head.pre_takedown_status || head.status)
+    })
   end
 
   defp view(head) do

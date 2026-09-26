@@ -686,7 +686,8 @@ events. The `[:atoll, :identity, :refresh]` telemetry event reports a count and
 - [x] Operator account status reads, takedowns, restoration, and deactivation.
 - [x] Account-scoped blob takedowns across PostgreSQL/S3 serving, uploads, references, and cleanup.
 - [x] Operator record takedowns for JSON record reads and listings (signed sync data remains available).
-- [ ] Remaining administrative account controls and full moderation audit history.
+- [x] Transactional history of successful account/record/blob subject-status decisions, with bounded operator export.
+- [ ] Remaining administrative account controls and audit coverage for other operator actions.
 - [ ] Production configuration, HTTPS deployment, and signing-key protection.
 - [ ] Database and blob backup / restore workflow.
 - [x] `GET /health/ready` database connectivity readiness with bounded queries and outcome telemetry.
@@ -1518,8 +1519,9 @@ before parsing, share the 60-attempt/five-minute admin rate limit, and return
 lock and five-second statement timeouts. Takedown references are UTF-8 strings of
 at most 2000 bytes, excluded from request-parameter logs and public events. Applying
 a takedown without `ref` clears the previous reference; lifting it also clears it.
-`deactivated.ref` is accepted metadata but is not retained. This stores current
-state, not a complete moderation audit history.
+`deactivated.ref` is not retained in current state; it remains in the audit
+request snapshot. Current state is accompanied by the operator decision history
+described below.
 
 Record and blob subjects are supported as described below. Each subject type has
 its own enforcement boundary; record visibility controls do not withhold signed
@@ -1610,5 +1612,46 @@ imports. Owners can still edit or delete their records, but these operations do 
 lift the restriction. Status reads return the current CID when present, or the last
 moderated CID for a deleted record; operators can lift a retained restriction using
 that returned subject. A missing record without a retained restriction returns
-`NotFound`. Account deletion removes its restrictions. This is current moderation
-state, not a complete audit history.
+`NotFound`. Account deletion removes its restrictions. Operator decisions are also
+recorded in the audit history described below.
+
+
+### Moderation decision history
+
+Every successful `com.atproto.admin.updateSubjectStatus` call records an audit
+entry in the same database transaction as its account, record, or blob change.
+Entries include the subject, requested attributes, before/after state, UTC time,
+and the shared operator identity `admin`. Account snapshots also include effective
+and underlying availability, so deactivation changes beneath a takedown are visible.
+Repeated decisions and private reference changes are recorded even when no public
+event is emitted. Validation errors, stale CIDs, failed authorization, and rolled-back
+transactions do not create decision entries.
+
+History starts with migration `20260926133109`; earlier decisions cannot be
+reconstructed. Entries survive account deletion and have no automatic retention
+limit. The application only appends entries; this is not a tamper-proof log against
+database administrators. The shared Basic credential does not identify individual
+human operators. Owner lifecycle changes, direct `Repositories.set_status` calls,
+invite administration, and failed authentication attempts are outside this decision
+log's current coverage.
+
+Export one page from the trusted operator console:
+
+```sh
+mix atoll.moderation.history --limit 100
+mix atoll.moderation.history --limit 100 --after 123
+mix atoll.moderation.history --did did:plc:example
+```
+
+The task is read-only and uses the configured database. `--limit` accepts 1–1000;
+`--after` is an exclusive nonnegative audit ID. Results are JSON with `entries`, plus
+`cursor` when another page exists. Pass that cursor to the next invocation; keep the
+same DID filter when paging. IDs and cursors are strings to preserve 64-bit integer
+precision. Entries are ordered by ID, with successful writes serialized through the
+existing event lock; rolled-back transactions may leave sequence gaps.
+
+This export intentionally contains private moderation references, including for
+deleted accounts. Those fields are redacted from schema inspection and excluded
+from SQL parameter logging and public events. No passwords, authorization headers,
+or session tokens are stored. There is no public history endpoint or automatic
+external export.

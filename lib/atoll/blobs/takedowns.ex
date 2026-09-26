@@ -34,6 +34,7 @@ defmodule Atoll.Blobs.Takedowns do
         Events.lock!()
         lock_head!(did, true)
         current = subject!(did, cid)
+        before_state = Map.delete(view(did, cid, current), :subject)
 
         current =
           case Map.fetch(params, "takedown") do
@@ -52,7 +53,17 @@ defmodule Atoll.Blobs.Takedowns do
               nil
           end
 
-        view(did, cid, current)
+        result = view(did, cid, current)
+
+        Atoll.Moderation.Audit.append!(
+          did,
+          result.subject,
+          params,
+          before_state,
+          Map.delete(result, :subject)
+        )
+
+        result
       end)
     else
       _ -> {:error, :invalid_request}
