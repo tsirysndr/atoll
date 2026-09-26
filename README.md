@@ -614,6 +614,7 @@ locking protects shared objects when collectors overlap.
 - [x] Bounded operator revision-history compaction preserving current heads and retained replay dependencies.
 - [x] `getLatestCommit`, `getRepoStatus`, and paginated `listRepos` sync endpoints with persistent repository status.
 - [x] `com.atproto.sync.getRecord` compact signed existence and absence proofs.
+- [x] Bounded verification of partial MST search paths and signed record CAR inclusion proofs.
 - [x] `com.atproto.sync.getBlocks` for current and retained historical repository blocks (1–100 CIDs; repeated `cids` query parameters).
 - [x] Export consistency checks against the signed commit, tree root, and revision.
 - [x] Internal deactivation, suspension, takedown, and reactivation; inactive repositories reject public reads, exports, and ordinary record writes. Authenticated migration imports/uploads allow deactivated accounts only.
@@ -3021,3 +3022,28 @@ remote catalog for that request. Authorization is checked before discovery and
 again under the repository lock, so session revocation during lookup prevents the
 write. The remote catalog is a per-request snapshot; no schema cache is installed.
 Internal write APIs and CAR import retain their existing data-integrity policy.
+
+### Verifying record inclusion proofs
+
+`Atoll.MST.Proof.verify/3` checks a partial search path against a supplied root and
+returns its record CID, or `nil` for a proven absence. Missing path blocks are
+errors, not evidence of absence. Visited blocks must match their DAG-CBOR CIDs,
+use canonical encoding and key-prefix compression, sort keys within the inherited
+subtree bounds, and follow the SHA-256-derived tree levels without skipping empty
+intermediate nodes. Limits are 129 visited nodes, 1 MiB per node, and 10,000 entries
+per node. Sibling subtrees need not be supplied; the verifier does not claim to
+validate their structure or the complete repository.
+
+`Atoll.Repositories.RecordProof.verify/5` accepts a CAR of at most 2 MiB, an
+expected DID/path, and a trusted signing curve/public key. It checks the first CAR
+root's version-3 commit signature, follows the MST proof to the requested record,
+and returns that record plus its CID, commit CID, and revision. The record block
+must be present, hash correctly, fit the 1,000,000-byte record limit, and declare
+the requested collection. Wrong keys, mismatched DIDs, absent records, truncated
+proofs, and tampered blocks fail. Both k256 and P-256 are supported.
+
+The caller must authenticate the signing key and establish freshness separately.
+A valid older signed commit can still prove historical inclusion; this API neither
+resolves identity nor proves that the commit is the latest. Network Lexicon
+retrieval does not yet invoke this verifier. The structure follows the
+[repository specification](https://atproto.com/specs/repository).
