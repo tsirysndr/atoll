@@ -5,7 +5,8 @@ defmodule AtollWeb.RecordWritePlug do
   @methods [
     "com.atproto.repo.createRecord",
     "com.atproto.repo.putRecord",
-    "com.atproto.repo.deleteRecord"
+    "com.atproto.repo.deleteRecord",
+    "com.atproto.repo.applyWrites"
   ]
   @parser Plug.Parsers.init(
             parsers: [:json],

@@ -1,9 +1,141 @@
 defmodule Atoll.Repositories.Writes do
-  @moduledoc "Authenticated single-record writes for repository DIDs. Lexicon validation is pending."
+  @moduledoc "Authenticated single and batch writes for repository DIDs. Lexicon validation is pending."
   import Ecto.Query
   alias Atoll.{CID, Repo, Repositories, Syntax, TID}
   alias Atoll.Accounts.{Sessions, Tokens}
   alias Atoll.Repositories.{Events, Head, Record}
+  @batch_type "com.atproto.repo.applyWrites#"
+
+  def batch(token, body) when is_map(body) do
+    with {:ok, claims} <- Tokens.verify(token, :access),
+         :ok <- batch_parameters(body),
+         true <- body["repo"] == claims["sub"],
+         {:ok, commit} <- swap(body, "swapCommit", false),
+         {:ok, writes} <- batch_operations(body) do
+      Repo.transaction(fn ->
+        did = claims["sub"]
+        head = authorize!(token, did)
+        if commit != :any and commit != head.head, do: Repo.rollback(:invalid_swap)
+
+        {prepared, _} =
+          Enum.map_reduce(writes, head.rev, fn {action, value}, previous ->
+            {rkey, previous} =
+              case Map.fetch(value, "rkey") do
+                {:ok, rkey} ->
+                  {rkey, previous}
+
+                :error ->
+                  {:ok, rkey} = TID.next(previous)
+                  {rkey, rkey}
+              end
+
+            path = value["collection"] <> "/" <> rkey
+
+            if action == :update and
+                 not Repo.exists?(from r in Record, where: r.did == ^did and r.path == ^path),
+               do: Repo.rollback(:record_not_found)
+
+            operation =
+              case action do
+                :delete -> {:delete, path}
+                :update -> {:put, path, value["value"]}
+                :create -> {:create, path, value["value"]}
+              end
+
+            {{action, path, operation}, previous}
+          end)
+
+        updated =
+          if prepared == [] do
+            head
+          else
+            case Repositories.apply_managed_writes(did, Enum.map(prepared, &elem(&1, 2)),
+                   swap_commit: commit
+                 ) do
+              {:ok, updated} -> updated
+              {:error, reason} -> Repo.rollback(reason)
+            end
+          end
+
+        results =
+          Enum.map(prepared, fn {action, path, _} ->
+            result = %{"$type" => @batch_type <> Atom.to_string(action) <> "Result"}
+
+            if action == :delete do
+              result
+            else
+              current = Repo.get_by!(Record, did: did, path: path)
+
+              Map.merge(result, %{
+                "uri" => "at://" <> did <> "/" <> path,
+                "cid" => CID.to_base32(current.cid),
+                "validationStatus" => "unknown"
+              })
+            end
+          end)
+
+        %{commit: %{cid: CID.to_base32(updated.head), rev: updated.rev}, results: results}
+      end)
+    else
+      false -> {:error, :forbidden}
+      error -> error
+    end
+  end
+
+  def batch(_, _), do: {:error, :invalid_request}
+
+  defp batch_parameters(body) do
+    cond do
+      not Syntax.did?(body["repo"]) -> {:error, :invalid_request}
+      not is_list(body["writes"]) or length(body["writes"]) > 200 -> {:error, :invalid_request}
+      Map.get(body, "validate", false) == true -> {:error, :validation_unavailable}
+      Map.get(body, "validate", false) != false -> {:error, :invalid_request}
+      true -> :ok
+    end
+  end
+
+  defp batch_operations(body) do
+    Enum.reduce_while(body["writes"], {:ok, []}, fn value, {:ok, acc} ->
+      action =
+        case value do
+          %{"$type" => @batch_type <> "create"} -> :create
+          %{"$type" => @batch_type <> "update"} -> :update
+          %{"$type" => @batch_type <> "delete"} -> :delete
+          _ -> nil
+        end
+
+      if action do
+        params =
+          value
+          |> Map.take(["collection", "rkey"])
+          |> Map.merge(%{"repo" => body["repo"], "record" => value["value"]})
+
+        case parameters(if(action == :update, do: :put, else: action), params) do
+          :ok -> {:cont, {:ok, [{action, value} | acc]}}
+          error -> {:halt, error}
+        end
+      else
+        {:halt, {:error, :invalid_request}}
+      end
+    end)
+    |> case do
+      {:ok, writes} -> {:ok, Enum.reverse(writes)}
+      error -> error
+    end
+  end
+
+  defp authorize!(token, did) do
+    Events.lock!()
+    # Write-lock the head before locking the session, matching other authenticated writes.
+    head =
+      Repo.one(from h in Head, where: h.did == ^did, lock: "FOR UPDATE") ||
+        Repo.rollback(:invalid_token)
+
+    case Sessions.authenticate(token) do
+      {:ok, _} -> head
+      {:error, reason} -> Repo.rollback(reason)
+    end
+  end
 
   def write(token, action, body) when action in [:create, :put, :delete] and is_map(body) do
     with {:ok, claims} <- Tokens.verify(token, :access),
@@ -12,17 +144,8 @@ defmodule Atoll.Repositories.Writes do
          {:ok, commit} <- swap(body, "swapCommit", false),
          {:ok, record} <- record_swap(action, body) do
       Repo.transaction(fn ->
-        Events.lock!()
         did = claims["sub"]
-        # Lock the head for writing before holding a session share lock.
-        head =
-          Repo.one(from h in Head, where: h.did == ^did, lock: "FOR UPDATE") ||
-            Repo.rollback(:invalid_token)
-
-        case Sessions.authenticate(token) do
-          {:ok, _} -> :ok
-          {:error, reason} -> Repo.rollback(reason)
-        end
+        head = authorize!(token, did)
 
         rkey =
           case Map.fetch(body, "rkey") do

@@ -33,6 +33,7 @@ defmodule AtollWeb.Router do
     post "/com.atproto.repo.createRecord", RecordWriteController, :create
     post "/com.atproto.repo.putRecord", RecordWriteController, :put
     post "/com.atproto.repo.deleteRecord", RecordWriteController, :delete
+    post "/com.atproto.repo.applyWrites", RecordWriteController, :batch
     get "/com.atproto.repo.describeRepo", RepoController, :describe
     get "/com.atproto.repo.listRecords", RepoController, :list_records
     get "/com.atproto.sync.getLatestCommit", SyncController, :latest_commit

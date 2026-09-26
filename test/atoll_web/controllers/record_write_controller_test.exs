@@ -208,6 +208,118 @@ defmodule AtollWeb.RecordWriteControllerTest do
     assert Repo.aggregate(Atoll.Blobs.CleanupJob, :count) == 1
   end
 
+  test "batch creates distinct keys and returns ordered results under one commit", c do
+    request(c, "putRecord", body("existing", %{"record" => @record})) |> json_response(200)
+    request(c, "putRecord", body("remove", %{"record" => @record})) |> json_response(200)
+    seq = Atoll.Repositories.Events.latest_seq()
+
+    writes = [
+      operation("create"),
+      operation("create"),
+      operation("update", "existing"),
+      operation("delete", "remove")
+    ]
+
+    result =
+      request(c, "applyWrites", %{"repo" => @did, "writes" => writes}) |> json_response(200)
+
+    [first, second, updated, deleted] = result["results"]
+    refute first["uri"] == second["uri"]
+    assert first["$type"] == "com.atproto.repo.applyWrites#createResult"
+    assert updated["$type"] == "com.atproto.repo.applyWrites#updateResult"
+    assert deleted == %{"$type" => "com.atproto.repo.applyWrites#deleteResult"}
+    assert {:ok, [event]} = Atoll.Repositories.Events.list_after(seq)
+    assert event.kind == :commit
+    assert length(event.payload["ops"]) == 4
+    assert Repositories.get_record(@did, @collection <> "/remove") == {:error, :not_found}
+    {:ok, head} = Repositories.get_head(@did)
+    assert result["commit"]["cid"] == CID.to_base32(head.head)
+
+    for entry <- [first, second] do
+      assert entry["uri"] |> String.split("/") |> List.last() |> Atoll.TID.valid?()
+    end
+  end
+
+  test "batch failures roll back records, blob references, revisions and events", c do
+    {:ok, blob} = Atoll.Blobs.stage(@did, "batch attachment", "text/plain")
+    good = Map.put(operation("create", "good"), "value", Map.put(@record, "blob", blob))
+    bad_blob = put_in(blob, ["ref", "$link"], CID.to_base32(CID.create("missing", :raw)))
+    bad = Map.put(operation("create", "bad"), "value", Map.put(@record, "blob", bad_blob))
+    seq = Atoll.Repositories.Events.latest_seq()
+    revisions = Repo.aggregate(Atoll.Repositories.Revision, :count)
+
+    assert %{"error" => "BlobNotFound"} =
+             request(c, "applyWrites", %{"repo" => @did, "writes" => [good, bad]})
+             |> json_response(400)
+
+    assert Repositories.get_head(@did) == {:ok, c.head}
+    assert Repo.aggregate(Atoll.Repositories.Record, :count) == 0
+    assert Repo.aggregate(Atoll.Blobs.Reference, :count) == 0
+    assert Repo.aggregate(Atoll.Repositories.Revision, :count) == revisions
+    assert Atoll.Repositories.Events.latest_seq() == seq
+  end
+
+  test "batch validates shape, duplicate paths, existing updates, and commit swaps", c do
+    for writes <- [
+          nil,
+          %{},
+          [%{"$type" => "unknown"}],
+          [nil],
+          List.duplicate(operation("create"), 201),
+          [operation("create", "one"), operation("delete", "one")]
+        ] do
+      assert %{"error" => "InvalidRequest"} =
+               request(c, "applyWrites", %{"repo" => @did, "writes" => writes})
+               |> json_response(400)
+    end
+
+    assert %{"error" => "RecordNotFound"} =
+             request(c, "applyWrites", %{
+               "repo" => @did,
+               "writes" => [operation("update", "missing")]
+             })
+             |> json_response(400)
+
+    assert %{"error" => "InvalidSwap"} =
+             request(c, "applyWrites", %{
+               "repo" => @did,
+               "writes" => [operation("create")],
+               "swapCommit" => CID.to_base32(CID.create("wrong", :dag_cbor))
+             })
+             |> json_response(400)
+
+    assert %{"error" => "InvalidRequest"} =
+             request(c, "applyWrites", %{"repo" => @did, "writes" => [], "validate" => true})
+             |> json_response(400)
+
+    assert %{"error" => "Forbidden"} =
+             request(c, "applyWrites", %{"repo" => "did:plc:other", "writes" => []})
+             |> json_response(403)
+
+    assert Repositories.get_head(@did) == {:ok, c.head}
+    seq = Atoll.Repositories.Events.latest_seq()
+
+    assert %{"results" => [], "commit" => _} =
+             request(c, "applyWrites", %{
+               "repo" => @did,
+               "writes" => [],
+               "swapCommit" => CID.to_base32(c.head.head)
+             })
+             |> json_response(200)
+
+    assert Atoll.Repositories.Events.latest_seq() == seq
+    {:ok, :ok} = Sessions.revoke(c.pair.refresh_jwt)
+
+    assert %{"error" => "InvalidToken"} =
+             request(c, "applyWrites", %{"repo" => @did, "writes" => []}) |> json_response(401)
+  end
+
+  defp operation(kind, rkey \\ nil) do
+    value = %{"$type" => "com.atproto.repo.applyWrites#" <> kind, "collection" => @collection}
+    value = if kind == "delete", do: value, else: Map.put(value, "value", @record)
+    if rkey, do: Map.put(value, "rkey", rkey), else: value
+  end
+
   defp body(rkey, extra \\ %{}),
     do: Map.merge(%{"repo" => @did, "collection" => @collection, "rkey" => rkey}, extra)
 

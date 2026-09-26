@@ -6,6 +6,13 @@ defmodule AtollWeb.RecordWriteController do
   def put(conn, _params), do: write(conn, :put)
   def delete(conn, _params), do: write(conn, :delete)
 
+  def batch(%{private: %{atoll_record_token: token}} = conn, _params) do
+    with {:ok, result} <- Atoll.Repositories.Writes.batch(token, conn.body_params),
+         do: json(conn, result)
+  end
+
+  def batch(_, _), do: {:error, :auth_required}
+
   defp write(%{private: %{atoll_record_token: token}} = conn, action) do
     with {:ok, result} <- Atoll.Repositories.Writes.write(token, action, conn.body_params),
          do: json(conn, result)

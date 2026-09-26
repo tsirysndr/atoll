@@ -75,7 +75,8 @@ record Lexicons or grant access to account data.
 - [x] Public `getRecord` and paginated `listRecords` for repository DIDs or bidirectionally verified handles and current record versions.
 - [x] Historical CID versions for record reads, verified against retained signed revisions and the exact record path.
 - [x] Authenticated `createRecord`, `putRecord`, and `deleteRecord` for repository DIDs, with atomic commit/record compare-and-swap.
-- [ ] Public batch `applyWrites`, handle-addressed writes, and Lexicon validation.
+- [x] Authenticated atomic `applyWrites` batches with ordered results and commit compare-and-swap.
+- [ ] Handle-addressed writes and Lexicon validation.
 - [x] `com.atproto.repo.describeRepo` with resolved DID document, current collections, and bidirectional handle status.
 - [x] In-memory CARv1 encoding and decoding with block verification and resource limits.
 - [x] Consistent repository CAR export through the internal storage API.
@@ -111,6 +112,22 @@ is rejected. Request JSON is limited to 2 MiB; encoded records retain their 1 MB
 limit. Writes allow 300 requests per direct peer IP per five minutes using the
 same per-node limiter as sessions, and responses use `Cache-Control: no-store`.
 
+`POST /xrpc/com.atproto.repo.applyWrites` accepts `repo`, `writes`, optional
+`swapCommit`, and optional `validate`. Each write has a `$type` of
+`com.atproto.repo.applyWrites#create`, `#update`, or `#delete` (the full prefix
+is required for each), a `collection`, and an `rkey` except when auto-generating
+a create key. Create/update use `value` for record data. Updates require an
+existing record; creates require an unused key. Duplicate paths in one batch
+are rejected. Automatically generated keys are distinct within the batch.
+
+Batches allow up to 200 operations within the shared 2 MiB request limit and
+share the record-write rate limit. All operations, blob-reference changes,
+revision history, and the single commit event succeed or roll back together.
+Results preserve request order and carry the corresponding `#createResult`,
+`#updateResult`, or `#deleteResult` type. An empty batch checks authorization and
+`swapCommit`, then returns the current commit and empty results without mutation.
+The same `validate: true` restriction applies to batch requests.
+
 ### Identity, accounts, and authentication
 
 - [x] P-256 and secp256k1 multikey / `did:key` encoding and decoding with curve-point validation.
@@ -131,7 +148,7 @@ same per-node limiter as sessions, and responses use `Cache-Control: no-store`.
 - [ ] Handle/email login, authentication factors, and restricted sessions for inactive accounts.
 - [ ] App passwords.
 - [ ] ATProto OAuth authorization and resource server support.
-- [x] Live-session and repository ownership checks for blob uploads and single-record writes.
+- [x] Live-session and repository ownership checks for blob uploads and single/batch record writes.
 - [ ] Authorization for remaining account and repository operations.
 - [ ] Account migration, identity updates, and signing-key lifecycle.
 
@@ -374,7 +391,7 @@ events. The `[:atoll, :identity, :refresh]` telemetry event reports a count and
 
 - [x] `mix precommit` checks compilation warnings, unused dependency locks, formatting, and tests.
 - [x] GitHub Actions runs checks and the Docker MinIO integration suite on every push (also available manually).
-- [x] Session, blob-upload, and single-record-write rate limits and bounded request bodies.
+- [x] Session, blob-upload, and record-write rate limits and bounded request bodies.
 - [ ] General API rate limits, distributed limits, and trusted-proxy client IP handling.
 - [ ] Administrative account controls and takedowns.
 - [ ] Production configuration, HTTPS deployment, and signing-key protection.

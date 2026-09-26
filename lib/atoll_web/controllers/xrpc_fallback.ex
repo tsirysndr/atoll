@@ -11,7 +11,7 @@ defmodule AtollWeb.XRPCFallback do
     do: error(conn, 400, "InvalidRequest", "Required Lexicon validation is not available.")
 
   def call(conn, {:error, reason})
-      when reason in [:invalid_record, :record_exists, :invalid_blob_metadata],
+      when reason in [:invalid_record, :record_exists, :invalid_blob_metadata, :duplicate_path],
       do: error(conn, 400, "InvalidRequest", "Invalid record data or record already exists.")
 
   def call(conn, {:error, reason}) when reason in [:key_vault_unconfigured, :key_not_found],
