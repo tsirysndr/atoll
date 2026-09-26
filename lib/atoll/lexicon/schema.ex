@@ -18,6 +18,15 @@ defmodule Atoll.Lexicon.Schema do
     for {nsid, doc} <- @documents, get_in(doc, ["defs", "main", "type"]) == "record", do: nsid
   end
 
+  @doc false
+  def builtin_documents, do: @documents
+
+  @doc false
+  def literal_valid?(value, schema) do
+    (not Map.has_key?(schema, "enum") or is_list(schema["enum"])) and
+      valid?(value, schema, %{}, 0)
+  end
+
   def methods do
     for {nsid, doc} <- @documents, get_in(doc, ["defs", "main", "type"]) == "procedure", do: nsid
   end
@@ -26,10 +35,12 @@ defmodule Atoll.Lexicon.Schema do
     if mode == false do
       {:ok, "unknown"}
     else
-      case get_in(@documents, [collection, "defs", "main"]) do
+      documents = Map.merge(Application.get_env(:atoll, :record_lexicons, %{}), @documents)
+
+      case get_in(documents, [collection, "defs", "main"]) do
         %{"type" => "record", "key" => key, "record" => schema} ->
           if record_key?(rkey, key) and is_map(value) and value["$type"] == collection and
-               valid?(value, schema, @documents[collection], 0),
+               valid?(value, schema, Map.put(documents[collection], :catalog, documents), 0),
              do: {:ok, "valid"},
              else: {:error, :invalid_record_schema}
 
@@ -68,9 +79,15 @@ defmodule Atoll.Lexicon.Schema do
     end
   end
 
-  defp valid?(_, _, _, depth) when depth > 32, do: false
+  defp valid?(value, schema, doc, depth) do
+    (not Map.has_key?(schema, "const") or value === schema["const"]) and
+      (not Map.has_key?(schema, "enum") or Enum.any?(schema["enum"], &(&1 === value))) and
+      matches?(value, schema, doc, depth)
+  end
 
-  defp valid?(value, %{"type" => "object"} = schema, doc, depth) when is_map(value) do
+  defp matches?(_, _, _, depth) when depth > 32, do: false
+
+  defp matches?(value, %{"type" => "object"} = schema, doc, depth) when is_map(value) do
     properties = schema["properties"] || %{}
     required = schema["required"] || []
     nullable = schema["nullable"] || []
@@ -87,13 +104,13 @@ defmodule Atoll.Lexicon.Schema do
       end)
   end
 
-  defp valid?(value, %{"type" => "array", "items" => items} = schema, doc, depth)
+  defp matches?(value, %{"type" => "array", "items" => items} = schema, doc, depth)
        when is_list(value) do
     bounds?(length(value), schema, "minLength", "maxLength") and
       Enum.all?(value, &valid?(&1, items, doc, depth + 1))
   end
 
-  defp valid?(
+  defp matches?(
          %{"$type" => type} = value,
          %{"type" => "union", "refs" => refs} = schema,
          doc,
@@ -106,7 +123,7 @@ defmodule Atoll.Lexicon.Schema do
     end
   end
 
-  defp valid?(value, %{"type" => "ref", "ref" => ref}, doc, depth) do
+  defp matches?(value, %{"type" => "ref", "ref" => ref}, doc, depth) do
     [nsid | fragments] = String.split(absolute_ref(ref, doc), "#")
 
     name =
@@ -116,26 +133,29 @@ defmodule Atoll.Lexicon.Schema do
         _ -> nil
       end
 
-    case get_in(@documents, [nsid, "defs", name]) do
+    catalog = Map.get(doc, :catalog, @documents)
+
+    case get_in(catalog, [nsid, "defs", name]) do
       nil -> false
-      schema -> valid?(value, schema, @documents[nsid], depth + 1)
+      schema -> valid?(value, schema, Map.put(catalog[nsid], :catalog, catalog), depth + 1)
     end
   end
 
-  defp valid?(value, %{"type" => "boolean"}, _, _), do: is_boolean(value)
+  defp matches?(value, %{"type" => "boolean"}, _, _), do: is_boolean(value)
 
-  defp valid?(value, %{"type" => "integer"} = schema, _, _) do
-    is_integer(value) and abs(value) <= 9_007_199_254_740_991 and
+  defp matches?(value, %{"type" => "integer"} = schema, _, _) do
+    is_integer(value) and value >= -9_223_372_036_854_775_808 and
+      value <= 9_223_372_036_854_775_807 and
       bounds?(value, schema, "minimum", "maximum")
   end
 
-  defp valid?(value, %{"type" => "string"} = schema, _, _) when is_binary(value) do
+  defp matches?(value, %{"type" => "string"} = schema, _, _) when is_binary(value) do
     String.valid?(value) and bounds?(byte_size(value), schema, "minLength", "maxLength") and
       bounds?(String.length(value), schema, "minGraphemes", "maxGraphemes") and
       (is_nil(schema["enum"]) or value in schema["enum"]) and format?(value, schema["format"])
   end
 
-  defp valid?(
+  defp matches?(
          %{
            "$type" => "blob",
            "ref" => %{"$link" => cid} = ref,
@@ -160,25 +180,47 @@ defmodule Atoll.Lexicon.Schema do
     end
   end
 
-  # "unknown" in these procedure envelopes is record/plcOp data, not a promise
-  # that its application Lexicon or signatures have been checked here.
-  defp valid?(value, %{"type" => "unknown"}, _, _) do
-    is_map(value) and not is_struct(value) and value["$type"] != "blob" and
-      not Map.has_key?(value, "$link") and not Map.has_key?(value, "$bytes")
-  end
-
-  defp valid?(_, _, _, _), do: false
-
-  defp union_tag?(type) do
-    case String.split(type, "#") do
-      [nsid] -> Syntax.nsid?(nsid)
-      [nsid, name] -> Syntax.nsid?(nsid) and Regex.match?(~r/\A[a-zA-Z][a-zA-Z0-9]*\z/, name)
+  defp matches?(%{"$bytes" => text} = value, %{"type" => "bytes"} = schema, _, _)
+       when map_size(value) == 1 and is_binary(text) do
+    case Base.decode64(text, padding: false) do
+      {:ok, bytes} -> bounds?(byte_size(bytes), schema, "minLength", "maxLength")
       _ -> false
     end
   end
 
-  defp absolute_ref("#" <> _ = ref, doc), do: doc["id"] <> ref
-  defp absolute_ref(ref, _), do: ref
+  defp matches?(%{"$link" => cid} = value, %{"type" => "cid-link"}, _, _)
+       when map_size(value) == 1,
+       do: match?({:ok, _}, CID.from_base32(cid))
+
+  defp matches?(value, %{"type" => "record", "record" => schema}, doc, depth),
+    do: is_map(value) and value["$type"] == doc["id"] and valid?(value, schema, doc, depth + 1)
+
+  # "unknown" in these procedure envelopes is record/plcOp data, not a promise
+  # that its application Lexicon or signatures have been checked here.
+  defp matches?(value, %{"type" => "unknown"}, _, _) do
+    is_map(value) and not is_struct(value) and value["$type"] != "blob" and
+      not Map.has_key?(value, "$link") and not Map.has_key?(value, "$bytes")
+  end
+
+  defp matches?(_, _, _, _), do: false
+
+  defp union_tag?(type) do
+    case String.split(type, "#") do
+      [nsid] ->
+        Syntax.nsid?(nsid)
+
+      [nsid, name] ->
+        name != "main" and Syntax.nsid?(nsid) and Regex.match?(~r/\A[a-zA-Z][a-zA-Z0-9]*\z/, name)
+
+      _ ->
+        false
+    end
+  end
+
+  defp absolute_ref(ref, doc) do
+    resolved = if String.starts_with?(ref, "#"), do: doc["id"] <> ref, else: ref
+    String.replace_suffix(resolved, "#main", "")
+  end
 
   defp bounds?(value, schema, low, high),
     do:
@@ -200,6 +242,7 @@ defmodule Atoll.Lexicon.Schema do
   defp format?(value, "at-identifier"), do: Syntax.did?(value) or Syntax.handle?(value)
   defp format?(value, "nsid"), do: Syntax.nsid?(value)
   defp format?(value, "record-key"), do: Syntax.record_key?(value)
+  defp format?(value, "tid"), do: TID.valid?(value)
   defp format?(value, "cid"), do: match?({:ok, _}, CID.from_base32(value))
 
   defp format?(value, "datetime") do

@@ -1,5 +1,9 @@
 import Config
 
+if directory = System.get_env("ATOLL_LEXICON_DIRECTORY") do
+  config :atoll, :record_lexicons, Atoll.Lexicon.Loader.load!(directory)
+end
+
 config :atoll,
        :invite_allocation,
        Atoll.Accounts.InviteAllocation.config_from_env!(System.get_env())

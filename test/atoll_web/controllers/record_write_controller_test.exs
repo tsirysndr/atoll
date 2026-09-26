@@ -201,6 +201,60 @@ defmodule AtollWeb.RecordWriteControllerTest do
              |> json_response(400)
   end
 
+  test "operator-loaded custom Lexicons apply to authenticated writes and batch rollback", c do
+    previous = Application.fetch_env(:atoll, :record_lexicons)
+
+    on_exit(fn ->
+      case previous do
+        {:ok, value} -> Application.put_env(:atoll, :record_lexicons, value)
+        :error -> Application.delete_env(:atoll, :record_lexicons)
+      end
+    end)
+
+    schema = %{
+      "lexicon" => 1,
+      "id" => @collection,
+      "defs" => %{
+        "main" => %{
+          "type" => "record",
+          "key" => "any",
+          "record" => %{
+            "type" => "object",
+            "required" => ["text"],
+            "properties" => %{"text" => %{"type" => "string", "maxLength" => 10}}
+          }
+        }
+      }
+    }
+
+    Application.put_env(:atoll, :record_lexicons, Atoll.Lexicon.Loader.validate!([schema]))
+
+    assert %{"validationStatus" => "valid"} =
+             request(
+               c,
+               "createRecord",
+               Map.merge(body("custom"), %{"record" => @record, "validate" => true})
+             )
+             |> json_response(200)
+
+    {:ok, head} = Repositories.get_head(@did)
+    seq = Atoll.Repositories.Events.latest_seq()
+
+    invalid =
+      operation("create", "invalid")
+      |> Map.put("value", Map.put(@record, "text", String.duplicate("a", 11)))
+
+    assert %{"error" => "InvalidRequest"} =
+             request(c, "applyWrites", %{
+               "repo" => @did,
+               "writes" => [operation("create", "valid"), invalid]
+             })
+             |> json_response(400)
+
+    assert Repositories.get_head(@did) == {:ok, head}
+    assert Atoll.Repositories.Events.latest_seq() == seq
+  end
+
   test "repository quota failures return a protocol error without publishing a write", c do
     previous = Application.fetch_env(:atoll, :repository_quota)
 

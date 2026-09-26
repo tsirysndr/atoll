@@ -26,7 +26,8 @@ Checked items are implemented in this repository. Unchecked items are remaining 
 - [x] JSON procedure envelope validation against pinned upstream Lexicons.
 - [x] Bounded Lexicon-based subscription parameter validation with protocol error frames.
 - [x] Required, optimistic, and skipped record validation for all 19 Bluesky record Lexicons in the pinned upstream revision.
-- [ ] Custom record Lexicons and authenticated Lexicon discovery/resolution.
+- [x] Configurable local custom record Lexicons with bounded startup validation.
+- [ ] Authenticated Lexicon discovery/resolution.
 
 XRPC routing uses the [HTTP API specification](https://atproto.com/specs/xrpc).
 Malformed paths return `400 InvalidRequest`; valid but unimplemented method NSIDs
@@ -140,7 +141,8 @@ record Lexicons or grant access to account data.
 - [x] Authenticated `createRecord`, `putRecord`, and `deleteRecord`, with atomic commit/record compare-and-swap.
 - [x] Authenticated atomic `applyWrites` batches with ordered results and commit compare-and-swap.
 - [x] DID or bidirectionally verified handle addressing for single and batch record writes.
-- [ ] Custom record Lexicon loading and resolution (19 pinned Bluesky record schemas supported).
+- [x] Local custom record Lexicon loading alongside 19 pinned Bluesky record schemas.
+- [ ] Authenticated network resolution of custom record Lexicons.
 - [x] `com.atproto.repo.describeRepo` with resolved DID document, current collections, and bidirectional handle status.
 - [x] In-memory CARv1 encoding and decoding with block verification and resource limits.
 - [x] Consistent repository CAR export through the internal storage API.
@@ -198,12 +200,55 @@ well-formed variant tags; known variants still require matching fields. Successf
 return `validationStatus: "valid"`; skipped or unknown schemas return `"unknown"`.
 Schema mismatch or unavailable required validation returns `400 InvalidRequest`.
 Unknown extension fields are retained. The validator does not fetch schemas from
-the network; custom record collections remain unknown until additional schema
-support is implemented. The compiled catalog refreshes when schema files are
-added, removed, or edited. Output schemas and application semantics (such as
+the network. Unknown collections remain unknown unless an operator loads their
+schemas as described below. The compiled built-in catalog refreshes when its
+schema files are added, removed, or edited. Output schemas and application semantics (such as
 verification trust or gate/post ownership relationships) are not validated here. Internal low-level repository APIs and
 CAR imports continue to enforce data integrity without applying this write-API
 Lexicon policy.
+
+To load custom record schemas, set `ATOLL_LEXICON_DIRECTORY` to a directory of
+Lexicon JSON files before starting Atoll:
+
+```sh
+ATOLL_LEXICON_DIRECTORY=/path/to/lexicons mix phx.server
+```
+
+For example, save this as `com.example.note.json` in that directory:
+
+```json
+{
+  "lexicon": 1,
+  "id": "com.example.note",
+  "defs": {
+    "main": {
+      "type": "record",
+      "key": "tid",
+      "record": {
+        "type": "object",
+        "required": ["text"],
+        "properties": {
+          "text": {"type": "string", "maxLength": 1000}
+        }
+      }
+    }
+  }
+}
+```
+
+These schemas participate in the same create/put/batch validation modes as built-in
+records. Helper definitions can reference other configured or bundled definitions.
+The loader accepts up to 128 top-level regular `*.json` files, at most 256 KiB each
+and 8 MiB combined, with schema nesting limited to 32 levels. Invalid documents,
+duplicate JSON keys or NSIDs, unsupported constraints, missing transitive references,
+and attempts to replace bundled schemas fail startup. Restart Atoll after changing
+this directory; the loaded catalog is a startup snapshot. In Elixir runtime
+configuration, the equivalent setting is `config :atoll, :record_lexicons,
+Atoll.Lexicon.Loader.load!(directory)`.
+
+Only load schemas you trust as the operator. Local configuration does not authenticate
+the NSID owner's authority or expose new XRPC endpoints. Authenticated network
+Lexicon discovery remains unimplemented.
 
 Blob schema checks use the declared MIME type and size; the repository independently
 requires ownership and matching stored metadata. Profile images allow PNG/JPEG up
@@ -409,7 +454,8 @@ inventory to assess transfer progress first.
 - [x] Authenticated `com.atproto.repo.uploadBlob` with bounded raw-body reads, transactional session rechecks, and per-IP rate limiting.
 - [x] Lexicon MIME and size constraints for supported post/profile blob fields.
 - [x] Bounded signature-based MIME detection for common binary media uploads.
-- [ ] Full media decoding/validation and media constraints for custom record Lexicons.
+- [x] MIME and size constraints for blobs in configured custom record Lexicons.
+- [ ] Full media decoding/validation.
 - [x] Atomic nested record-reference tracking, ownership/metadata checks on writes, and withdrawal when the last reference is removed.
 - [x] Public `com.atproto.sync.getBlob` and paginated `listBlobs`, with `since` filtering, repository status checks, and restrictive content headers.
 - [x] Authenticated `com.atproto.repo.listMissingBlobs` with account-scoped CID pagination and referencing record URIs.

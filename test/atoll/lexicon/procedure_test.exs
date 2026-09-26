@@ -28,7 +28,7 @@ defmodule Atoll.Lexicon.ProcedureTest do
     assert :ok = Procedure.validate(@put, Map.put(@body, "validate", false))
     assert {:error, _} = Procedure.validate(@put, Map.put(@body, "validate", "false"))
 
-    for count <- ["1", 1.0, true, nil, 9_007_199_254_740_992] do
+    for count <- ["1", 1.0, true, nil, 9_223_372_036_854_775_808] do
       assert {:error, _} =
                Procedure.validate("com.atproto.server.createInviteCode", %{"useCount" => count})
     end
