@@ -138,6 +138,7 @@ record Lexicons or grant access to account data.
 - [x] Atomic managed repository creation and internal writes using persisted signing keys.
 - [x] Encryption master-key rotation with decryption fallback keys and atomic paginated envelope rewrapping.
 - [x] Operator did:web signing-key rotation after external DID-document updates.
+- [x] Encrypted pending signing-key custody bound to durable PLC updates, with master-key rewrapping.
 - [ ] PLC signing-key rotation and recovery workflows.
 - [x] Per-revision signing-key provenance for historical record and block verification.
 - [x] Internal atomic repository signing-key replacement with unchanged-tree commits and vault rollback.
@@ -2140,7 +2141,8 @@ Rewrapping takes the event lock followed by repository and envelope locks, with
 bounded lock/statement waits. It preserves the authenticated envelope binding,
 private/public signing-key material, repository commits, signed PLC operation,
 registration state, sessions, and public events. Both repository keys and retained
-PLC rotation keys must migrate before retiring an old master key.
+PLC rotation keys, plus pending replacement repository keys, must migrate before
+retiring an old master key. Pending-key rewraps are included in the `plc` count.
 
 This rotates encryption protection, not repository signing keys, PLC authority,
 JWT secrets, or server identity keys. It cannot recover an envelope when every
@@ -3319,3 +3321,27 @@ publication cannot be one transaction: schedule an appropriate maintenance
 window, and retry this command if local completion fails after the document
 change. This is operator reconciliation, not automatic key recovery or a PLC
 rotation workflow.
+
+### Pending PLC signing-key custody
+
+`Atoll.Identity.PLC.PendingSigningKeys.stage/5` is an internal staging primitive
+for the remaining PLC rotation workflow. It checks the expected local signing
+key, existing vault readability, the replacement private/public pair, and the
+new public key named by a valid signed PLC update. The existing update journal
+verifies the supplied audit chain. The caller must still authorize the operation
+and obtain fresh directory evidence; this primitive does neither network IO nor
+local key publication.
+
+The signed update and encrypted replacement key are stored in one transaction.
+AES-256-GCM authenticates the DID, operation CID, expected old public key, curve,
+and new public key. Exact retries retain the same envelope; there is at most one
+retained pending key per account. An ambiguous directory submission leaves that
+key available for reconciliation. Master-key rewrapping covers pending custody
+in the same atomic, paginated pass as other vault envelopes.
+
+After verified directory acceptance and matching local key publication, callers
+mark the journal completed and release pending custody in the same transaction.
+Release verifies the installed key is readable and matches the replacement; it
+erases only the pending encrypted private key, retaining public journal metadata.
+Account deletion cascades the journal and its encrypted custody. Operator-facing
+PLC rotation orchestration, fresh completion checks, and recovery remain pending.

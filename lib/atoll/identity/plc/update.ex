@@ -7,6 +7,10 @@ defmodule Atoll.Identity.PLC.Update do
     field :cid, :string, primary_key: true
     field :previous, :map
     field :operation, :map
+    field :signing_curve, Ecto.Enum, values: [:k256, :p256]
+    field :signing_public_key, :binary
+    field :expected_signing_key, :string
+    field :signing_envelope, :binary, redact: true
     field :confirmed_at, :utc_datetime_usec
     field :completed_at, :utc_datetime_usec
     timestamps(type: :utc_datetime_usec)
