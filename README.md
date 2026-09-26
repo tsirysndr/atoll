@@ -139,6 +139,7 @@ record Lexicons or grant access to account data.
 - [x] Encryption master-key rotation with decryption fallback keys and atomic paginated envelope rewrapping.
 - [ ] Signing-key rotation and recovery workflows.
 - [x] Per-revision signing-key provenance for historical record and block verification.
+- [x] Internal atomic repository signing-key replacement with unchanged-tree commits and vault rollback.
 - [x] PostgreSQL repository heads and atomic record, tree, and commit updates with optional head compare-and-swap.
 - [x] Internal record create, put, delete, and read operations with collection/type checks (not Lexicon validation).
 - [x] Public `getRecord` and paginated `listRecords` for repository DIDs or bidirectionally verified handles and current record versions.
@@ -3261,3 +3262,28 @@ This prepares history for signing-key rotation; it does not itself rotate keys,
 change DID documents, or enable a rotation endpoint. Tests model an atomic
 cross-curve key transition and verify historical reads, historical block export,
 and rejection after key-metadata corruption.
+
+### Atomic local signing-key transitions
+
+`Atoll.Repositories.rotate_signing_key/3` is an internal publication primitive,
+not an authorization boundary or public rotation endpoint. Its caller must first
+authorize the account and establish that the DID document authorizes the proposed
+key. The function requires the expected repository head, validates the new private/
+public key pair, verifies the current snapshot and decryptability of the existing
+vault key under the normal mutation locks. It preserves active/deactivated
+status and rejects other account states.
+
+The transition replaces the encrypted vault envelope, signs a newer commit over
+the unchanged MST, records revision-key provenance, and emits a sync event in one
+transaction. Quota checks still apply; any failure rolls back the vault, head,
+revision, blocks, and event. A same-key request against the current expected head
+is an idempotent no-op. Subsequent managed writes use the new key, while historical
+revisions remain verifiable with their recorded keys. This is not a recovery path
+for an unreadable current vault.
+
+Durable pending-key custody, fresh DID/PLC authorization, directory submission,
+reconciliation after ambiguous network results, and an operator/account-facing
+rotation workflow still need integration. No rotation endpoint or command invokes
+this primitive yet. Tests exercise cross-curve replacement, continued writes,
+historical reads, idempotence, deactivation, stale heads, invalid key pairs, vault
+corruption, and quota rollback.

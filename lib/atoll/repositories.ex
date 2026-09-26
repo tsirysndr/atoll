@@ -37,6 +37,59 @@ defmodule Atoll.Repositories do
   end
 
   @doc """
+  Internal atomic signing-key transition with an expected current head CID.
+  The caller must authorize the account and establish that its DID document now
+  authorizes the replacement key. This function performs no directory requests.
+  It preserves records and publishes a new signed commit plus a sync event.
+  """
+  def rotate_signing_key(did, %SigningKey{} = key, expected_head) do
+    with {:ok, derived} <- SigningKey.from_private(key.curve, key.private),
+         true <- derived.public == key.public do
+      Repo.transaction(fn ->
+        Events.lock!()
+        head = locked_head!(did, "FOR UPDATE", false)
+
+        unless head.status in [:active, :deactivated],
+          do: Repo.rollback({:repo_inactive, head.status})
+
+        if head.head != expected_head, do: Repo.rollback(:invalid_swap)
+        {_head, tree, _commit} = snapshot!(did, false)
+
+        case Atoll.KeyVault.fetch(did) do
+          {:ok, _} -> :ok
+          {:error, reason} -> Repo.rollback(reason)
+        end
+
+        if head.curve == key.curve and head.public_key == key.public do
+          head
+        else
+          :ok = Atoll.KeyVault.replace!(head, key)
+          {:ok, rev} = TID.next(head.rev)
+          commit = persist_commit!(did, tree, rev, key)
+
+          updated =
+            head
+            |> Ecto.Changeset.change(
+              curve: key.curve,
+              public_key: key.public,
+              head: commit.cid,
+              rev: rev
+            )
+            |> Repo.update!()
+
+          remember_revision!(updated, Map.keys(tree.blocks) ++ Map.values(tree.records))
+          Events.append!(:sync, updated, event_head(updated, head))
+          updated
+        end
+      end)
+    else
+      _ -> {:error, :invalid_key}
+    end
+  end
+
+  def rotate_signing_key(_, _, _), do: {:error, :invalid_key}
+
+  @doc """
   Replaces an existing repository with a verified complete CAR snapshot.
 
   Uses the repository's pinned public key and requires the caller's expected

@@ -4,7 +4,8 @@ defmodule Atoll.KeyVault do
 
   AES-256-GCM envelopes bind the DID, curve and public key as authenticated data.
   The 32-byte master key comes from runtime configuration and is never stored in
-  PostgreSQL. Signing keys are insert-only; envelope rewrapping rotates only their encryption key.
+  PostgreSQL. Ordinary storage is insert-only. Repository transitions replace the
+  envelope inside their publication transaction; rewrapping changes only encryption.
   """
   import Ecto.Query
   alias Atoll.{CBOR, Repo, SigningKey}
@@ -40,6 +41,31 @@ defmodule Atoll.KeyVault do
   end
 
   def store(_, _), do: {:error, :invalid_key}
+
+  @doc false
+  def replace!(head, %SigningKey{} = key) do
+    unless Repo.in_transaction?(),
+      do: raise(ArgumentError, "key replacement requires a transaction")
+
+    with {:ok, master} <- master_key(),
+         {:ok, derived} <- SigningKey.from_private(key.curve, key.private),
+         true <- derived.public == key.public,
+         {:ok, old} <- fetch(head.did),
+         true <- old.curve == head.curve and old.public == head.public_key do
+      row = Repo.one(from k in EncryptedKey, where: k.did == ^head.did, lock: "FOR UPDATE")
+      unless row, do: Repo.rollback(:key_not_found)
+      updated = %{head | curve: key.curve, public_key: key.public}
+
+      row
+      |> Ecto.Changeset.change(envelope: encrypt(updated, key.private, master))
+      |> Repo.update!(log: false)
+
+      :ok
+    else
+      {:error, reason} -> Repo.rollback(reason)
+      _ -> Repo.rollback(:invalid_key)
+    end
+  end
 
   def fetch(did) when is_binary(did) do
     with {:ok, master} <- master_key() do
