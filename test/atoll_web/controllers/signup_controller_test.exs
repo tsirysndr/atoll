@@ -20,6 +20,8 @@ defmodule AtollWeb.SignupControllerTest do
         [
           :pds,
           :signup_enabled,
+          :custom_domain_signup_enabled,
+          :identity_resolution_options,
           :session_signing_key,
           :key_encryption_key,
           :plc_submission_options,
@@ -45,6 +47,7 @@ defmodule AtollWeb.SignupControllerTest do
     )
 
     Application.put_env(:atoll, :signup_enabled, true)
+    Application.put_env(:atoll, :custom_domain_signup_enabled, false)
     Application.put_env(:atoll, :invite_code_required, false)
     Application.put_env(:atoll, :session_max_count, 100)
     Application.put_env(:atoll, :session_signing_key, :crypto.strong_rand_bytes(32))
@@ -63,6 +66,112 @@ defmodule AtollWeb.SignupControllerTest do
     end)
 
     :ok
+  end
+
+  test "custom signup reservation is opt-in and createAccount cannot allocate it" do
+    params = Map.put(@params, "handle", "alice.example.com")
+    assert {:error, :unsupported_domain} = Signup.reserve_custom(params)
+    Application.put_env(:atoll, :custom_domain_signup_enabled, true)
+    assert json_response(request(params), 400)["error"] == "UnsupportedDomain"
+    assert Repo.aggregate(Profile, :count) == 0
+    assert {:ok, reservation} = Signup.reserve_custom(params)
+    assert reservation.dns_name == "_atproto.alice.example.com"
+    assert reservation.dns_value == "did=" <> reservation.did
+    assert {:ok, ^reservation} = Signup.reserve_custom(params)
+    assert Repo.aggregate(Atoll.Moderation.AuditEntry, :count) == 1
+    assert Repo.aggregate(Registration, :count) == 1
+    assert Repo.aggregate(Session, :count) == 0
+    assert Repo.get!(Head, reservation.did).status == :deactivated
+
+    assert {:error, :handle_not_available} =
+             Signup.reserve_custom(Map.put(params, "password", "wrong password"))
+
+    assert {:error, :signup_pending} = Sessions.create(reservation.did, params["password"])
+    Application.put_env(:atoll, :signup_enabled, false)
+    assert {:error, :signup_disabled} = Signup.reserve_custom(params)
+  end
+
+  test "custom signup verifies fresh forward claims before publication and activation" do
+    Application.put_env(:atoll, :custom_domain_signup_enabled, true)
+    params = Map.put(@params, "handle", "alice.example.com")
+    {:ok, reservation} = Signup.reserve_custom(params)
+    lookup = start_supervised!({Agent, fn -> {"did:web:wrong.example.com", 0} end})
+
+    Application.put_env(:atoll, :identity_resolution_options,
+      txt_lookup: fn name ->
+        assert name == reservation.dns_name
+        Agent.get_and_update(lookup, fn {did, count} -> {[["did=" <> did]], {did, count + 1}} end)
+      end
+    )
+
+    assert json_response(request(params), 400)
+    refute Repo.get!(Registration, reservation.did).confirmed_at
+    Agent.update(lookup, fn _ -> {reservation.did, 0} end)
+    original = Repo.get!(Registration, reservation.did)
+    accept_registration(original.operation)
+    result = json_response(request(params), 200)
+    assert result["did"] == reservation.did
+    assert {:ok, _} = Sessions.authenticate(result["accessJwt"])
+    assert Agent.get(lookup, &elem(&1, 1)) == 2
+    assert Repo.get!(Registration, reservation.did).operation == original.operation
+  end
+
+  test "custom claim lost during publication leaves confirmed signup pending for retry" do
+    Application.put_env(:atoll, :custom_domain_signup_enabled, true)
+    params = Map.put(@params, "handle", "alice.example.com")
+    {:ok, reservation} = Signup.reserve_custom(params)
+    lookup = start_supervised!({Agent, fn -> 0 end})
+
+    Application.put_env(:atoll, :identity_resolution_options,
+      txt_lookup: fn _ ->
+        count = Agent.get_and_update(lookup, &{&1, &1 + 1})
+        [["did=" <> if(count == 0, do: reservation.did, else: "did:web:wrong.example.com")]]
+      end
+    )
+
+    accept_registration()
+    assert json_response(request(params), 400)
+    row = Repo.get!(Registration, reservation.did)
+    assert row.confirmed_at
+    refute row.completed_at
+    assert Repo.aggregate(Session, :count) == 0
+    assert Repo.get!(Head, reservation.did).status == :deactivated
+
+    Application.put_env(:atoll, :identity_resolution_options,
+      txt_lookup: fn _ -> [["did=" <> reservation.did]] end
+    )
+
+    accept_registration(row.operation)
+    assert json_response(request(params), 200)["did"] == reservation.did
+  end
+
+  test "custom reservation CLI reads a bounded file and prints no account secrets" do
+    Application.put_env(:atoll, :custom_domain_signup_enabled, true)
+    params = Map.put(@params, "handle", "alice.example.com")
+    path = Path.join(System.tmp_dir!(), "atoll-signup-#{System.unique_integer([:positive])}.json")
+    on_exit(fn -> File.rm(path) end)
+    File.write!(path, Jason.encode!(params))
+    File.chmod!(path, 0o600)
+
+    output =
+      ExUnit.CaptureIO.capture_io(fn ->
+        Mix.Tasks.Atoll.Accounts.ReserveCustomSignup.run([path])
+      end)
+
+    result = Jason.decode!(output)
+    assert result["handle"] == params["handle"]
+    assert result["dns_value"] == "did=" <> result["did"]
+    refute output =~ params["password"]
+    refute output =~ params["email"]
+    assert Repo.aggregate(Session, :count) == 0
+
+    for contents <- [
+          String.duplicate("x", 4097),
+          ~s({"handle":"a.example.com","handle":"b.example.com"})
+        ] do
+      File.write!(path, contents)
+      assert_raise Mix.Error, fn -> Mix.Tasks.Atoll.Accounts.ReserveCustomSignup.run([path]) end
+    end
   end
 
   test "fresh signup publishes a persisted genesis before activating and issuing a session" do

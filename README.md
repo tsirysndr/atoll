@@ -353,7 +353,8 @@ mutation. Deletes and empty batches need no record schema, even with `validate: 
 - [x] Cursor-paginated admin invite listings and full-session account-owned invite listings.
 - [x] Opt-in interval invite allocation with confirmed-email eligibility and an unused-code cap.
 - [x] Operator enable/disable controls for future account invite allocation, separate from existing-code revocation.
-- [ ] Custom-domain signup, phone verification, and abandoned signup reservation cleanup.
+- [x] Opt-in custom-domain signup through operator DID reservation and verified `createAccount` completion.
+- [ ] Self-service custom-domain DID reservation, phone verification, and abandoned signup reservation cleanup.
 - [x] Internal DID-scoped password credentials with salted Argon2id hashes, bounded input, redacted inspection, and duplicate protection.
 - [x] Shared configurable Cloudflare Worker email delivery client.
 - [x] `requestPlcOperationSignature` email authorization with atomic single-use challenge consumption.
@@ -1306,8 +1307,8 @@ signup does not disable resolution of existing handles.
 Supply `handle` and `password`, optionally `email`, `inviteCode`, and a valid secp256k1 or P-256
 `recoveryKey` DID key. Handles and emails are normalized. The recovery key precedes
 the server's independently generated PLC rotation key in priority. Phone
-verification, custom-domain signup, and caller-supplied PLC operations are
-not supported by this fresh-signup path; existing-DID migration still requires its
+verification and caller-supplied PLC operations are not supported by this
+fresh-signup path. Custom-domain signup uses the operator reservation flow below; existing-DID migration still requires its
 service JWT. Email confirmation uses the existing Worker-backed request endpoint.
 
 Signup atomically reserves the profile, password, deactivated repository, encrypted
@@ -3853,3 +3854,46 @@ accounts are supported. Remaining conflict handling includes operations not
 explicitly nullified in verified history and recovery supersession before remote
 acceptance. Do not delete or mark these operations completed to bypass the journal.
 Schema downgrade refuses existing nullified rows rather than reopening them.
+
+
+### Custom-domain signup with operator reservation
+
+Enable both `ATOLL_SIGNUP_ENABLED=true` and
+`ATOLL_CUSTOM_DOMAIN_SIGNUP_ENABLED=true` to admit fresh PLC accounts with custom
+handles. Custom-domain signup defaults to disabled. It uses a two-step flow so
+the domain owner can publish a forward claim for the exact new DID before account
+activation. The public `createAccount` endpoint does not allocate new custom-domain
+reservations; the initial reservation is an operator action.
+
+Create a private JSON file (mode `0600`) with the same fields you will submit to
+`createAccount`: `handle`, `password`, and optional `email`, `inviteCode`, and
+`recoveryKey`. Then run:
+
+```sh
+mix atoll.accounts.reserve_custom_signup /secure/signup.json
+```
+
+The command reads at most 4 KiB and rejects duplicate JSON keys. It atomically
+reserves the profile, credentials, deactivated repository, encrypted keys, signed
+PLC genesis, invite redemption when applicable, and a public-metadata operator
+audit. It prints only the DID, handle, DNS TXT name/value and HTTPS setup URL.
+It does not publish to PLC, send email, activate the account or issue sessions.
+Exact password-authenticated retries reuse the same DID and signed genesis
+without consuming another invite use or duplicating the audit.
+
+Publish the printed `did=...` TXT value at `_atproto.HANDLE`, or serve the printed
+DID as plain text at `https://HANDLE/.well-known/atproto-did`. Then submit the same
+JSON fields to `com.atproto.server.createAccount`, without a `did` field (that
+field selects the separate existing-DID migration flow). Atoll forces fresh handle
+resolution before PLC publication and again before local activation. DNS
+precedence, conflicting-claim rejection, and public-address HTTPS restrictions
+are inherited from the normal handle resolver. Hosted handles keep their existing
+single-request signup flow.
+
+Missing or mismatched claims leave the reservation pending. If ownership changes
+during PLC publication, directory confirmation may already exist, but the account
+stays deactivated with no session until a valid retry. Normalized profile details,
+password proof, invite and recovery key must still match; publication/session
+failures retain the exact journal for retry. No configuration is enabled on the
+running deployment by adding this feature. Self-service custom-domain reservation,
+phone verification, and abandoned-reservation cleanup remain unfinished.

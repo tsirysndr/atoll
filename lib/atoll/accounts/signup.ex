@@ -11,7 +11,9 @@ defmodule Atoll.Accounts.Signup do
          false <- Repo.in_transaction?(),
          {:ok, input} <- input(params),
          {:ok, proof} <- prepare(input),
+         :ok <- verify_custom_handle(input.handle, proof.did, opts),
          {:ok, _} <- Registrations.submit(proof.did, Keyword.take(opts, [:plug])),
+         :ok <- verify_custom_handle(input.handle, proof.did, opts),
          {:ok, result} <- finish(input, proof) do
       {:ok, result}
     else
@@ -19,6 +21,41 @@ defmodule Atoll.Accounts.Signup do
       true -> {:error, :registration_inside_transaction}
       error -> error
     end
+  end
+
+  @doc "Operator-only custom-domain reservation. Returns public setup details, never sessions or private keys."
+  def reserve_custom(params) do
+    with true <- Application.get_env(:atoll, :signup_enabled, false),
+         false <- Repo.in_transaction?(),
+         {:ok, input} <- input(params),
+         :ok <- custom_domain(input.handle),
+         {:ok, proof} <- prepare(input, true) do
+      {:ok,
+       %{
+         did: proof.did,
+         handle: input.handle,
+         dns_name: "_atproto." <> input.handle,
+         dns_value: "did=" <> proof.did,
+         https_url: "https://" <> input.handle <> "/.well-known/atproto-did"
+       }}
+    else
+      false -> {:error, :signup_disabled}
+      true -> {:error, :registration_inside_transaction}
+      error -> error
+    end
+  end
+
+  defp custom_domain(handle) do
+    if not hosted_handle?(handle) and
+         Application.get_env(:atoll, :custom_domain_signup_enabled, false),
+       do: :ok,
+       else: {:error, :unsupported_domain}
+  end
+
+  defp verify_custom_handle(handle, did, opts) do
+    if hosted_handle?(handle) or
+         Atoll.Identity.Handle.resolve(handle, Keyword.put(opts, :force_refresh, true)) ==
+           {:ok, did}, do: :ok, else: {:error, :unverified_handle}
   end
 
   @doc "Whether the handle is one label beneath an advertised server domain."
@@ -65,7 +102,7 @@ defmodule Atoll.Accounts.Signup do
   defp input(_), do: {:error, :invalid_request}
 
   defp supported_domain(handle),
-    do: if(hosted_handle?(handle), do: :ok, else: {:error, :unsupported_domain})
+    do: if(hosted_handle?(handle), do: :ok, else: custom_domain(handle))
 
   defp email(nil), do: {:ok, nil}
   defp email(value), do: EmailAddress.normalize(value)
@@ -78,14 +115,16 @@ defmodule Atoll.Accounts.Signup do
     end
   end
 
-  defp prepare(input) do
+  defp prepare(input, allow_custom_reservation \\ false) do
     # Password hashing/verification happens before taking the global mutation lock.
     case Repo.get_by(Profile, [handle: input.handle], log: false) do
       nil ->
-        with :ok <- Invites.validate_new(input.invite),
+        with true <- hosted_handle?(input.handle) or allow_custom_reservation,
+             :ok <- Invites.validate_new(input.invite),
              {:ok, hash} <- Credentials.hash(input.password) do
           create_reservation(input, hash)
         else
+          false -> {:error, :unsupported_domain}
           {:error, :invalid_credentials} -> {:error, :invalid_password}
           error -> error
         end
@@ -157,6 +196,10 @@ defmodule Atoll.Accounts.Signup do
         unwrap!(Credentials.store_hash(genesis.did, hash))
         unwrap!(Registrations.stage(genesis.did, genesis.operation, rotation_key))
         Invites.consume!(genesis.did, input.invite)
+
+        unless hosted_handle?(input.handle),
+          do: Atoll.Moderation.Audit.signup_reservation!(genesis.did, input.handle, genesis.cid)
+
         %{did: genesis.did, digest: :crypto.hash(:sha256, hash)}
       end)
     end

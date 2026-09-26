@@ -59,6 +59,19 @@ defmodule Atoll.Moderation.Audit do
     )
   end
 
+  @doc "Records an operator custom-domain signup reservation without credentials or email."
+  def signup_reservation!(did, handle, genesis_cid) do
+    insert!(
+      "atoll.accounts.reserveCustomSignup",
+      did,
+      %{kind: "signup", did: did},
+      %{handle: handle, genesisCid: genesis_cid},
+      %{reserved: false},
+      %{reserved: true},
+      "operator"
+    )
+  end
+
   @doc "Records closure of directory-nullified work without erasing signed history."
   def nullified_update!(row, head, reservations) do
     insert!(

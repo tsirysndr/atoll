@@ -78,7 +78,12 @@ defmodule AtollWeb.SessionController do
         with {:ok, token} <- bearer(conn),
              do: Atoll.Accounts.Provisioning.import_account(token, conn.body_params)
       else
-        opts = Application.get_env(:atoll, :plc_submission_options, [])
+        opts =
+          Keyword.merge(
+            Application.get_env(:atoll, :identity_resolution_options, []),
+            Application.get_env(:atoll, :plc_submission_options, [])
+          )
+
         Atoll.Accounts.Signup.create(conn.body_params, opts)
       end
 

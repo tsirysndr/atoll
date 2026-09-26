@@ -64,6 +64,12 @@ case Integer.parse(System.get_env("ATOLL_DID_CACHE_TTL_SECONDS", "60")) do
   _ -> raise "ATOLL_DID_CACHE_TTL_SECONDS must be an integer from 0 to 300"
 end
 
+case System.get_env("ATOLL_CUSTOM_DOMAIN_SIGNUP_ENABLED", "false") do
+  "true" -> config :atoll, :custom_domain_signup_enabled, true
+  "false" -> config :atoll, :custom_domain_signup_enabled, false
+  _ -> raise "ATOLL_CUSTOM_DOMAIN_SIGNUP_ENABLED must be true or false"
+end
+
 case System.get_env("ATOLL_SIGNUP_ENABLED", "false") do
   "true" -> config :atoll, :signup_enabled, true
   "false" -> config :atoll, :signup_enabled, false
