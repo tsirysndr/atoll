@@ -395,6 +395,8 @@ mutation. Deletes and empty batches need no record schema, even with `validate: 
 - [x] Internal one-use authorization-code exchange into bound opaque OAuth tokens, with verified reuse revocation.
 - [x] HTTP authorization-code token exchange with DPoP nonce challenges, strict forms, rate limits, and CORS.
 - [ ] Browser authorization/consent flow.
+- [x] Internal owner-authenticated OAuth session inventory and per-grant revocation.
+- [ ] Browser interface for viewing and revoking OAuth sessions.
 - [x] Persisted OAuth client/DPoP/session bindings and source password-session deletion cascades.
 - [x] OAuth refresh rotation with persistent reuse revocation, per-access scope narrowing, and observed confidential-key removal revocation.
 - [x] Configurable periodic confidential-client key checks, including idle sessions, with bounded revocation and sweep progress after failures.
@@ -5108,3 +5110,35 @@ a missing-blob error. Tests cover identity-only scope, raw blob responses, CAR
 roots, publication visibility, foreign active repositories, inactive targets,
 revocation, replay, target binding and Bearer downgrade rejection. The legacy
 export tests continue to exercise owner/operator and anonymous access.
+
+### Owner management of OAuth sessions
+
+`Atoll.OAuth.SessionManagement.list/4` and `revoke/3` provide the internal account
+UI operations for OAuth grants. Both require a live full-account access JWT;
+app-password sessions, refresh JWTs and opaque OAuth credentials cannot manage
+grants. Deactivated owners retain access through the existing account-management
+authorization policy. The browser routes and interface remain pending.
+
+Inventory is scoped to the authenticated owner, excludes expired OAuth grants or
+expired source sessions, and returns at most 100 entries (default 50). Results
+are ordered by opaque session ID with an exclusive cursor. Each entry includes
+only its management ID, client ID, granted scope, expiry, and whether it has a
+refresh token. No token digests, source-session identifiers, proof keys or client
+key bindings are exposed. Client metadata is not fetched; client IDs are untrusted
+data for the future UI to escape when displaying. Pages reflect current state,
+not a snapshot across requests; new random IDs can sort before a previous cursor.
+
+Revocation reauthenticates the owner inside a transaction, follows the existing
+head/source-session/PAR/session lock order, and deletes only the selected owned
+grant. Foreign and absent IDs return the same success result. Database cascades
+remove access tokens and used refresh markers; the parent password session and
+other OAuth grants survive. Expired grants can also be revoked. Lock and database
+failures return `oauth_session_store_unavailable`. Statements and lock acquisition
+are bounded by the existing OAuth timeout policy.
+
+Tests cover pagination and field minimization, owner isolation, idempotence,
+source expiry, management credential restrictions, deactivated accounts, and
+cascade deletion. A full token-exchange integration test confirms that owner
+revocation blocks subsequent resource reads and refreshes while preserving the
+owner's password session. Previously issued service JWTs remain valid until their
+own expiry, subject to the receiving service's policy.

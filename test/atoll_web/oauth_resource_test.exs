@@ -109,7 +109,13 @@ defmodule AtollWeb.OAuthResourceTest do
     })
 
     {:ok, resource_nonce} = Nonce.issue(:resource)
-    Map.merge(c, %{tokens: tokens, resource_nonce: resource_nonce})
+
+    Map.merge(c, %{
+      tokens: tokens,
+      resource_nonce: resource_nonce,
+      owner_pair: pair,
+      owner_opts: session_options
+    })
   end
 
   test "DPoP getSession exposes identity and only the authorized email fields", c do
@@ -486,6 +492,30 @@ defmodule AtollWeb.OAuthResourceTest do
       assert export_request(c, method, params)
              |> json_response(401) == %{"error" => "invalid_token"}
     end
+  end
+
+  test "owner session management revokes an exchanged grant and its refresh access", c do
+    assert read_session(c).status == 200
+
+    assert {:ok, %{sessions: [%{id: id}]}} =
+             Atoll.OAuth.SessionManagement.list(c.owner_pair.access_jwt, 50, nil, c.owner_opts)
+
+    assert {:ok, :ok} =
+             Atoll.OAuth.SessionManagement.revoke(c.owner_pair.access_jwt, id, c.owner_opts)
+
+    assert read_session(c) |> json_response(401) == %{"error" => "invalid_token"}
+
+    params = %{
+      "grant_type" => "refresh_token",
+      "client_id" => @id,
+      "refresh_token" => c.tokens["refresh_token"]
+    }
+
+    assert send_form(c, URI.encode_query(params)) |> json_response(400) == %{
+             "error" => "invalid_grant"
+           }
+
+    assert {:ok, _} = Sessions.authenticate(c.owner_pair.access_jwt, c.owner_opts)
   end
 
   defp export_request(c, method, params, signed \\ nil),
