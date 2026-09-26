@@ -221,6 +221,7 @@ defmodule Atoll.OAuth.CodeExchange do
       %AccessToken{
         digest: :crypto.hash(:sha256, access),
         session_id: session.id,
+        scope: session.scope,
         expires_at: access_expires
       },
       log: false

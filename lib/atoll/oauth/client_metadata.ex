@@ -73,7 +73,7 @@ defmodule Atoll.OAuth.ClientMetadata do
 
   # This only validates the declaration's shape. It must never authenticate a client.
   defp jwks_declaration?(%{"keys" => keys}) when is_list(keys) do
-    length(keys) in 1..32 and Enum.all?(keys, &is_map/1)
+    length(keys) in 0..32 and Enum.all?(keys, &is_map/1)
   end
 
   defp jwks_declaration?(_), do: false

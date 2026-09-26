@@ -30,6 +30,23 @@ defmodule Atoll.OAuth.ClientAssertions do
       {:error, :oauth_assertion_store_unavailable}
   end
 
+  @doc "Admits an assertion against a freshly validated ClientKeys snapshot supplied by trusted code."
+  def authenticate_loaded(type, assertion, client, issuer, opts \\ []) do
+    cond do
+      Repo.in_transaction?() ->
+        {:error, :oauth_assertion_inside_transaction}
+
+      type != @type_uri or not is_binary(assertion) or byte_size(assertion) > 8192 ->
+        {:error, :invalid_client_assertion}
+
+      true ->
+        admit(assertion, client, issuer, opts)
+    end
+  rescue
+    _ in [Postgrex.Error, DBConnection.ConnectionError] ->
+      {:error, :oauth_assertion_store_unavailable}
+  end
+
   @doc "Stateless assertion verification; successful results still require atomic replay admission."
   def verify(assertion, client, issuer, opts \\ [])
 

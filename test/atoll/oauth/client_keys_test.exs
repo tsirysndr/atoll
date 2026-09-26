@@ -83,7 +83,8 @@ defmodule Atoll.OAuth.ClientKeysTest do
 
     assert {:error, :invalid_client_keys} = fetch([c.public, c.public])
     assert {:error, :invalid_client_keys} = fetch([c.public, Map.put(c.public, "x", zero)])
-    assert {:error, :invalid_client_keys} = fetch([])
+    assert {:ok, %{keys: keys}} = fetch([])
+    assert keys == %{}
 
     assert {:error, :invalid_client_keys} =
              fetch(Enum.map(1..33, &Map.put(c.public, "kid", "key-#{&1}")))
@@ -137,7 +138,8 @@ defmodule Atoll.OAuth.ClientKeysTest do
     assert {:ok, %{keys: replaced}} = ClientKeys.fetch(@id, opts)
     refute replaced["first"].jkt == initial["first"].jkt
     Agent.update(state, fn _ -> [] end)
-    assert {:error, :invalid_client_keys} = ClientKeys.fetch(@id, opts)
+    assert {:ok, %{keys: keys}} = ClientKeys.fetch(@id, opts)
+    assert keys == %{}
   end
 
   test "remote JWKS rejects redirects, duplicate members, large bodies, and private destinations",

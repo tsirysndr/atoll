@@ -223,7 +223,7 @@ defmodule Atoll.OAuth.ClientMetadataTest do
     inline = Map.put(doc, "jwks", %{"keys" => [key]})
     assert {:ok, _} = fetch(inline)
     assert {:error, :invalid_client_metadata} = fetch(Map.put(remote, "jwks", inline["jwks"]))
-    assert {:error, :invalid_client_metadata} = fetch(Map.put(doc, "jwks", %{"keys" => []}))
+    assert {:ok, _} = fetch(Map.put(doc, "jwks", %{"keys" => []}))
 
     assert {:error, :invalid_client_metadata} =
              fetch(Map.put(doc, "jwks_uri", "http://keys.example.com/jwks"))

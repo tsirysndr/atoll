@@ -131,11 +131,34 @@ defmodule AtollWeb.OAuthTokenTest do
     assert send_form(%{c | nonce: nonce}, URI.encode_query(c.params)) |> json_response(200)
   end
 
+  test "refresh grant rotates through HTTP and verified reuse invalidates the new tokens", c do
+    initial = send_form(c, URI.encode_query(c.params)) |> json_response(200)
+
+    params = %{
+      "grant_type" => "refresh_token",
+      "client_id" => @id,
+      "refresh_token" => initial["refresh_token"]
+    }
+
+    rotated = send_form(c, URI.encode_query(params)) |> json_response(200)
+    refute rotated["refresh_token"] == initial["refresh_token"]
+    assert rotated["token_type"] == "DPoP"
+    assert rotated["scope"] == "atproto"
+    assert rotated["sub"] == c.did
+
+    assert send_form(c, URI.encode_query(params)) |> json_response(400) == %{
+             "error" => "invalid_grant"
+           }
+
+    assert Repo.aggregate(Session, :count) == 0
+    assert Repo.aggregate(AccessToken, :count) == 0
+  end
+
   test "invalid grants and unsupported grant types have OAuth errors", c do
     assert send_form(c, URI.encode_query(Map.put(c.params, "code_verifier", random())))
            |> json_response(400) == %{"error" => "invalid_grant"}
 
-    for grant <- ["refresh_token", "password", "client_credentials"] do
+    for grant <- ["password", "client_credentials"] do
       assert send_form(c, URI.encode_query(Map.put(c.params, "grant_type", grant)))
              |> json_response(400) == %{"error" => "unsupported_grant_type"}
     end

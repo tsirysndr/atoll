@@ -2,7 +2,7 @@ defmodule AtollWeb.OAuthRequestPlug do
   @moduledoc "PAR and token HTTP boundary before general parsing, logging, or method rewriting."
   @behaviour Plug
   import Plug.Conn
-  alias Atoll.OAuth.{DPoP, Form, Nonce, PAR, CodeExchange}
+  alias Atoll.OAuth.{DPoP, Form, Nonce, PAR, CodeExchange, Refresh}
   @limit 49_152
   @allowed_headers ~w(content-type dpop)
 
@@ -138,6 +138,9 @@ defmodule AtollWeb.OAuthRequestPlug do
   defp execute(:oauth_token, %{"grant_type" => "authorization_code"} = params, headers, opts),
     do: CodeExchange.exchange(params, headers, opts)
 
+  defp execute(:oauth_token, %{"grant_type" => "refresh_token"} = params, headers, opts),
+    do: Refresh.exchange(params, headers, opts)
+
   defp execute(:oauth_token, %{"grant_type" => grant}, _, _) when grant != "",
     do: {:error, :unsupported_grant_type}
 
@@ -165,6 +168,8 @@ defmodule AtollWeb.OAuthRequestPlug do
 
   defp oauth_error(conn, reason)
        when reason in [
+              :oauth_refresh_store_full,
+              :oauth_refresh_store_unavailable,
               :oauth_session_limit,
               :oauth_exchange_store_unavailable,
               :oauth_par_store_full,

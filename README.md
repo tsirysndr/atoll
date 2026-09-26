@@ -396,7 +396,9 @@ mutation. Deletes and empty batches need no record schema, even with `validate: 
 - [x] HTTP authorization-code token exchange with DPoP nonce challenges, strict forms, rate limits, and CORS.
 - [ ] Browser authorization/consent flow.
 - [x] Persisted OAuth client/DPoP/session bindings and source password-session deletion cascades.
-- [ ] OAuth refresh rotation, resource authorization, client-key removal revocation, and localhost virtual client metadata.
+- [x] OAuth refresh rotation with persistent reuse revocation, per-access scope narrowing, and observed confidential-key removal revocation.
+- [ ] Periodic confidential-client key checks independent of refresh requests.
+- [ ] OAuth resource authorization and localhost virtual client metadata.
 - [ ] OAuth nonce challenges and proof admission integrated into remaining authorization/resource server routes.
 - [ ] ATProto OAuth authorization and resource server support.
 - [x] Live-session and repository ownership checks for blob uploads and single/batch record writes.
@@ -4469,7 +4471,7 @@ the `ClientKeys` loader below adds key validation and remote JWKS retrieval, whi
 the assertion guard below adds signature, replay, and supplied key-binding checks.
 The code exchange below persists session bindings. Metadata branding is untrusted
 and must not be displayed as verified application identity. The optional localhost
-virtual-client flow, browser authorization, and token refresh remain pending.
+virtual-client flow and browser authorization remain pending.
 
 The declaration rules follow the
 [ATProto OAuth client profile](https://atproto.com/specs/oauth#clients).
@@ -4483,22 +4485,24 @@ checks, timeouts, 64 KiB limit, exact HTTP 200/JSON requirement, and duplicate-m
 rejection as client metadata. Neither metadata nor keys are cached by this loader;
 an unavailable or invalid response fails without returning previously seen keys.
 
-Key sets contain 1–32 ES256/P-256 public keys with distinct, case-sensitive `kid`
+Key sets contain 0–32 ES256/P-256 public keys with distinct, case-sensitive `kid`
 values of 1–256 printable ASCII bytes. Coordinates must be canonical base64url
 encodings of exactly 32 bytes, and OpenSSL validates the full elliptic-curve point.
 Private/symmetric key fields, duplicate IDs, other algorithms/curves, incompatible
 `use`/`key_ops`, and key-level remote references are rejected. Optional `alg`,
 `use`, and `key_ops` must be `ES256`, `sig`, and `["verify"]` when supplied. Only
 the public curve and coordinates are passed to JOSE; unsupported keys invalidate
-the set instead of being silently selected or ignored.
+the set instead of being silently selected or ignored. An empty set represents
+removal of all keys and cannot authenticate any assertion.
 
 The result contains validated metadata and a map indexed by `kid`, with each
 entry's public JOSE key, algorithm, and JWK thumbprint. Removal or replacement of
 a key is visible on the next fetch, including replacement under an unchanged
 `kid`. These are advertised verification keys, not proof of client authentication.
 The assertion guard below verifies signatures, rejects replay, and can check an
-original `kid`/`alg`/`jkt` binding. Persisting that binding and revoking affected
-OAuth sessions when keys disappear still need integration into the session lifecycle.
+original `kid`/`alg`/`jkt` binding. Code exchange persists that binding, and refresh
+revokes its session when a freshly validated key set no longer contains that
+key. Periodic checks independent of refresh requests remain pending.
 
 ### Confidential-client JWT assertions
 
@@ -4611,7 +4615,7 @@ are described below. Protocol references:
 and returns HTTP 201 with `request_uri` and `expires_in` after successful admission.
 Configure `ATOLL_OAUTH_NONCE_SECRET` as described above; without it this route
 returns HTTP 503 `temporarily_unavailable`. No complete OAuth server is advertised:
-discovery, browser authorization/consent, token refresh, and resource authorization
+discovery, browser authorization/consent, and resource authorization
 still need implementation, so the returned reference cannot yet complete a login.
 
 The boundary runs before general body parsing, method rewriting, and Phoenix
@@ -4684,7 +4688,7 @@ and keys, revocation during metadata retrieval, expiry, capacity rollback, and
 concurrent decisions through independent database connections.
 
 This service does not render login/consent. The internal exchange below redeems
-codes; browser consent, refresh, and resource authorization remain unfinished.
+codes; browser consent and resource authorization remain unfinished.
 
 ### Authorization-code exchange and opaque sessions
 
@@ -4725,9 +4729,9 @@ against the separate 10,000-code cap.
 Tests cover digest-only storage, binding failures, source-session revocation,
 expiry, client metadata/key changes, access-only clients, capacity rollback,
 marker retention, and concurrent redemption. The HTTP adapter below exposes this
-service. Refresh tokens cannot yet be rotated, and resource routes do not yet
-accept these access tokens. Browser consent, discovery,
-refresh/key-removal revocation, and scope enforcement remain unchecked above.
+service. Refresh rotation is described below. Resource routes do not yet accept
+these access tokens. Browser consent, discovery, periodic key-removal checks,
+and resource scope enforcement remain unchecked above.
 
 
 ### Token HTTP adapter
@@ -4764,5 +4768,59 @@ HTTP tests cover issuance, nonce retry, code-reuse revocation, proof replay,
 malformed forms, CORS, peer limits, and configured-host binding. Response and
 error shapes follow [RFC 6749 sections 5.1–5.2](https://www.rfc-editor.org/rfc/rfc6749.html#section-5.1).
 Discovery and browser consent remain pending; this route does not yet make Atoll
-a complete OAuth server. `refresh_token` grants remain unsupported until rotation
-and client-key revocation are implemented.
+a complete OAuth server. The refresh grant is described below.
+
+
+### Refresh rotation and token-family revocation
+
+`POST /oauth/token` also accepts `grant_type=refresh_token`, `client_id`, and
+`refresh_token`, plus an optional `scope` and the confidential-client assertion
+fields. `Atoll.OAuth.Refresh.exchange/3` implements this grant. The route uses the
+same nonce challenges, parsing, CORS, and peer budget as code exchange. Refresh
+requires a new DPoP proof from the session's original key and freshly retrieved
+client metadata; confidential clients must authenticate using the original
+`kid`/`alg`/`jkt`. Proof and assertion replay admission commits before rotation.
+
+Rotation locks and rechecks the active account, source password session, and
+OAuth session. It atomically replaces the refresh digest, issues a five-minute
+access token, and retains the consumed digest in `oauth_refresh_uses` until the
+session expires. It never extends the original session lifetime. Source-session
+expiry also caps new access tokens. Deleting the OAuth or source session removes
+its access tokens and consumed-refresh markers through foreign keys.
+
+Reusing any consumed refresh token with valid bindings revokes the session and
+all its tokens, returning `invalid_grant` after committing the deletion. There
+is no retry grace period: clients must serialize refresh calls, and losing a
+successful response can require login again. Concurrent independent requests
+produce one rotation followed by revocation. Wrong client IDs, wrong DPoP keys,
+and invalid assertions cannot revoke an otherwise valid session.
+
+A narrowed `scope` must be a subset of the original grant, retain `atproto`, and
+respect the transitional chat dependency. It applies only to the new access
+token, whose scope is stored explicitly; the replacement refresh token retains
+the original grant. Omitting scope uses the original grant. The migration
+backfills existing access-token scopes from their sessions before enforcing a
+non-null column. Resource authorization must enforce the access token's scope;
+that route integration remains pending.
+
+On refresh, a valid current confidential key set with the bound key removed or
+replaced causes permanent session revocation, including an empty inline or
+remote JWKS. Metadata/network validation failures reject refresh without treating
+a failed lookup as evidence of removal. This checks the requesting session;
+periodic checks of idle sessions remain unfinished.
+
+The existing shared PAR lock serializes rotation with code exchange and reuse
+revocation. There is a global cap of 100,000 consumed refresh markers and a cap
+of 100 live access tokens per session. Rotation reclaims at most 1,000 globally
+expired markers and the current session's expired access tokens before admission.
+Capacity failures roll back token replacement and cleanup; the HTTP response is
+503 `temporarily_unavailable`. Existing one-second lock and five-second statement
+timeouts apply. PostgreSQL stores the authoritative state with no memory or Redis
+fallback. Idle expired state is reclaimed by subsequent admissions, not a timer.
+
+Tests exercise real code issuance followed by rotation, per-access scope storage,
+replay revocation, independent concurrent connections, source-session deletion
+and expiry, metadata-time revocation, key replacement/removal, transient lookup
+failure, storage capacity, bounded cleanup, and the HTTP refresh response.
+The behavior follows the [ATProto token/session profile](https://atproto.com/specs/oauth#tokens-and-session-lifetime)
+and [OAuth refresh semantics](https://www.rfc-editor.org/rfc/rfc6749.html#section-6).

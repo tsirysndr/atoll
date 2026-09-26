@@ -25,7 +25,7 @@ defmodule Atoll.OAuth.ClientKeys do
          do: ClientMetadata.decode_document(body)
   end
 
-  defp keys(%{"keys" => keys}) when is_list(keys) and length(keys) in 1..32 do
+  defp keys(%{"keys" => keys}) when is_list(keys) and length(keys) in 0..32 do
     Enum.reduce_while(keys, {:ok, %{}}, fn jwk, {:ok, acc} ->
       case key(jwk) do
         {:ok, %{kid: kid} = key} when not is_map_key(acc, kid) ->
