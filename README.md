@@ -324,6 +324,7 @@ mutation. Deletes and empty batches need no record schema, even with `validate: 
 - [x] App password creation, metadata listing, revocation, restricted sessions, and privileged service delegation.
 - [ ] ATProto OAuth authorization and resource server support.
 - [x] Live-session and repository ownership checks for blob uploads and single/batch record writes.
+- [x] Operator Basic authentication for repository/blob exports, including inactive accounts.
 - [ ] Authorization for remaining account and repository operations.
 - [ ] Account migration, identity updates, and signing-key lifecycle.
 - [x] Authenticated `com.atproto.server.checkAccountStatus` with repository/blob inventory and DID service/key checks.
@@ -1713,8 +1714,19 @@ expiry (two hours), refresh expiry (90 days), account session caps, and password
 recovery revocation apply unchanged.
 
 These exports do not reactivate the account or reopen public synchronization.
-Administrator-token export overrides remain unimplemented; operator Basic credentials
-are only accepted by the dedicated administrative routes.
+These three routes also accept the configured operator Basic credential
+(`admin` plus `ATOLL_ADMIN_PASSWORD`). Operators can export any existing local
+repository, including suspended accounts, without changing its status. Basic
+requests use the shared administrative rate limit (60 requests per five minutes per
+client IP), authenticate before query parsing, and reject invalid credentials even
+when the requested data would otherwise be public. Missing operator configuration
+returns 503 for Basic requests; unauthenticated public reads remain available.
+
+Storage authorization rechecks the supplied operator credential and holds a shared
+repository lock for the export. Blob references, individual blob takedowns, existing
+CAR size limits, pagination, and revision filters still apply. This override does
+not authorize other sync methods, writes, uploads, or account operations. Export
+reads do not append moderation decisions to the audit history.
 
 
 ### Administrative account inspection

@@ -49,7 +49,7 @@ defmodule AtollWeb.RepoController do
   def get_repo(conn, params) do
     with true <- Syntax.did?(params["did"]),
          true <- is_nil(params["since"]) or TID.valid?(params["since"]),
-         {:ok, token} <- AtollWeb.BearerToken.optional(conn),
+         {:ok, token} <- AtollWeb.ExportToken.optional(conn),
          {:ok, archive} <- Repositories.export(params["did"], params["since"], token) do
       conn
       |> put_resp_header("cache-control", "no-store")

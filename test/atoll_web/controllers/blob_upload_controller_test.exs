@@ -8,7 +8,7 @@ defmodule AtollWeb.BlobUploadControllerTest do
 
   setup %{conn: conn} do
     previous =
-      for key <- [:session_signing_key, :blob_storage, :blob_quota],
+      for key <- [:admin_password, :session_signing_key, :blob_storage, :blob_quota],
           do: {key, Application.fetch_env(:atoll, key)}
 
     on_exit(fn ->
@@ -262,6 +262,15 @@ defmodule AtollWeb.BlobUploadControllerTest do
 
     assert c.conn
            |> put_req_header("authorization", "Bearer " <> restricted.access_jwt)
+           |> get("/xrpc/com.atproto.sync.getBlob", params)
+           |> response(200) == bytes
+
+    secret = "operator-minio-export-secret-at-least-32"
+    Application.put_env(:atoll, :admin_password, secret)
+    {:ok, _} = Repositories.set_status(@did, :suspended)
+
+    assert c.conn
+           |> put_req_header("authorization", "Basic " <> Base.encode64("admin:" <> secret))
            |> get("/xrpc/com.atproto.sync.getBlob", params)
            |> response(200) == bytes
   end

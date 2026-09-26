@@ -19,6 +19,11 @@ defmodule AtollWeb.AdminRequestPlug do
     "/xrpc/com.atproto.admin.getAccountInfo",
     "/xrpc/com.atproto.admin.getAccountInfos"
   ]
+  @exports [
+    "/xrpc/com.atproto.sync.getRepo",
+    "/xrpc/com.atproto.sync.getBlob",
+    "/xrpc/com.atproto.sync.listBlobs"
+  ]
   @parser Plug.Parsers.init(
             parsers: [:json],
             json_decoder: Jason,
@@ -31,13 +36,17 @@ defmodule AtollWeb.AdminRequestPlug do
   def call(conn, _) do
     path = "/" <> Enum.map_join(conn.path_info, "/", &URI.decode/1)
 
-    if path in @paths or path in @queries do
+    admin_export? =
+      path in @exports and
+        AtollWeb.ExportToken.admin_attempt?(get_req_header(conn, "authorization"))
+
+    if path in @paths or path in @queries or admin_export? do
       conn =
         conn
         |> put_resp_header("cache-control", "no-store")
         |> put_resp_header("pragma", "no-cache")
 
-      method = if path in @queries, do: "GET", else: "POST"
+      method = if path in @queries or admin_export?, do: "GET", else: "POST"
 
       if conn.method == method do
         case Atoll.Accounts.SessionLimiter.check({:admin, conn.remote_ip}, 60) do

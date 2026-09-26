@@ -23,7 +23,7 @@ defmodule AtollWeb.BlobController do
   def get_blob(conn, params) do
     with true <- Syntax.did?(params["did"]),
          {:ok, cid} <- raw_cid(params["cid"]),
-         {:ok, token} <- AtollWeb.BearerToken.optional(conn),
+         {:ok, token} <- AtollWeb.ExportToken.optional(conn),
          {:ok, %{blob: blob, bytes: bytes}} <- Blobs.get_public(params["did"], cid, token: token) do
       conn
       |> put_resp_content_type(blob["mimeType"], nil)
@@ -43,7 +43,7 @@ defmodule AtollWeb.BlobController do
          {:ok, limit} <- limit(params["limit"]),
          {:ok, cursor} <- cursor(params["cursor"]),
          true <- is_nil(params["since"]) or TID.valid?(params["since"]),
-         {:ok, token} <- AtollWeb.BearerToken.optional(conn),
+         {:ok, token} <- AtollWeb.ExportToken.optional(conn),
          {:ok, result} <- Blobs.list_public(params["did"], limit, cursor, params["since"], token) do
       json(put_resp_header(conn, "cache-control", "no-store"), result)
     else

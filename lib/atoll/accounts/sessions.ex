@@ -188,8 +188,21 @@ defmodule Atoll.Accounts.Sessions do
     end
   end
 
-  @doc "Authorize owner exports of inactive accounts; other targets must remain public and active."
-  def authenticate_export(token, did, opts \\ []) do
+  @doc "Authorize live owner exports or revalidated operator credentials; non-owner user targets must be active."
+  def authenticate_export(token, did, opts \\ [])
+
+  def authenticate_export({:admin, headers}, did, _opts) do
+    with :ok <- Atoll.Accounts.AdminAuth.authenticate(headers) do
+      Repo.transaction(fn ->
+        Repo.one(from h in Head, where: h.did == ^did, lock: "FOR SHARE") ||
+          Repo.rollback(:not_found)
+      end)
+    else
+      _ -> {:error, :invalid_token}
+    end
+  end
+
+  def authenticate_export(token, did, opts) do
     with {:ok, claims} <- Tokens.verify(token, :access, opts) do
       Repo.transaction(fn ->
         owner = active_head!(claims["sub"], false, true, true)
