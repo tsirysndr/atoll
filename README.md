@@ -396,6 +396,7 @@ mutation. Deletes and empty batches need no record schema, even with `validate: 
 - [x] HTTP authorization-code token exchange with DPoP nonce challenges, strict forms, rate limits, and CORS.
 - [x] Browser pushed-request authorization and explicit consent with optional scope narrowing and account-hint enforcement.
 - [ ] Optional passkey enrollment, authentication, management, and recovery.
+- [x] Internal RFC 6238 TOTP verification, authenticator provisioning URIs, and account-bound encrypted secret envelopes.
 - [ ] Optional authenticator-app (TOTP) enrollment, authentication, management, and recovery.
 - [x] Internal owner-authenticated OAuth session inventory and per-grant revocation.
 - [x] Browser account login, OAuth session inventory/revocation, and logout with encrypted cookies and CSRF protection.
@@ -5220,3 +5221,36 @@ read, denial, logout cascades, CSRF and form tampering, hint mismatches, expired
 requests and duplicate/extra query fields. A transaction-level test verifies the
 displayed account cannot be replaced during code issuance. Visual browser review
 is still unavailable in the current tooling; discovery remains a separate task.
+
+### Authenticator cryptographic primitives
+
+`Atoll.Accounts.TOTP` implements the six-digit SHA-1/30-second profile compatible
+with common authenticator applications. It generates fresh 160-bit secrets and
+builds `otpauth://totp` provisioning URIs with escaped display labels, an unpadded
+Base32 secret and explicit profile parameters. Labels must not contain colons or
+control characters. These URIs contain secret material and must stay within the
+account's enrollment flow; no external QR-image service should receive them.
+
+Verification takes a trusted timestamp and last-used step, checks the previous,
+current and next step, and returns the highest matching step newer than the
+persisted value. All candidate code comparisons use `Plug.Crypto.secure_compare`.
+Inputs require exactly six ASCII digits, including leading zeroes, and counters
+support the full unsigned 64-bit range. Tests include the RFC 4226 counters and
+RFC 6238 SHA-1 vectors (six-digit suffixes), drift boundaries, leading zeroes,
+post-2038 timestamps, malformed inputs and counter overflow.
+
+`Atoll.Accounts.TOTPSecret` seals 160-bit secrets in versioned AES-256-GCM envelopes
+with fresh nonces and authenticated data binding the account DID and TOTP purpose.
+It uses the existing active master key and bounded decryption-only fallback ring.
+`rewrap/2` returns a fresh envelope under the active key; a future storage caller
+must persist it atomically before retiring old keys. Tests cover account binding,
+ciphertext/nonce/tag tampering, wrong keys, fallback decryption, key retirement,
+and malformed configuration.
+
+These internal primitives do **not** enable 2FA yet. Enrollment, database-backed
+attempt limits and atomic step consumption, login integration, recovery codes,
+management UI and integration with the persisted-key rotation workflow remain
+pending. The verifier alone does not prevent concurrent reuse: its caller must
+lock the enrolled factor, verify and persist the returned step in the same
+authorization transaction. No existing account or login behavior changes in this
+increment. Optional passkeys remain pending separately.
