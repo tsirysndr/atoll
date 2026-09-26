@@ -133,7 +133,8 @@ record Lexicons or grant access to account data.
 - [x] Version-3 commit signing and verification with expected-DID and schema checks.
 - [x] Encrypted PostgreSQL signing-key storage using AES-256-GCM and a separate runtime master key.
 - [x] Atomic managed repository creation and internal writes using persisted signing keys.
-- [ ] Signing-key rotation, master-key rotation, and recovery workflows.
+- [x] Encryption master-key rotation with decryption fallback keys and atomic paginated envelope rewrapping.
+- [ ] Signing-key rotation and recovery workflows.
 - [x] PostgreSQL repository heads and atomic record, tree, and commit updates with optional head compare-and-swap.
 - [x] Internal record create, put, delete, and read operations with collection/type checks (not Lexicon validation).
 - [x] Public `getRecord` and paginated `listRecords` for repository DIDs or bidirectionally verified handles and current record versions.
@@ -764,7 +765,8 @@ The development server description currently returns:
 Set `ATOLL_KEY_ENCRYPTION_KEY` to a base64-encoded random 32-byte master key
 before starting Atoll. There is no default. Keep it outside version control and
 back it up separately from PostgreSQL: losing it makes stored signing keys
-unrecoverable. Changing it does not rotate existing encrypted keys.
+unrecoverable. Changing it alone does not rotate existing encrypted keys; use the
+master-key rotation workflow below.
 
 With the master key configured, trusted internal callers can use:
 
@@ -775,7 +777,8 @@ Atoll.Repositories.apply_managed_writes(did, operations, swap_commit: head.head)
 
 For an existing repository whose private key is still available,
 `Atoll.KeyVault.store(did, key)` persists it only if it matches the pinned public
-key. Existing encrypted keys cannot be overwritten. These internal functions do
+key. Existing signing keys cannot be overwritten; the operator rewrap command can
+replace their encrypted envelopes without changing their key material. These internal functions do
 not authorize accounts; HTTP record writes authorize the repository owner's session.
 
 ## Checks
@@ -2047,3 +2050,45 @@ also force fresh DID resolution. Public queries cannot set trusted resolver opti
 to bypass these policies. Internal calls use `force_refresh: true`; test/custom
 transports disable the shared handle cache unless explicitly supplied with
 `handle_cache: cache_pid`.
+
+### Encryption master-key rotation
+
+`ATOLL_KEY_ENCRYPTION_KEY` remains the active base64-encoded 32-byte AES key used
+for every new repository-key and PLC rotation-key envelope.
+`ATOLL_PREVIOUS_KEY_ENCRYPTION_KEYS` optionally supplies up to four comma-separated
+base64 32-byte decryption-only keys. Keys are never accepted as CLI arguments or
+stored in PostgreSQL. Malformed environment values fail startup. Application
+configuration uses `:key_encryption_key` and `:previous_key_encryption_keys` with
+decoded 32-byte binaries.
+
+For a deployment with multiple nodes, rotate in these stages:
+
+1. Generate and securely back up a new random 32-byte key. Distribute it as a
+   decryption-only fallback to every node while retaining the old active key.
+2. Switch every node to the new active key, retaining the old key as a fallback.
+   Complete this rollout before rewrapping so no node continues writing old envelopes.
+3. Run `mix atoll.keys.rewrap --limit 100` with the same active/fallback configuration.
+   If JSON output contains `cursor`, pass it to the next invocation with `--after DID`.
+   Continue until there is no cursor. Use the production environment and secret
+   source when operating a production database.
+4. Repeat a complete pass from the beginning to verify every envelope is readable
+   with the active key; it should report zero rewrapped envelopes. Remove the old
+   fallback from every node only after the complete successful pass. Keep old keys
+   securely available for backups made before the rotation.
+
+Each page scans at most 100 repositories in DID order and commits atomically.
+Output contains only `scanned`, `repositories` and `plc` rewrap counts, `unchanged`
+envelope count, and an optional DID cursor. Repositories without stored envelopes
+are counted as scanned but need no change. An unreadable/tampered envelope or
+database failure aborts the entire page; repair and retry that page without
+skipping the affected account. The command is resumable and idempotent.
+
+Rewrapping takes the event lock followed by repository and envelope locks, with
+bounded lock/statement waits. It preserves the authenticated envelope binding,
+private/public signing-key material, repository commits, signed PLC operation,
+registration state, sessions, and public events. Both repository keys and retained
+PLC rotation keys must migrate before retiring an old master key.
+
+This rotates encryption protection, not repository signing keys, PLC authority,
+JWT secrets, or server identity keys. It cannot recover an envelope when every
+key capable of decrypting it has been lost. No rotation is scheduled automatically.

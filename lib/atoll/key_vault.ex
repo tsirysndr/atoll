@@ -4,7 +4,7 @@ defmodule Atoll.KeyVault do
 
   AES-256-GCM envelopes bind the DID, curve and public key as authenticated data.
   The 32-byte master key comes from runtime configuration and is never stored in
-  PostgreSQL. Keys are insert-only; key rotation requires a separate workflow.
+  PostgreSQL. Signing keys are insert-only; envelope rewrapping rotates only their encryption key.
   """
   import Ecto.Query
   alias Atoll.{CBOR, Repo, SigningKey}
@@ -22,20 +22,7 @@ defmodule Atoll.KeyVault do
         if head.curve != key.curve or head.public_key != key.public,
           do: Repo.rollback(:invalid_key)
 
-        nonce = :crypto.strong_rand_bytes(12)
-
-        {ciphertext, tag} =
-          :crypto.crypto_one_time_aead(
-            :aes_256_gcm,
-            master,
-            nonce,
-            key.private,
-            aad(head),
-            16,
-            true
-          )
-
-        envelope = <<1, nonce::binary, ciphertext::binary, tag::binary>>
+        envelope = encrypt(head, key.private, master)
 
         case Repo.insert_all(EncryptedKey, [%{did: did, envelope: envelope}],
                on_conflict: :nothing,
@@ -65,7 +52,7 @@ defmodule Atoll.KeyVault do
 
       case Repo.one(query, log: false) do
         nil -> {:error, :key_not_found}
-        {head, envelope} -> decrypt(head, envelope, master)
+        {head, envelope} -> Atoll.MasterKeys.decrypt(master, &decrypt(head, envelope, &1))
       end
     end
   end
@@ -104,10 +91,43 @@ defmodule Atoll.KeyVault do
         %Bytes{data: head.public_key}
       ])
 
-  defp master_key do
-    case Application.get_env(:atoll, :key_encryption_key) do
-      <<_::binary-size(32)>> = key -> {:ok, key}
-      _ -> {:error, :key_vault_unconfigured}
+  defp master_key, do: Atoll.MasterKeys.active()
+
+  @doc false
+  def rewrap!(head, master) do
+    case Repo.one(from(k in EncryptedKey, where: k.did == ^head.did, lock: "FOR UPDATE"),
+           log: false
+         ) do
+      nil ->
+        :absent
+
+      row ->
+        case decrypt(head, row.envelope, master) do
+          {:ok, _} ->
+            :unchanged
+
+          _ ->
+            case Atoll.MasterKeys.decrypt(master, &decrypt(head, row.envelope, &1)) do
+              {:ok, key} ->
+                row
+                |> Ecto.Changeset.change(envelope: encrypt(head, key.private, master))
+                |> Repo.update!(log: false)
+
+                :rotated
+
+              {:error, reason} ->
+                Repo.rollback(reason)
+            end
+        end
     end
+  end
+
+  defp encrypt(head, private, master) do
+    nonce = :crypto.strong_rand_bytes(12)
+
+    {ciphertext, tag} =
+      :crypto.crypto_one_time_aead(:aes_256_gcm, master, nonce, private, aad(head), 16, true)
+
+    <<1, nonce::binary, ciphertext::binary, tag::binary>>
   end
 end

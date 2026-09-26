@@ -57,6 +57,10 @@ config :atoll,
        :plc_directory_url,
        Atoll.Identity.PLC.Client.directory_from_env!(System.get_env("ATOLL_PLC_DIRECTORY_URL"))
 
+config :atoll,
+       :previous_key_encryption_keys,
+       Atoll.MasterKeys.previous_from_env!(System.get_env("ATOLL_PREVIOUS_KEY_ENCRYPTION_KEYS"))
+
 config :atoll, :email_worker, Atoll.Email.Config.parse!(System.get_env())
 
 server = Atoll.ServerConfig.parse!(System.get_env(), config_env() == :prod)

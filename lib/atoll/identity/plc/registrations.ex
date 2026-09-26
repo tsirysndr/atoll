@@ -141,7 +141,7 @@ defmodule Atoll.Identity.PLC.Registrations do
     <<1, nonce::binary, ciphertext::binary, tag::binary>>
   end
 
-  defp decrypt(
+  defp decrypt_one(
          %{
            rotation_envelope:
              <<1, nonce::binary-size(12), ciphertext::binary-size(32), tag::binary-size(16)>>
@@ -166,7 +166,7 @@ defmodule Atoll.Identity.PLC.Registrations do
     end
   end
 
-  defp decrypt(_, _), do: {:error, :key_decryption_failed}
+  defp decrypt_one(_, _), do: {:error, :key_decryption_failed}
 
   defp aad(row),
     do:
@@ -178,10 +178,33 @@ defmodule Atoll.Identity.PLC.Registrations do
         %Bytes{data: row.rotation_public_key}
       ])
 
-  defp master_key do
-    case Application.get_env(:atoll, :key_encryption_key) do
-      <<_::binary-size(32)>> = key -> {:ok, key}
-      _ -> {:error, :key_vault_unconfigured}
+  defp master_key, do: Atoll.MasterKeys.active()
+  defp decrypt(row, master), do: Atoll.MasterKeys.decrypt(master, &decrypt_one(row, &1))
+
+  @doc false
+  def rewrap!(did, master) do
+    case Repo.one(from(r in Registration, where: r.did == ^did, lock: "FOR UPDATE"), log: false) do
+      nil ->
+        :absent
+
+      row ->
+        case decrypt_one(row, master) do
+          {:ok, _} ->
+            :unchanged
+
+          _ ->
+            case decrypt(row, master) do
+              {:ok, key} ->
+                row
+                |> Ecto.Changeset.change(rotation_envelope: encrypt(row, key.private, master))
+                |> Repo.update!(log: false)
+
+                :rotated
+
+              {:error, reason} ->
+                Repo.rollback(reason)
+            end
+        end
     end
   end
 end
