@@ -172,6 +172,25 @@ defmodule Atoll.PLCUpdatesTest do
     assert {:error, :account_not_found} = stage(ctx)
   end
 
+  test "directory-backed staging checks fresh evidence outside the local transaction", ctx do
+    Req.Test.expect(__MODULE__, fn conn ->
+      assert String.ends_with?(conn.request_path, "/log/audit")
+      Req.Test.json(conn, ctx.audit)
+    end)
+
+    expect_get(ctx.previous)
+
+    assert {:ok, %{confirmed: false}} =
+             Updates.stage_from_directory(ctx.did, ctx.operation, plug: {Req.Test, __MODULE__})
+
+    assert Repo.get_by!(Update, did: ctx.did, cid: ctx.cid).operation == ctx.operation
+
+    assert {:ok, {:error, :plc_update_inside_transaction}} =
+             Repo.transaction(fn ->
+               Updates.stage_from_directory(ctx.did, ctx.operation)
+             end)
+  end
+
   defp stage(ctx), do: Updates.stage(ctx.did, ctx.audit, ctx.operation)
   defp submit(ctx), do: Updates.submit(ctx.did, ctx.cid, plug: {Req.Test, __MODULE__})
 

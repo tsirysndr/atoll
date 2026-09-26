@@ -5,10 +5,45 @@ defmodule Atoll.Identity.PLC.Client do
   must retain the exact signed operation across retries: signing again changes
   its DID. This client does not persist operations or activate accounts.
   """
-  alias Atoll.Identity.PLC.Operation
+  alias Atoll.Identity.PLC.{AuditLog, Operation}
 
   @default_directory "https://plc.directory"
   @max_response 65_536
+
+  @doc "Fetches and verifies bounded audit evidence, then checks its head against a fresh latest read."
+  def fetch_audit(did, opts \\ []) do
+    with true <- is_binary(did) and Regex.match?(~r/\Adid:plc:[a-z2-7]{24}\z/, did),
+         {:ok, origin} <-
+           directory(Application.get_env(:atoll, :plc_directory_url, @default_directory)) do
+      url = origin <> "/" <> URI.encode(did, &URI.char_unreserved?/1)
+
+      with {:ok, entries} <-
+             audit_body(request(:get, url <> "/log/audit", [], opts, 8 * 1024 * 1024)),
+           {:ok, state} <- AuditLog.verify(did, entries),
+           {:ok, latest} <- latest_cid(request(:get, url <> "/log/last", [], opts)),
+           true <- latest == state.cid do
+        {:ok, %{entries: entries, state: state}}
+      else
+        false -> {:error, :plc_conflict}
+        error -> error
+      end
+    else
+      false -> {:error, :invalid_plc_operation}
+      error -> error
+    end
+  end
+
+  defp audit_body({:ok, %{status: 200, body: body} = response}) when is_binary(body) do
+    with true <- Req.Response.get_header(response, "content-encoding") in [[], ["identity"]],
+         {:ok, entries} when is_list(entries) <- Jason.decode(body) do
+      {:ok, entries}
+    else
+      _ -> {:error, :invalid_plc_response}
+    end
+  end
+
+  defp audit_body({:ok, %{status: 200}}), do: {:error, :invalid_plc_response}
+  defp audit_body(_), do: {:error, :plc_unavailable}
 
   def directory_from_env!(value) do
     case directory(value || @default_directory) do
@@ -114,7 +149,7 @@ defmodule Atoll.Identity.PLC.Client do
 
   defp confirm(_, _, _, _), do: {:error, :plc_unavailable}
 
-  defp request(method, url, extra, opts) do
+  defp request(method, url, extra, opts, max_bytes \\ @max_response) do
     request = [
       method: method,
       url: url,
@@ -126,14 +161,14 @@ defmodule Atoll.Identity.PLC.Client do
       connect_options: [timeout: 3_000],
       receive_timeout: 5_000,
       finch: [pool_timeout: 3_000, request_timeout: 10_000],
-      into: &collect/2
+      into: &collect(&1, &2, max_bytes)
     ]
 
     Req.request(request ++ extra ++ Keyword.take(opts, [:plug]))
   end
 
-  defp collect({:data, data}, {request, response}) do
-    if byte_size(response.body) + byte_size(data) > @max_response,
+  defp collect({:data, data}, {request, response}, max_bytes) do
+    if byte_size(response.body) + byte_size(data) > max_bytes,
       do: {:halt, {request, %{response | body: :too_large}}},
       else: {:cont, {request, %{response | body: response.body <> data}}}
   end

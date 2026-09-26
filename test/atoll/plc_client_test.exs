@@ -241,6 +241,72 @@ defmodule Atoll.PLCClientTest do
     assert {:error, :invalid_plc_operation} = update(%{ctx | did: nil})
   end
 
+  test "audit fetching verifies the full chain and compares its head to a fresh latest read",
+       ctx do
+    entries = audit_entries()
+
+    Req.Test.expect(__MODULE__, fn conn ->
+      assert conn.method == "GET"
+      assert conn.host == "directory.example.com"
+      assert URI.decode(conn.request_path) == "/" <> ctx.did <> "/log/audit"
+      Req.Test.json(conn, entries)
+    end)
+
+    expect_latest(%{ctx | operation: ctx.later})
+    assert {:ok, %{entries: ^entries, state: state}} = fetch_audit(ctx)
+    assert state.did == ctx.did
+    assert state.operation == ctx.later
+    refute state.tombstoned
+
+    Req.Test.expect(__MODULE__, &Req.Test.json(&1, [hd(entries)]))
+    expect_latest(%{ctx | operation: ctx.later})
+    assert {:error, :plc_conflict} = fetch_audit(ctx)
+  end
+
+  test "audit fetching rejects forged history before requesting latest", ctx do
+    entries = audit_entries()
+    forged = List.update_at(entries, 1, &put_in(&1, ["operation", "sig"], "bad"))
+
+    for body <- [forged, [], List.duplicate(hd(entries), 1001)] do
+      Req.Test.expect(__MODULE__, &Req.Test.json(&1, body))
+      assert {:error, :invalid_plc_log} = fetch_audit(ctx)
+    end
+
+    assert {:error, :invalid_plc_operation} = fetch_audit(%{ctx | did: "did:web:example.com"})
+  end
+
+  test "audit transport is bounded and rejects compressed responses and redirects", ctx do
+    for body <- ["null", "{}", "bad JSON", String.duplicate(" ", 8 * 1024 * 1024 + 1)] do
+      Req.Test.expect(__MODULE__, &Plug.Conn.send_resp(&1, 200, body))
+      assert {:error, :invalid_plc_response} = fetch_audit(ctx)
+    end
+
+    Req.Test.expect(__MODULE__, fn conn ->
+      conn
+      |> Plug.Conn.put_resp_header("content-encoding", "gzip")
+      |> Plug.Conn.send_resp(200, :zlib.gzip(Jason.encode!(audit_entries())))
+    end)
+
+    assert {:error, :invalid_plc_response} = fetch_audit(ctx)
+
+    Req.Test.expect(__MODULE__, fn conn ->
+      conn
+      |> Plug.Conn.put_resp_header("location", "https://other.example.com")
+      |> Plug.Conn.send_resp(302, "")
+    end)
+
+    assert {:error, :plc_unavailable} = fetch_audit(ctx)
+    Req.Test.expect(__MODULE__, &Req.Test.transport_error(&1, :timeout))
+    assert {:error, :plc_unavailable} = fetch_audit(ctx)
+  end
+
+  defp audit_entries,
+    do:
+      File.read!(Path.join([__DIR__, "..", "fixtures", "plc", "log_bskyapp.json"]))
+      |> Jason.decode!()
+
+  defp fetch_audit(ctx), do: Client.fetch_audit(ctx.did, plug: {Req.Test, __MODULE__})
+
   defp update(ctx),
     do: Client.submit_update(ctx.did, ctx.operation, ctx.later, plug: {Req.Test, __MODULE__})
 

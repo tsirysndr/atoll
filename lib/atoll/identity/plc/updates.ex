@@ -12,6 +12,16 @@ defmodule Atoll.Identity.PLC.Updates do
   alias Atoll.Repositories.{Events, Head}
   alias Atoll.Identity.PLC.{AuditLog, Client, Operation, Update}
 
+  @doc "Fetch fresh verified directory evidence before staging; caller still authorizes the action."
+  def stage_from_directory(did, operation, opts \\ []) do
+    if Repo.in_transaction?() do
+      {:error, :plc_update_inside_transaction}
+    else
+      with {:ok, %{entries: audit}} <- Client.fetch_audit(did, Keyword.take(opts, [:plug])),
+           do: stage(did, audit, operation)
+    end
+  end
+
   def stage(did, audit, operation) when is_map(operation) do
     with {:ok, %{operation: previous, tombstoned: false}} <- AuditLog.verify(did, audit),
          true <- operation["type"] == "plc_operation",

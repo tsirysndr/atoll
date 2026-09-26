@@ -307,6 +307,7 @@ mutation. Deletes and empty batches need no record schema, even with `validate: 
 - [x] Internal PLC genesis submission with bounded responses and exact latest-operation confirmation.
 - [x] Internal ordinary PLC update submission with predecessor checks and exact-operation retry reconciliation.
 - [x] Durable PLC update journal with verified predecessor evidence and separate remote confirmation/local completion.
+- [x] Fresh verified audit lookup from the configured PLC directory, with latest-operation consistency checking.
 - [x] Durable genesis registration journal and encrypted PLC rotation-key retention.
 - [x] Opt-in fresh PLC DID signup under configured server domains, including durable retries and optional recovery keys.
 - [x] Hosted handle resolution through `/.well-known/atproto-did`.
@@ -2631,3 +2632,30 @@ it does not undo a public directory operation, including a submission already in
 flight. Never discard an ambiguously submitted pending operation or generate a
 replacement signature merely to retry. No automatic submission worker or public
 identity-mutation endpoint is enabled by this internal foundation.
+
+
+### Directory evidence for identity changes
+
+`Atoll.Identity.PLC.Client.fetch_audit/2` reads `/log/audit` from the configured
+trusted PLC directory, verifies its signatures, genesis binding, recovery rules,
+and nullification flags, then compares the verified surviving head with a separate
+fresh `/log/last` read. It returns both the entries and verified state; mismatched
+heads fail with `plc_conflict`. There is no cache, redirect following, automatic
+retry, or fallback to an unverified document. Audit responses are limited to 8 MiB
+and 1000 operations; the latest-operation response retains the 64 KiB limit.
+Encoded responses are rejected. Tombstone state is returned explicitly for callers
+to handle; update staging refuses it.
+
+`Updates.stage_from_directory/3` connects this lookup to durable staging. It refuses
+an open local transaction so network waits cannot hold local mutation locks.
+Workflows needing atomic local reservations can instead fetch evidence first and
+call `stage/3` in their authorized reservation transaction. User authorization is
+still the workflow's responsibility. The final submission checks the predecessor
+again because the directory can change after evidence is read.
+
+These two reads detect inconsistent snapshots, including a truncated audit that
+omits the separately reported latest operation. They cannot prove completeness
+against a directory withholding both views, authenticate its unsigned timestamps,
+or prevent changes after either response. Public DID resolution retains its own
+fixed-directory policy; this configured-directory lookup is for internal identity
+mutation workflows.
