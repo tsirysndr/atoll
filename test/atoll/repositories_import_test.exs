@@ -26,7 +26,12 @@ defmodule Atoll.RepositoriesImportTest do
     }
 
     {archive, commit, blocks} = archive(key, head.rev, %{@path => record})
+    cursor = Atoll.Repositories.Events.latest_seq()
     assert {:ok, imported} = Repositories.import_archive(@did, archive, head.head)
+    assert {:ok, [event]} = Atoll.Repositories.Events.list_after(cursor)
+    assert event.kind == :sync
+    assert event.payload["commit"] == %Link{cid: commit.cid}
+    assert event.payload["since"] == head.rev
     assert imported.head == commit.cid
     assert {:ok, %{value: value}} = Repositories.get_record(@did, @path)
     assert value["text"] == "imported"
@@ -37,6 +42,7 @@ defmodule Atoll.RepositoriesImportTest do
     assert Storage.get_block(external) == {:error, :not_found}
     count = Repo.aggregate(Block, :count)
     assert Repositories.import_archive(@did, archive, imported.head) == {:ok, imported}
+    assert Atoll.Repositories.Events.latest_seq() == event.seq
     assert Repo.aggregate(Block, :count) == count
   end
 

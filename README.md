@@ -120,9 +120,10 @@ Raw CID support and generic block storage are implemented; the ATProto blob API 
 - [x] Export consistency checks against the signed commit, tree root, and revision.
 - [x] Internal deactivation, suspension, takedown, and reactivation; inactive repositories reject public reads, exports, writes, and imports.
 - [ ] Historical block retrieval and repository status event publication.
-- [ ] Durable repository event sequencing and replay.
+- [x] Internal durable event sequencing and cursor replay, recorded atomically with repository creation, writes, imports, and status changes.
+- [ ] Event retention / compaction and higher-throughput sequencing (writes currently share a PostgreSQL transaction advisory lock to preserve commit order).
 - [ ] `com.atproto.sync.subscribeRepos` WebSocket stream with resume cursors.
-- [ ] Commit, sync, identity, and account events.
+- [ ] Wire-format commit, sync, identity, and account events (the internal outbox stores transition metadata; CAR framing and publication are pending).
 - [ ] Relay discovery / crawl requests and federation interoperability tests.
 - [ ] Service authentication and request proxying to AppViews and other services.
 

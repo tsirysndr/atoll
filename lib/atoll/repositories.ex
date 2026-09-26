@@ -13,7 +13,7 @@ defmodule Atoll.Repositories do
   """
   import Ecto.Query
   alias Atoll.{CAR, CBOR, CID, Commit, DataModel, MST, Repo, SigningKey, Storage, Syntax, TID}
-  alias Atoll.Repositories.{Head, Record, Revision, Snapshot}
+  alias Atoll.Repositories.{Events, Head, Record, Revision, Snapshot}
 
   @doc "Creates a repository and encrypted signing key atomically. Requires the key vault master key."
   def create_managed(did, curve \\ :k256) when curve in [:p256, :k256] do
@@ -48,6 +48,7 @@ defmodule Atoll.Repositories do
     with {:ok, prior} <- get_head(did),
          {:ok, snapshot} <- Snapshot.decode(archive, did, prior.curve, prior.public_key) do
       Repo.transaction(fn ->
+        Events.lock!()
         head = locked_head!(did, "FOR UPDATE")
 
         if head.head != expected_head or head.public_key != prior.public_key or
@@ -76,6 +77,7 @@ defmodule Atoll.Repositories do
               |> Repo.update!()
 
             remember_revision!(updated, Map.keys(snapshot.blocks))
+            Events.append!(:sync, updated, event_head(updated, head))
             updated
         end
       end)
@@ -89,6 +91,7 @@ defmodule Atoll.Repositories do
          {:ok, derived} <- SigningKey.from_private(key.curve, key.private),
          true <- derived.public == key.public do
       Repo.transaction(fn ->
+        Events.lock!()
         {:ok, tree} = MST.new()
         {:ok, rev} = TID.next()
         commit = persist_commit!(did, tree, rev, key)
@@ -98,6 +101,7 @@ defmodule Atoll.Repositories do
           {1, _} ->
             saved = Repo.get!(Head, did)
             remember_revision!(saved, Map.keys(tree.blocks))
+            Events.append!(:commit, saved, Map.put(event_head(saved, nil), "ops", []))
             saved
 
           {0, _} ->
@@ -115,17 +119,24 @@ defmodule Atoll.Repositories do
   def apply_writes(did, operations, key, opts \\ []) do
     with {:ok, prepared} <- prepare(operations) do
       Repo.transaction(fn ->
+        Events.lock!()
         head = locked_head!(did, "FOR UPDATE")
         expected = Keyword.get(opts, :swap_commit, :any)
         if expected != :any and expected != head.head, do: Repo.rollback(:invalid_swap)
         unless matching_key?(key, head), do: Repo.rollback(:invalid_key)
-        updated = Enum.reduce(prepared, record_map(did), &apply_operation!/2)
+        previous_records = record_map(did)
+        updated = Enum.reduce(prepared, previous_records, &apply_operation!/2)
         {:ok, tree} = MST.new(updated)
         {:ok, rev} = TID.next(head.rev)
         commit = persist_commit!(did, tree, rev, key)
         Enum.each(prepared, &persist_record!(did, &1))
         updated_head = head |> Ecto.Changeset.change(head: commit.cid, rev: rev) |> Repo.update!()
         remember_revision!(updated_head, Map.keys(tree.blocks) ++ Map.values(tree.records))
+
+        payload =
+          Map.put(event_head(updated_head, head), "ops", event_ops(prepared, previous_records))
+
+        Events.append!(:commit, updated_head, payload)
         updated_head
       end)
     end
@@ -142,8 +153,21 @@ defmodule Atoll.Repositories do
   def set_status(did, status)
       when is_binary(did) and status in [:active, :deactivated, :takendown, :suspended] do
     Repo.transaction(fn ->
+      Events.lock!()
       head = locked_head!(did, "FOR UPDATE", false)
-      head |> Ecto.Changeset.change(status: status) |> Repo.update!()
+
+      if head.status == status do
+        head
+      else
+        updated = head |> Ecto.Changeset.change(status: status) |> Repo.update!()
+
+        Events.append!(:account, updated, %{
+          "active" => status == :active,
+          "status" => Atom.to_string(status)
+        })
+
+        updated
+      end
     end)
   end
 
@@ -388,6 +412,41 @@ defmodule Atoll.Repositories do
       {:ok, archive} -> archive
       {:error, reason} -> Repo.rollback(reason)
     end
+  end
+
+  defp event_head(head, previous) do
+    %{
+      "commit" => %CBOR.Link{cid: head.head},
+      "rev" => head.rev,
+      "since" => previous && previous.rev,
+      "previousCommit" => previous && %CBOR.Link{cid: previous.head}
+    }
+  end
+
+  defp event_ops(prepared, previous) do
+    Enum.flat_map(prepared, fn {action, path, cid, _} ->
+      old = Map.get(previous, path)
+
+      if action == :delete and is_nil(old) do
+        []
+      else
+        action =
+          cond do
+            action == :delete -> "delete"
+            is_nil(old) -> "create"
+            true -> "update"
+          end
+
+        [
+          %{
+            "action" => action,
+            "path" => path,
+            "cid" => cid && %CBOR.Link{cid: cid},
+            "prev" => old && %CBOR.Link{cid: old}
+          }
+        ]
+      end
+    end)
   end
 
   defp remember_revision!(head, cids) do
