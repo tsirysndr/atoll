@@ -62,6 +62,27 @@ defmodule Atoll.Repositories do
     end
   end
 
+  @doc "Lists hosted repository heads in bytewise DID order. Cursor is the last returned DID."
+  def list_heads(limit, cursor \\ nil) when limit in 1..1000 do
+    query =
+      from h in Head, order_by: [asc: fragment("? COLLATE \"C\"", h.did)], limit: ^(limit + 1)
+
+    query =
+      if is_nil(cursor),
+        do: query,
+        else: from(h in query, where: fragment("? COLLATE \"C\" > ?", h.did, ^cursor))
+
+    rows = Repo.all(query)
+    page = Enum.take(rows, limit)
+
+    result = %{
+      repos:
+        Enum.map(page, &%{did: &1.did, head: CID.to_base32(&1.head), rev: &1.rev, active: true})
+    }
+
+    if length(rows) > limit, do: Map.put(result, :cursor, List.last(page).did), else: result
+  end
+
   def get_record(did, path) when is_binary(did) and is_binary(path) do
     case Repo.get_by(Record, did: did, path: path) do
       nil ->

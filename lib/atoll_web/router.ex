@@ -25,6 +25,9 @@ defmodule AtollWeb.Router do
     get "/com.atproto.server.describeServer", ServerController, :describe
     get "/com.atproto.repo.getRecord", RepoController, :get_record
     get "/com.atproto.repo.listRecords", RepoController, :list_records
+    get "/com.atproto.sync.getLatestCommit", SyncController, :latest_commit
+    get "/com.atproto.sync.getRepoStatus", SyncController, :repo_status
+    get "/com.atproto.sync.listRepos", SyncController, :list_repos
   end
 
   scope "/xrpc", AtollWeb do
