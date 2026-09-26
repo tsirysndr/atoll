@@ -2,7 +2,7 @@ defmodule Atoll.Accounts.Signup do
   @moduledoc "Fresh PLC signup with durable reservations and exact-operation retries."
   import Ecto.Query
   alias Atoll.{KeyVault, Multikey, Repo, Repositories, SigningKey, Syntax}
-  alias Atoll.Accounts.{Credentials, EmailAddress, Profile, Sessions, Tokens}
+  alias Atoll.Accounts.{Credentials, EmailAddress, Invites, Profile, Sessions, Tokens}
   alias Atoll.Identity.PLC.{Operation, Registration, Registrations}
   alias Atoll.Repositories.{Events, Head}
 
@@ -41,13 +41,21 @@ defmodule Atoll.Accounts.Signup do
     do: Repo.exists?(from r in Registration, where: r.did == ^did and is_nil(r.completed_at))
 
   defp input(%{"handle" => handle, "password" => password} = params) do
-    with true <- Map.keys(params) -- ["handle", "password", "email", "recoveryKey"] == [],
+    with true <-
+           Map.keys(params) -- ["handle", "password", "email", "recoveryKey", "inviteCode"] == [],
          true <- Syntax.handle?(handle),
          handle = String.downcase(handle),
          :ok <- supported_domain(handle),
          {:ok, email} <- email(params["email"]),
          :ok <- recovery(params["recoveryKey"]) do
-      {:ok, %{handle: handle, password: password, email: email, recovery: params["recoveryKey"]}}
+      {:ok,
+       %{
+         handle: handle,
+         password: password,
+         email: email,
+         recovery: params["recoveryKey"],
+         invite: params["inviteCode"]
+       }}
     else
       false -> {:error, :invalid_request}
       error -> error
@@ -74,10 +82,12 @@ defmodule Atoll.Accounts.Signup do
     # Password hashing/verification happens before taking the global mutation lock.
     case Repo.get_by(Profile, [handle: input.handle], log: false) do
       nil ->
-        with {:ok, hash} <- Credentials.hash(input.password) do
+        with :ok <- Invites.validate_new(input.invite),
+             {:ok, hash} <- Credentials.hash(input.password) do
           create_reservation(input, hash)
         else
-          _ -> {:error, :invalid_password}
+          {:error, :invalid_credentials} -> {:error, :invalid_password}
+          error -> error
         end
 
       profile ->
@@ -144,6 +154,7 @@ defmodule Atoll.Accounts.Signup do
 
         unwrap!(Credentials.store_hash(genesis.did, hash))
         unwrap!(Registrations.stage(genesis.did, genesis.operation, rotation_key))
+        Invites.consume!(genesis.did, input.invite)
         %{did: genesis.did, digest: :crypto.hash(:sha256, hash)}
       end)
     end
@@ -179,6 +190,7 @@ defmodule Atoll.Accounts.Signup do
     profile = Repo.get!(Profile, did, log: false)
     row = Repo.get(Registration, did, log: false)
     unless row && is_nil(row.completed_at), do: Repo.rollback(:account_exists)
+    unless Invites.retry?(did, input.invite), do: Repo.rollback(:invalid_invite_code)
 
     unless profile.handle == input.handle && profile.email == input.email &&
              Credentials.current_digest?(did, digest),

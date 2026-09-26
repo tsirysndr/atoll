@@ -23,6 +23,7 @@ defmodule AtollWeb.SignupControllerTest do
           :session_signing_key,
           :key_encryption_key,
           :plc_submission_options,
+          :invite_code_required,
           :session_max_count
         ],
         &{&1, Application.fetch_env(:atoll, &1)}
@@ -44,6 +45,7 @@ defmodule AtollWeb.SignupControllerTest do
     )
 
     Application.put_env(:atoll, :signup_enabled, true)
+    Application.put_env(:atoll, :invite_code_required, false)
     Application.put_env(:atoll, :session_max_count, 100)
     Application.put_env(:atoll, :session_signing_key, :crypto.strong_rand_bytes(32))
     Application.put_env(:atoll, :key_encryption_key, :crypto.strong_rand_bytes(32))
@@ -202,6 +204,43 @@ defmodule AtollWeb.SignupControllerTest do
 
     assert json_response(request(Map.put(@params, "password", new_password)), 200)["did"] ==
              row.did
+  end
+
+  test "invite-required signup reserves one use across PLC failures and disables new claims" do
+    alias Atoll.Accounts.{Invite, Invites, InviteUse}
+    Application.put_env(:atoll, :invite_code_required, true)
+
+    description =
+      build_conn() |> get("/xrpc/com.atproto.server.describeServer") |> json_response(200)
+
+    assert description["inviteCodeRequired"]
+    assert json_response(request(@params), 400)["error"] == "InvalidInviteCode"
+    assert Repo.aggregate(Profile, :count) == 0
+    {:ok, %{code: code}} = Invites.create()
+    params = Map.put(@params, "inviteCode", code)
+    Req.Test.expect(__MODULE__, &Req.Test.transport_error(&1, :timeout))
+    Req.Test.expect(__MODULE__, &Plug.Conn.send_resp(&1, 404, ""))
+    assert json_response(request(params), 503)
+    row = Repo.one!(Registration)
+    assert Repo.get!(Invite, code).remaining == 0
+    assert Repo.get!(InviteUse, row.did).code == code
+    assert json_response(request(@params), 400)["error"] == "InvalidInviteCode"
+    {:ok, :disabled} = Invites.disable(code)
+
+    assert json_response(
+             request(
+               Map.merge(params, %{
+                 "handle" => "bob.users.example.com",
+                 "email" => "bob@example.com"
+               })
+             ),
+             400
+           )["error"] == "InvalidInviteCode"
+
+    accept_registration(row.operation)
+    assert json_response(request(params), 200)["did"] == row.did
+    assert Repo.get!(Invite, code).remaining == 0
+    assert Repo.aggregate(InviteUse, :count) == 1
   end
 
   test "normalizes hosted handles and supports accounts without email" do

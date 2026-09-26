@@ -1,13 +1,14 @@
 defmodule Atoll.Accounts.Provisioning do
   @moduledoc "Creates deactivated accounts for pre-existing DIDs using single-use service authorization."
   alias Atoll.{Repo, Repositories, Syntax}
-  alias Atoll.Accounts.{Credentials, Profile, ServiceTokens, Sessions}
+  alias Atoll.Accounts.{Credentials, Invites, Profile, ServiceTokens, Sessions}
   alias Atoll.Identity.{Document, Handle}
   alias Atoll.Repositories.{Events, Head}
   @method "com.atproto.server.createAccount"
 
   def import_account(token, params) do
     with {:ok, input} <- input(params),
+         :ok <- Invites.validate_new(input.invite),
          {:ok, hash} <- Credentials.hash(input.password) do
       opts = Application.get_env(:atoll, :identity_resolution_options, [])
       audience = Application.fetch_env!(:atoll, :pds) |> Keyword.fetch!(:did)
@@ -54,6 +55,7 @@ defmodule Atoll.Accounts.Provisioning do
         end
 
         unwrap!(Credentials.store_hash(input.did, hash))
+        Invites.consume!(input.did, input.invite)
         pair = unwrap!(Sessions.create_for_account(input.did))
 
         %{
@@ -83,11 +85,18 @@ defmodule Atoll.Accounts.Provisioning do
   end
 
   defp input(%{"did" => did, "handle" => handle, "password" => password} = params) do
-    with true <- Map.keys(params) -- ["did", "handle", "password", "email"] == [],
+    with true <- Map.keys(params) -- ["did", "handle", "password", "email", "inviteCode"] == [],
          true <- Syntax.did?(did),
          true <- Syntax.handle?(handle),
          {:ok, email} <- email(params["email"]) do
-      {:ok, %{did: did, handle: String.downcase(handle), password: password, email: email}}
+      {:ok,
+       %{
+         did: did,
+         handle: String.downcase(handle),
+         password: password,
+         email: email,
+         invite: params["inviteCode"]
+       }}
     else
       _ -> {:error, :invalid_request}
     end

@@ -1,5 +1,11 @@
 import Config
 
+case System.get_env("ATOLL_INVITE_CODE_REQUIRED", "false") do
+  "true" -> config :atoll, :invite_code_required, true
+  "false" -> config :atoll, :invite_code_required, false
+  _ -> raise "ATOLL_INVITE_CODE_REQUIRED must be true or false"
+end
+
 config :atoll,
        :localhost_dids_enabled,
        Atoll.Identity.Localhost.parse_enabled!(

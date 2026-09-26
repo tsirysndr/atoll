@@ -162,7 +162,8 @@ The same `validate: true` restriction applies to batch requests.
 - [x] Durable genesis registration journal and encrypted PLC rotation-key retention.
 - [x] Opt-in fresh PLC DID signup under configured server domains, including durable retries and optional recovery keys.
 - [x] Hosted handle resolution through `/.well-known/atproto-did`.
-- [ ] Custom-domain signup, invite/phone verification policies, and abandoned signup reservation cleanup.
+- [x] Configurable invite-required signup and migration, limited uses, durable redemption and local operator issuance.
+- [ ] Invite-code HTTP administration, account invite listings, custom-domain signup, phone verification, and abandoned signup reservation cleanup.
 - [x] Internal DID-scoped password credentials with salted Argon2id hashes, bounded input, redacted inspection, and duplicate protection.
 - [x] Shared configurable Cloudflare Worker email delivery client.
 - [x] Email confirmation requests and one-use confirmation through the Worker.
@@ -1050,10 +1051,10 @@ label beneath an advertised domain. `GET /.well-known/atproto-did` serves comple
 accounts by the actual request host, ignoring forwarded-host headers. Disabling
 signup does not disable resolution of existing handles.
 
-Supply `handle` and `password`, optionally `email` and a valid secp256k1 or P-256
+Supply `handle` and `password`, optionally `email`, `inviteCode`, and a valid secp256k1 or P-256
 `recoveryKey` DID key. Handles and emails are normalized. The recovery key precedes
-the server's independently generated PLC rotation key in priority. Invite codes,
-phone verification, custom-domain signup, and caller-supplied PLC operations are
+the server's independently generated PLC rotation key in priority. Phone
+verification, custom-domain signup, and caller-supplied PLC operations are
 not supported by this fresh-signup path; existing-DID migration still requires its
 service JWT. Email confirmation uses the existing Worker-backed request endpoint.
 
@@ -1065,7 +1066,7 @@ The response contains the DID, handle, access JWT and refresh JWT. Requests reta
 the existing 4 KiB body limit, no-store responses and 20-attempt direct-IP login
 bucket per five minutes.
 
-On a directory error, retry the same handle, password, email and recovery key.
+On a directory error, retry the same handle, password, email, invite code and recovery key.
 The pending account and original signed operation are reused; changed passwords
 or reservation details cannot take over a pending account. A concurrent password
 reset invalidates an in-flight signup proof. Once signup is complete, further
@@ -1150,3 +1151,38 @@ and fresh PLC signup over HTTP are not enabled by this exception.
 Tests include an actual HTTP round trip to an ephemeral loopback Atoll endpoint,
 plus disabled-mode, port, host, redirect and private-address rejection checks.
 No running server configuration is changed by this feature's default settings.
+
+
+### Invite-code policy
+
+Set `ATOLL_INVITE_CODE_REQUIRED=true` to require an invitation for account creation,
+including existing-DID migration. It defaults to false, independently of the fresh
+signup enable switch. `describeServer` reports `inviteCodeRequired`. A supplied
+code is always validated and consumed, even when invitations are optional.
+
+Operators can create a code in the configured database using:
+
+```sh
+mix atoll.invites.create --uses 1
+```
+
+The task prints JSON containing the code and use count. `--uses` accepts 1–10000;
+`--for-account DID` optionally attributes the invitation to an existing local
+account. This attribution does not authenticate the holder: the code is a bearer
+invitation. Codes contain 192 random bits, are stored for later account listings,
+and are redacted in schema inspection and request parameter logs. Treat the task's
+output as a secret to share with intended invitees. No invitations have been issued
+outside rollback-isolated tests by this implementation work.
+
+Redemption locks the code and records one historical use per DID inside account
+provisioning. A database rollback restores the use. A committed pending fresh
+signup retains its use across directory errors, and password-authenticated retries
+must carry the same code; they never spend a second use. Account deletion does not
+refund a use. A pending signup originally admitted without an invite can finish
+after policy becomes stricter. `Atoll.Accounts.Invites.disable/1` is an internal
+operator API that blocks new reservations without cancelling existing ones.
+
+Migration redemption also rolls back with failed provisioning and service-token
+consumption. Public HTTP issuance/disable administration, account invite listings,
+and automatic invite allocation remain pending; the Mix task and internal APIs
+are trusted operator operations.

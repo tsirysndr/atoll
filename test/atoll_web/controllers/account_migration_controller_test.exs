@@ -26,9 +26,16 @@ defmodule AtollWeb.AccountMigrationControllerTest do
   setup %{conn: conn} do
     previous =
       Map.new(
-        [:session_signing_key, :key_encryption_key, :identity_resolution_options],
+        [
+          :session_signing_key,
+          :key_encryption_key,
+          :identity_resolution_options,
+          :invite_code_required
+        ],
         &{&1, Application.fetch_env(:atoll, &1)}
       )
+
+    Application.put_env(:atoll, :invite_code_required, false)
 
     endpoint = Application.fetch_env!(:atoll, AtollWeb.Endpoint)
 
@@ -117,6 +124,25 @@ defmodule AtollWeb.AccountMigrationControllerTest do
     assert {:ok, _} = Commit.verify(blocks[root], @did, new_key.curve, new_key.public)
     assert upload(auth, archive) |> json_response(400)
     assert {:ok, %{did: @did}} = Sessions.authenticate(pair["accessJwt"])
+  end
+
+  test "migration requires an invitation when configured and failed provisioning preserves it",
+       c do
+    alias Atoll.Accounts.{Invite, InviteUse, Invites}
+    Application.put_env(:atoll, :invite_code_required, true)
+    token = service_token(c.source)
+    assert json_response(create(c, %{}, token), 400)["error"] == "InvalidInviteCode"
+    refute Repo.exists?(ServiceTokenUse)
+    {:ok, %{code: code}} = Invites.create()
+    Application.delete_env(:atoll, :key_encryption_key)
+    assert json_response(create(c, %{"inviteCode" => code}, token), 503)
+    assert Repo.get!(Invite, code).remaining == 1
+    refute Repo.exists?(InviteUse)
+    refute Repo.exists?(ServiceTokenUse)
+    Application.put_env(:atoll, :key_encryption_key, :binary.copy(<<28>>, 32))
+    assert json_response(create(c, %{"inviteCode" => code}, token), 200)["did"] == @did
+    assert Repo.get!(Invite, code).remaining == 0
+    assert Repo.get!(InviteUse, @did).code == code
   end
 
   test "provisioning failure rolls back the repository, credentials, profile and token use", c do

@@ -1,6 +1,9 @@
 defmodule AtollWeb.XRPCFallback do
   use AtollWeb, :controller
 
+  def call(conn, {:error, :invalid_invite_code}),
+    do: error(conn, 400, "InvalidInviteCode", "A valid, available invite code is required.")
+
   def call(conn, {:error, :signup_disabled}),
     do: error(conn, 403, "Forbidden", "Fresh signup is disabled.")
 

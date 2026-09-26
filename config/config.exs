@@ -31,6 +31,7 @@ config :logger, :default_formatter,
 config :phoenix, :json_library, Jason
 
 config :phoenix, :filter_parameters, [
+  "inviteCode",
   "password",
   "identifier",
   "email",
