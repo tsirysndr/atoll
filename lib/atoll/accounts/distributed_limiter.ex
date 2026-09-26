@@ -57,11 +57,14 @@ defmodule Atoll.Accounts.DistributedLimiter do
   end
 
   defp admit!(digest, now) do
+    # Evaluate the bounded candidate selection once, even with stale/empty table
+    # statistics. An IN subquery can choose a repeated nested-loop semi join.
     # Reclaim at most one batch before admitting a new key. Idle storage stays bounded.
     Repo.query!(
       """
-      DELETE FROM request_rate_buckets WHERE digest IN
-        (SELECT digest FROM request_rate_buckets WHERE expires_at <= $1 ORDER BY expires_at, digest LIMIT 1000)
+      DELETE FROM request_rate_buckets WHERE digest = ANY(ARRAY(
+        SELECT digest FROM request_rate_buckets WHERE expires_at <= $1 ORDER BY expires_at, digest LIMIT 1000
+      ))
       """,
       [now],
       log: false
