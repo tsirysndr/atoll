@@ -136,6 +136,9 @@ defmodule AtollWeb.XRPCFallback do
   def call(conn, {:error, :invalid_swap}),
     do: error(conn, 400, "InvalidSwap", "Repository or record version does not match.")
 
+  def call(conn, {:error, :invalid_record_schema}),
+    do: error(conn, 400, "InvalidRequest", "Record does not match its Lexicon schema.")
+
   def call(conn, {:error, :validation_unavailable}),
     do: error(conn, 400, "InvalidRequest", "Required Lexicon validation is not available.")
 

@@ -25,7 +25,8 @@ Checked items are implemented in this repository. Unchecked items are remaining 
 - [x] Lexicon-based parameter validation for all routed XRPC GET endpoints.
 - [x] JSON procedure envelope validation against pinned upstream Lexicons.
 - [x] Bounded Lexicon-based subscription parameter validation with protocol error frames.
-- [ ] Lexicon-based record validation.
+- [x] Required, optimistic, and skipped record validation for built-in follow, block, like, and repost Lexicons.
+- [ ] Broader record Lexicon coverage and authenticated Lexicon discovery/resolution.
 
 XRPC routing uses the [HTTP API specification](https://atproto.com/specs/xrpc).
 Malformed paths return `400 InvalidRequest`; valid but unimplemented method NSIDs
@@ -66,7 +67,8 @@ JSON primitive types, identifier and datetime formats, and the closed batch-writ
 union. Invalid envelopes return `400 InvalidRequest` before controller actions.
 Unknown extension fields remain available to endpoint-specific checks. Record
 objects and PLC operations still require the repository/identity layers' data and
-semantic checks; this does not implement application-record Lexicon validation.
+semantic checks; procedure-envelope validation is separate from the record
+validation policy described below.
 Blob/CAR uploads and bodyless procedures retain their dedicated request handlers.
 
 Browser clients can call XRPC from any origin using explicit authorization
@@ -138,7 +140,7 @@ record Lexicons or grant access to account data.
 - [x] Authenticated `createRecord`, `putRecord`, and `deleteRecord`, with atomic commit/record compare-and-swap.
 - [x] Authenticated atomic `applyWrites` batches with ordered results and commit compare-and-swap.
 - [x] DID or bidirectionally verified handle addressing for single and batch record writes.
-- [ ] Lexicon validation.
+- [ ] Broader record Lexicon coverage and resolution (four built-in record schemas supported).
 - [x] `com.atproto.repo.describeRepo` with resolved DID document, current collections, and bidirectional handle status.
 - [x] In-memory CARv1 encoding and decoding with block verification and resource limits.
 - [x] Consistent repository CAR export through the internal storage API.
@@ -174,11 +176,28 @@ to be absent. Delete does not accept null. A mismatch returns `InvalidSwap`
 without changing records, blob references, revisions, or events. Create rejects
 an existing key. Deleting an absent record succeeds.
 
-Create/put return `uri`, `cid`, commit metadata, and `validationStatus: "unknown"`;
-delete returns commit metadata. General ATProto data-model, collection/type, blob
-ownership, and record-size checks run for every write. Lexicon schema validation
-is not implemented: omitted/false `validate` is accepted and `validate: true`
-is rejected. Request JSON is limited to 2 MiB; encoded records retain their 1 MB
+Create/put return `uri`, `cid`, commit metadata, and `validationStatus`; delete
+returns commit metadata. General ATProto data-model, collection/type, blob
+ownership, and record-size checks run for every write, regardless of `validate`.
+The three record validation modes are:
+
+- Omitted: validate known record schemas; allow unknown schemas.
+- `true`: require a known schema and a matching record.
+- `false`: skip record schema validation.
+
+Built-in, pinned schemas currently cover `app.bsky.graph.follow`,
+`app.bsky.graph.block`, `app.bsky.feed.like`, and `app.bsky.feed.repost`, including
+`com.atproto.repo.strongRef` references. Validation checks required fields,
+identifier and datetime formats, and TID record keys. Successfully checked records
+return `validationStatus: "valid"`; skipped or unknown schemas return `"unknown"`.
+Schema mismatch or unavailable required validation returns `400 InvalidRequest`.
+Unknown extension fields are retained. The validator does not fetch schemas from
+the network; other records, including posts and profiles, remain unknown until
+additional schema support is implemented. Internal low-level repository APIs and
+CAR imports continue to enforce data integrity without applying this write-API
+Lexicon policy.
+
+Request JSON is limited to 2 MiB; encoded records retain their 1 MB
 limit. Writes allow 300 requests per direct peer IP per five minutes using the
 same per-node limiter as sessions, and responses use `Cache-Control: no-store`.
 
@@ -196,7 +215,9 @@ revision history, and the single commit event succeed or roll back together.
 Results preserve request order and carry the corresponding `#createResult`,
 `#updateResult`, or `#deleteResult` type. An empty batch checks authorization and
 `swapCommit`, then returns the current commit and empty results without mutation.
-The same `validate: true` restriction applies to batch requests.
+The same validation modes apply to each create/update in a batch, with a
+per-result validation status. A schema failure rejects the entire batch before
+mutation. Deletes and empty batches need no record schema, even with `validate: true`.
 
 ### Identity, accounts, and authentication
 

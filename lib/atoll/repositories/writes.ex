@@ -1,5 +1,5 @@
 defmodule Atoll.Repositories.Writes do
-  @moduledoc "Authenticated writes for DIDs or bidirectionally verified handles. Lexicon validation is pending."
+  @moduledoc "Authenticated writes for DIDs or bidirectionally verified handles. Includes validation against known record Lexicons."
   import Ecto.Query
   alias Atoll.{CID, Repo, Repositories, Syntax, TID}
   alias Atoll.Accounts.{Sessions, Tokens}
@@ -19,7 +19,7 @@ defmodule Atoll.Repositories.Writes do
         if commit != :any and commit != head.head, do: Repo.rollback(:invalid_swap)
 
         {prepared, _} =
-          Enum.map_reduce(writes, head.rev, fn {action, value}, previous ->
+          Enum.map_reduce(writes, head.rev, fn {action, value, validation}, previous ->
             {rkey, previous} =
               case Map.fetch(value, "rkey") do
                 {:ok, rkey} ->
@@ -43,7 +43,7 @@ defmodule Atoll.Repositories.Writes do
                 :create -> {:create, path, value["value"]}
               end
 
-            {{action, path, operation}, previous}
+            {{action, path, operation, validation}, previous}
           end)
 
         updated =
@@ -59,7 +59,7 @@ defmodule Atoll.Repositories.Writes do
           end
 
         results =
-          Enum.map(prepared, fn {action, path, _} ->
+          Enum.map(prepared, fn {action, path, _, validation} ->
             result = %{"$type" => @batch_type <> Atom.to_string(action) <> "Result"}
 
             if action == :delete do
@@ -70,7 +70,7 @@ defmodule Atoll.Repositories.Writes do
               Map.merge(result, %{
                 "uri" => "at://" <> did <> "/" <> path,
                 "cid" => CID.to_base32(current.cid),
-                "validationStatus" => "unknown"
+                "validationStatus" => validation
               })
             end
           end)
@@ -89,8 +89,7 @@ defmodule Atoll.Repositories.Writes do
     cond do
       not repository_identifier?(body["repo"]) -> {:error, :invalid_request}
       not is_list(body["writes"]) or length(body["writes"]) > 200 -> {:error, :invalid_request}
-      Map.get(body, "validate", false) == true -> {:error, :validation_unavailable}
-      Map.get(body, "validate", false) != false -> {:error, :invalid_request}
+      Map.get(body, "validate", false) not in [true, false] -> {:error, :invalid_request}
       true -> :ok
     end
   end
@@ -112,8 +111,16 @@ defmodule Atoll.Repositories.Writes do
           |> Map.merge(%{"repo" => body["repo"], "record" => value["value"]})
 
         case parameters(if(action == :update, do: :put, else: action), params) do
-          :ok -> {:cont, {:ok, [{action, value} | acc]}}
-          error -> {:halt, error}
+          :ok ->
+            params = Map.put(params, "validate", Map.get(body, "validate", :optimistic))
+
+            case record_validation(action, params) do
+              {:ok, status} -> {:cont, {:ok, [{action, value, status} | acc]}}
+              error -> {:halt, error}
+            end
+
+          error ->
+            {:halt, error}
         end
       else
         {:halt, {:error, :invalid_request}}
@@ -141,6 +148,7 @@ defmodule Atoll.Repositories.Writes do
   def write(token, action, body) when action in [:create, :put, :delete] and is_map(body) do
     with {:ok, claims} <- Tokens.verify(token, :access),
          :ok <- parameters(action, body),
+         {:ok, validation} <- record_validation(action, body),
          {:ok, commit} <- swap(body, "swapCommit", false),
          {:ok, record} <- record_swap(action, body),
          {:ok, did} <- repository_did(body["repo"]),
@@ -181,7 +189,7 @@ defmodule Atoll.Repositories.Writes do
               Map.merge(result, %{
                 uri: "at://" <> did <> "/" <> path,
                 cid: CID.to_base32(current.cid),
-                validationStatus: "unknown"
+                validationStatus: validation
               })
             end
 
@@ -213,15 +221,23 @@ defmodule Atoll.Repositories.Writes do
              Syntax.repo_path?(collection <> "/self") and valid_key and valid_record) ->
         {:error, :invalid_request}
 
-      action != :delete and Map.get(body, "validate", false) == true ->
-        {:error, :validation_unavailable}
-
-      action != :delete and Map.get(body, "validate", false) != false ->
+      action != :delete and Map.get(body, "validate", false) not in [true, false] ->
         {:error, :invalid_request}
 
       true ->
         :ok
     end
+  end
+
+  defp record_validation(:delete, _), do: {:ok, nil}
+
+  defp record_validation(_, body) do
+    Atoll.Lexicon.Schema.record(
+      body["collection"],
+      body["rkey"],
+      body["record"],
+      Map.get(body, "validate", :optimistic)
+    )
   end
 
   defp record_swap(:create, _), do: {:ok, :any}

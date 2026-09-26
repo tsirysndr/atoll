@@ -44,6 +44,72 @@ defmodule AtollWeb.RecordWriteControllerTest do
     end
   end
 
+  test "known record schemas implement required, optimistic, and skipped validation", c do
+    collection = "app.bsky.graph.follow"
+
+    record = %{
+      "$type" => collection,
+      "subject" => "did:plc:other",
+      "createdAt" => "2026-09-26T12:00:00Z"
+    }
+
+    input = %{"repo" => @did, "collection" => collection, "record" => record}
+    created = request(c, "createRecord", Map.put(input, "validate", true)) |> json_response(200)
+    assert created["validationStatus"] == "valid"
+    rkey = created["uri"] |> String.split("/") |> List.last()
+    assert Atoll.TID.valid?(rkey)
+
+    assert %{"validationStatus" => "valid"} =
+             request(c, "putRecord", Map.put(input, "rkey", rkey)) |> json_response(200)
+
+    bad = Map.put(input, "record", Map.delete(record, "subject"))
+    assert %{"error" => "InvalidRequest"} = request(c, "createRecord", bad) |> json_response(400)
+
+    assert %{"validationStatus" => "unknown"} =
+             request(c, "createRecord", Map.put(bad, "validate", false)) |> json_response(200)
+
+    # Skipping Lexicon validation never skips the repository's data-model checks.
+    invalid_data =
+      input |> Map.put("validate", false) |> Map.put("record", Map.put(record, "extra", 1.5))
+
+    assert request(c, "createRecord", invalid_data).status == 400
+  end
+
+  test "batch validation is atomic and reports each record's validation status", c do
+    collection = "app.bsky.graph.follow"
+
+    record = %{
+      "$type" => collection,
+      "subject" => "did:plc:other",
+      "createdAt" => "2026-09-26T12:00:00Z"
+    }
+
+    known = %{
+      "$type" => "com.atproto.repo.applyWrites#create",
+      "collection" => collection,
+      "value" => record
+    }
+
+    unknown = operation("create")
+    seq = Atoll.Repositories.Events.latest_seq()
+    invalid = Map.put(known, "value", Map.delete(record, "subject"))
+
+    for {writes, mode} <- [{[known, invalid], true}, {[known, unknown], true}] do
+      assert %{"error" => "InvalidRequest"} =
+               request(c, "applyWrites", %{"repo" => @did, "writes" => writes, "validate" => mode})
+               |> json_response(400)
+
+      assert Repositories.get_head(@did) == {:ok, c.head}
+      assert Atoll.Repositories.Events.latest_seq() == seq
+    end
+
+    result =
+      request(c, "applyWrites", %{"repo" => @did, "writes" => [known, unknown]})
+      |> json_response(200)
+
+    assert Enum.map(result["results"], & &1["validationStatus"]) == ["valid", "unknown"]
+  end
+
   test "repository quota failures return a protocol error without publishing a write", c do
     previous = Application.fetch_env(:atoll, :repository_quota)
 
@@ -327,9 +393,9 @@ defmodule AtollWeb.RecordWriteControllerTest do
              })
              |> json_response(400)
 
-    assert %{"error" => "InvalidRequest"} =
+    assert %{"results" => []} =
              request(c, "applyWrites", %{"repo" => @did, "writes" => [], "validate" => true})
-             |> json_response(400)
+             |> json_response(200)
 
     assert %{"error" => "Forbidden"} =
              request(c, "applyWrites", %{"repo" => "did:plc:other", "writes" => []})
