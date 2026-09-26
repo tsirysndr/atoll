@@ -392,8 +392,10 @@ mutation. Deletes and empty batches need no record schema, even with `validate: 
 - [x] Internal S256 PKCE verification and pushed authorization admission with bound client/DPoP keys, short-lived references, and 24-hour challenge reuse prevention.
 - [x] `POST /oauth/par` with strict form parsing, pre-parser rate limits, DPoP nonce challenges, and browser CORS.
 - [x] Internal account-authorized approval/denial with atomic pushed-request consumption and bound authorization-code issuance.
-- [ ] Browser authorization/consent flow and one-use authorization-code redemption into OAuth sessions/tokens.
-- [ ] OAuth session binding persistence/revocation and localhost virtual client metadata.
+- [x] Internal one-use authorization-code exchange into bound opaque OAuth tokens, with verified reuse revocation.
+- [ ] Browser authorization/consent flow and HTTP token endpoint.
+- [x] Persisted OAuth client/DPoP/session bindings and source password-session deletion cascades.
+- [ ] OAuth refresh rotation, resource authorization, client-key removal revocation, and localhost virtual client metadata.
 - [ ] OAuth nonce challenges and proof admission integrated into remaining authorization/resource server routes.
 - [ ] ATProto OAuth authorization and resource server support.
 - [x] Live-session and repository ownership checks for blob uploads and single/batch record writes.
@@ -4464,9 +4466,9 @@ must identify exactly one inline or remote JWKS source; inline sets are limited
 to 32 key objects. These declarations are **not verified client authentication**:
 the `ClientKeys` loader below adds key validation and remote JWKS retrieval, while
 the assertion guard below adds signature, replay, and supplied key-binding checks.
-Persisted session binding and OAuth routes remain unfinished. Metadata branding is untrusted and must not be displayed as
-verified application identity. The optional localhost virtual-client flow and
-PAR/authorization/token route integration also remain pending.
+The code exchange below persists session bindings. Metadata branding is untrusted
+and must not be displayed as verified application identity. The optional localhost
+virtual-client flow and browser authorization/token routes remain pending.
 
 The declaration rules follow the
 [ATProto OAuth client profile](https://atproto.com/specs/oauth#clients).
@@ -4597,8 +4599,8 @@ proofs. Calls inside a caller transaction are rejected.
 Tests cover both client types, key binding, client/issuer isolation, expiry,
 challenge reuse across clients, concurrent reservations, storage capacity, and
 bounded reclamation. The HTTP adapter below exposes PAR admission. Browser
-authorization and consent, code redemption, and token exchange remain
-unfinished. Protocol references:
+authorization and consent and HTTP token routing remain unfinished; internal code
+exchange is described below. Protocol references:
 [PKCE (RFC 7636)](https://www.rfc-editor.org/rfc/rfc7636.html) and
 [PAR (RFC 9126)](https://datatracker.ietf.org/doc/html/rfc9126).
 
@@ -4608,7 +4610,7 @@ unfinished. Protocol references:
 and returns HTTP 201 with `request_uri` and `expires_in` after successful admission.
 Configure `ATOLL_OAUTH_NONCE_SECRET` as described above; without it this route
 returns HTTP 503 `temporarily_unavailable`. No complete OAuth server is advertised:
-discovery, browser authorization/consent, code redemption, and token routes still
+discovery, browser authorization/consent, and token routes still
 need implementation, so the returned reference cannot yet complete a login.
 
 The boundary runs before general body parsing, method rewriting, and Phoenix
@@ -4680,7 +4682,49 @@ Tests cover scope narrowing, account/session restrictions, changed client policy
 and keys, revocation during metadata retrieval, expiry, capacity rollback, and
 concurrent decisions through independent database connections.
 
-This service does not render login/consent or redeem codes. The next exchange
-layer must verify PKCE, DPoP, client and redirect bindings, redeem each code once,
-and revoke resulting sessions on detected code reuse. Browser consent, that
-exchange layer, OAuth session lifecycle, and token endpoints remain unfinished.
+This service does not render login/consent. The internal exchange below redeems
+codes; browser consent, refresh, resource authorization, and token endpoints
+remain unfinished.
+
+### Authorization-code exchange and opaque sessions
+
+`Atoll.OAuth.CodeExchange.exchange/3` accepts decoded token parameters, DPoP
+headers, and trusted server options. It checks the exact client, issuer, redirect,
+S256 verifier, original DPoP key, and fresh client metadata before issuing tokens.
+Confidential clients must prove their original client key with a fresh assertion.
+The account and authorizing full-access password session are checked again under
+database locks after network verification. Nested caller transactions are rejected.
+
+Issuance atomically creates an `oauth_sessions` row and an `oauth_access_tokens`
+row, then records the code's redemption. Access and optional refresh tokens contain
+32 random bytes with `atoll_access_` and `atoll_refresh_` prefixes; only SHA-256
+digests are stored. Responses include `token_type: DPoP`, `expires_in`, the approved
+`scope`, and the account DID as `sub`. Raw tokens are returned only to the caller.
+
+Access tokens last up to five minutes. Sessions with refresh tokens last up to
+14 days for public clients and 180 days for confidential clients; access-only
+sessions last five minutes. All lifetimes are also capped by the authorizing
+password session's expiry. Deleting that source session (including logout or
+recovery paths that delete it) cascades to derived OAuth sessions and tokens.
+This coupling is Atoll's current policy, not an independent browser-login session.
+
+A subsequent exchange with valid client, PKCE, and DPoP bindings returns
+`invalid_grant` and commits deletion of the original OAuth session and its tokens.
+Incorrect bindings cannot revoke a session. Redemption markers survive the code's
+original expiry until the issued session expires, including during approval
+cleanup. Concurrent independent exchanges issue once, then revoke on verified
+reuse. These checks implement the [ATProto code-reuse rule](https://atproto.com/specs/oauth#proof-key-for-code-exchange-pkce).
+
+The shared PAR lock serializes issuance and replay revocation. Storage permits
+10,000 OAuth sessions globally and 100 live sessions per account, reclaiming at
+most 1,000 expired sessions per issuance. SQL lock and statement timeouts are one
+and five seconds. Database failures reject exchange; already consumed assertions
+and DPoP proofs require fresh proofs on retry. Retained redemption markers count
+against the separate 10,000-code cap.
+
+Tests cover digest-only storage, binding failures, source-session revocation,
+expiry, client metadata/key changes, access-only clients, capacity rollback,
+marker retention, and concurrent redemption. This is an internal service: there
+is no HTTP token endpoint yet, refresh tokens cannot yet be rotated, and resource
+routes do not yet accept these access tokens. Browser consent, discovery,
+refresh/key-removal revocation, and scope enforcement remain unchecked above.

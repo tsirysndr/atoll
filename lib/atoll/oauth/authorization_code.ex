@@ -14,5 +14,8 @@ defmodule Atoll.OAuth.AuthorizationCode do
     field :client_binding, :map
     field :refresh_allowed, :boolean
     field :expires_at, :integer
+    field :redeemed_at, :integer
+    field :redeemed_session_id, :string, redact: true
+    field :replay_until, :integer
   end
 end

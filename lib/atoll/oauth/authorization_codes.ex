@@ -152,7 +152,9 @@ defmodule Atoll.OAuth.AuthorizationCodes do
     ids =
       Repo.all(
         from(c in AuthorizationCode,
-          where: c.expires_at <= ^now,
+          where:
+            (is_nil(c.redeemed_at) and c.expires_at <= ^now) or
+              (not is_nil(c.redeemed_at) and c.replay_until <= ^now),
           order_by: [asc: c.expires_at, asc: c.digest],
           limit: 1000,
           select: c.digest
