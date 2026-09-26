@@ -15,6 +15,18 @@ defmodule AtollWeb.SessionController do
          do: send_resp(conn, 200, "")
   end
 
+  def request_email_update(conn, _params) do
+    with {:ok, token} <- bearer(conn),
+         {:ok, result} <- Atoll.Accounts.EmailUpdate.request(token),
+         do: json(conn, result)
+  end
+
+  def update_email(conn, _params) do
+    with {:ok, token} <- bearer(conn),
+         {:ok, _} <- Atoll.Accounts.EmailUpdate.update(token, conn.body_params),
+         do: send_resp(conn, 200, "")
+  end
+
   def create_account(conn, _params) do
     with {:ok, token} <- bearer(conn),
          {:ok, account} <- Atoll.Accounts.Provisioning.import_account(token, conn.body_params),

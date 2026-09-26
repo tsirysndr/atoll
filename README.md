@@ -157,7 +157,8 @@ The same `validate: true` restriction applies to batch requests.
 - [x] Internal DID-scoped password credentials with salted Argon2id hashes, bounded input, redacted inspection, and duplicate protection.
 - [x] Shared configurable Cloudflare Worker email delivery client.
 - [x] Email confirmation requests and one-use confirmation through the Worker.
-- [ ] Email updates, password changes, and account recovery through the Worker.
+- [x] Email updates authorized through the current confirmed address using the Worker.
+- [ ] Password changes and account recovery through the Worker.
 - [x] Internal password session creation, scoped HS256 JWT verification, single-use refresh rotation, and persistent revocation.
 - [x] Public DID/password session creation, refresh, inspection, and revocation endpoints, with bounded requests and per-node rate limits.
 - [x] Bidirectionally verified handle/password login with normalized handles and DID-bound sessions.
@@ -750,5 +751,22 @@ Delivery is synchronous after token persistence and outside database locks. A
 Worker failure returns 503, leaves the email unconfirmed, and retains the cooldown;
 a new request after one minute can issue a replacement code. A crash between
 persistence and delivery requires another request. Durable retry scheduling,
-email changes, password recovery, and the external Worker deployment remain
+password recovery and the external Worker deployment remain
 pending. No real email is sent by the tests.
+
+
+`POST com.atproto.server.requestEmailUpdate` takes a live management access token
+and no body. It returns `tokenRequired: false` for an unconfirmed or missing email.
+For a confirmed address, it sends a one-use change code to that address through
+the Worker and returns `tokenRequired: true`. These codes expire after 15 minutes;
+requests have a persistent one-minute per-account cooldown.
+
+`POST com.atproto.server.updateEmail` takes JSON `email` and, for confirmed
+accounts, `token`. Addresses use the same normalization and uniqueness rules as
+provisioning. A changed address becomes unconfirmed, and outstanding confirmation
+and change codes are cleared atomically. A duplicate address rejects the change
+without consuming its code. An unchanged normalized address preserves confirmation
+but still consumes the change code. Confirm the new address using the separate
+confirmation endpoints. `emailAuthFactor: true` is rejected until authentication
+factors are implemented. Both email update endpoints require a live session;
+service tokens cannot authorize them.

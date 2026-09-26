@@ -3,6 +3,8 @@ defmodule AtollWeb.SessionRequestPlug do
   import Plug.Conn
   @prefix "/xrpc/com.atproto.server."
   @procedures [
+    @prefix <> "requestEmailUpdate",
+    @prefix <> "updateEmail",
     @prefix <> "requestEmailConfirmation",
     @prefix <> "confirmEmail",
     @prefix <> "createAccount",
@@ -70,7 +72,8 @@ defmodule AtollWeb.SessionRequestPlug do
               @prefix <> "createSession",
               @prefix <> "createAccount",
               @prefix <> "deactivateAccount",
-              @prefix <> "confirmEmail"
+              @prefix <> "confirmEmail",
+              @prefix <> "updateEmail"
             ] do
     case get_req_header(conn, "content-type") do
       [type] ->

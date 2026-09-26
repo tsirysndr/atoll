@@ -97,21 +97,7 @@ defmodule Atoll.Accounts.Provisioning do
 
   defp email(nil), do: {:ok, nil}
 
-  defp email(value) when is_binary(value) and byte_size(value) <= 254 do
-    case String.split(String.downcase(value), "@") do
-      [local, domain] when byte_size(local) in 1..64 ->
-        if Syntax.handle?(domain) and Regex.match?(~r/\A[a-z0-9!#$%&'*+\/=?^_`{|}~.-]+\z/, local) and
-             not String.starts_with?(local, ".") and not String.ends_with?(local, ".") and
-             not String.contains?(local, ".."),
-           do: {:ok, local <> "@" <> domain},
-           else: {:error, :invalid_request}
-
-      _ ->
-        {:error, :invalid_request}
-    end
-  end
-
-  defp email(_), do: {:error, :invalid_request}
+  defp email(value), do: Atoll.Accounts.EmailAddress.normalize(value)
 
   defp unwrap!({:ok, value}), do: value
   defp unwrap!({:error, reason}), do: Repo.rollback(reason)
