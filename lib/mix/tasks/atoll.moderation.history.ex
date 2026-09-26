@@ -3,7 +3,7 @@ defmodule Mix.Tasks.Atoll.Moderation.History do
   @shortdoc "Exports one bounded page of private moderation decision history"
   @moduledoc """
   Reads supported operator decisions from the configured database as JSON.
-  Includes subject status, email/password changes, and account invitation controls.
+  Includes subject status, email/password changes, account invitation controls, and deletion.
 
       mix atoll.moderation.history --limit 100 --after 0
       mix atoll.moderation.history --did did:plc:example

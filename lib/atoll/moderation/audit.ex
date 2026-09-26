@@ -76,6 +76,18 @@ defmodule Atoll.Moderation.Audit do
     }
   end
 
+  @doc "Records operator deletion without retaining account credentials or private profile data."
+  def account_deletion!(head) do
+    insert!(
+      "com.atproto.admin.deleteAccount",
+      head.did,
+      %{"$type" => "com.atproto.admin.defs#repoRef", "did" => head.did},
+      %{"did" => head.did},
+      %{availability: Atom.to_string(head.status)},
+      %{availability: "deleted"}
+    )
+  end
+
   defp email_state(profile) do
     %{
       email: profile.email,

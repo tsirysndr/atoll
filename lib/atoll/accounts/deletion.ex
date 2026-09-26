@@ -1,5 +1,5 @@
 defmodule Atoll.Accounts.Deletion do
-  @moduledoc "Email-authorized account deletion, with atomic withdrawal and durable blob cleanup."
+  @moduledoc "Owner and operator account deletion with atomic withdrawal and durable blob cleanup."
   import Ecto.Query
   alias Atoll.Accounts.{Credentials, Profile, Sessions}
   alias Atoll.Blobs.{Blob, Cleanup}
@@ -85,21 +85,54 @@ defmodule Atoll.Accounts.Deletion do
             :ok
         end
 
-        # Queue physical bytes before the FK cascade withdraws this account's ownership.
-        Repo.stream(from(b in Blob, where: b.did == ^did), max_rows: 500)
-        |> Stream.chunk_every(500)
-        |> Enum.each(&Cleanup.enqueue!/1)
-
-        # Old events must not become visible if this DID is provisioned again later.
-        Repo.delete_all(from(e in Event, where: e.did == ^did))
-        Repo.delete!(head)
-        Events.append!(:account, head, %{"active" => false, "status" => "deleted"})
-        :deleted
+        remove!(head)
       end)
     end
   end
 
   def delete(_), do: {:error, :invalid_request}
+
+  @doc "Trusted operator deletion. HTTP callers must enforce operator authentication."
+  def admin_delete(%{"did" => did} = params) when map_size(params) == 1 do
+    if Atoll.Syntax.did?(did) do
+      Repo.transaction(fn ->
+        Repo.query!("SET LOCAL lock_timeout = '1s'")
+        Repo.query!("SET LOCAL statement_timeout = '5s'")
+        Events.lock!()
+
+        head =
+          Repo.one(from h in Head, where: h.did == ^did, lock: "FOR UPDATE") ||
+            Repo.rollback(:admin_account_not_found)
+
+        Atoll.Moderation.Audit.account_deletion!(head)
+        remove!(head)
+      end)
+    else
+      {:error, :invalid_request}
+    end
+  rescue
+    e in Postgrex.Error ->
+      if e.postgres[:code] in [:lock_not_available, :query_canceled],
+        do: {:error, :admin_busy},
+        else: reraise(e, __STACKTRACE__)
+  end
+
+  def admin_delete(_), do: {:error, :invalid_request}
+
+  # Both authorization paths hold the event lock and an exclusive head lock.
+  defp remove!(head) do
+    did = head.did
+    # Queue physical bytes before the FK cascade withdraws this account's ownership.
+    Repo.stream(from(b in Blob, where: b.did == ^did), max_rows: 500)
+    |> Stream.chunk_every(500)
+    |> Enum.each(&Cleanup.enqueue!/1)
+
+    # Old events must not become visible if this DID is provisioned again later.
+    Repo.delete_all(from(e in Event, where: e.did == ^did))
+    Repo.delete!(head)
+    Events.append!(:account, head, %{"active" => false, "status" => "deleted"})
+    :deleted
+  end
 
   defp profile!(did),
     do:

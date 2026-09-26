@@ -691,6 +691,7 @@ events. The `[:atoll, :identity, :refresh]` telemetry event reports a count and
 - [x] Audited operator email correction with invalidation of old email challenges.
 - [x] Audited operator password replacement with session, app-password, and pending-code revocation.
 - [x] Transactional audit history for account invite enable/disable decisions and private reason changes.
+- [x] Audited operator account deletion with durable shared-safe blob cleanup.
 - [ ] Remaining administrative account controls and audit coverage for other operator actions.
 - [ ] Production configuration, HTTPS deployment, and signing-key protection.
 - [ ] Database and blob backup / restore workflow.
@@ -1631,8 +1632,8 @@ recorded in the audit history described below.
 
 Every successful `com.atproto.admin.updateSubjectStatus`,
 `com.atproto.admin.updateAccountEmail`, `com.atproto.admin.updateAccountPassword`,
-`com.atproto.admin.disableAccountInvites`, or `com.atproto.admin.enableAccountInvites`
-call records an audit entry in the same database transaction as its change.
+`com.atproto.admin.disableAccountInvites`, `com.atproto.admin.enableAccountInvites`,
+or `com.atproto.admin.deleteAccount` call records an audit entry in the same database transaction as its change.
 Entries include the subject, requested attributes, before/after state, UTC time,
 and the shared operator identity `admin`. Account snapshots also include effective
 and underlying availability, so deactivation changes beneath a takedown are visible.
@@ -1783,3 +1784,25 @@ account availability remain unchanged. Inactive accounts can be repaired without
 activating them. The operation requires an existing profile and password credential;
 it does not provision an account. No email is sent automatically. Subsequent login
 codes and recovery messages continue through the configured Cloudflare Worker.
+
+### Operator account deletion
+
+`POST com.atproto.admin.deleteAccount` accepts JSON `did` with the configured
+operator Basic credential and returns an empty 200 response. It can remove active,
+deactivated, suspended, or taken-down local repositories, including incomplete
+provisioning without a profile or password. Unknown/already-deleted DIDs return
+`NotFound` without another event or audit entry.
+
+Deletion uses the same removal transaction as owner-authorized account deletion:
+account data, sessions, credentials, repository ownership, and encrypted local
+keys are withdrawn; previous events for the DID are removed; one public deleted
+account event is appended. Physical blob deletion is queued durably and performed
+by the existing cleanup worker or operator cleanup command. PostgreSQL and S3 bytes
+still owned by another account are retained. Repository blocks remain subject to
+the separate unowned-block collection policy.
+
+The private audit records prior availability and deletion in the same transaction,
+and survives along with previous audit and invitation-use history. Failed requests
+and rolled-back transactions retain account data and leave no deletion audit entry.
+This endpoint does not send email, require an owner email code, or tombstone the DID
+in PLC. It removes the account from this PDS; it cannot erase copies held elsewhere.

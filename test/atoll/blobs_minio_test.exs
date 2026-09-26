@@ -124,6 +124,25 @@ defmodule Atoll.BlobsMinioTest do
     assert {:ok, %{bytes: ^bytes}} = Blobs.get_staged(@did, cid, context.opts)
   end
 
+  test "operator deletion queues S3 removal without deleting another account's bytes", c do
+    other = "did:plc:miniodeletionsurvivor"
+    {:ok, _} = Repositories.create(other, c.key)
+
+    for did <- [@did, other],
+        do: assert({:ok, _} = Blobs.stage(did, "shared deletion bytes", "text/plain", c.opts))
+
+    assert {:ok, _} = Blobs.stage(@did, "unique deletion bytes", "text/plain", c.opts)
+    shared = CID.create("shared deletion bytes", :raw)
+    unique = CID.create("unique deletion bytes", :raw)
+    assert {:ok, :deleted} = Atoll.Accounts.Deletion.admin_delete(%{"did" => @did})
+    assert {:ok, %{deleted: 1, retained: 1}} = Atoll.Blobs.Cleanup.collect(c.opts)
+    assert {:ok, %{bytes: "shared deletion bytes"}} = Blobs.get_staged(other, shared, c.opts)
+    url = c.bucket_url <> "/blobs/" <> CID.to_base32(unique)
+    assert {:ok, %{status: 404}} = s3_request(:get, url, "", c.config)
+    assert {:ok, %{entries: [entry]}} = Atoll.Moderation.Audit.list(100, 0, @did)
+    assert entry.after == %{"availability" => "deleted"}
+  end
+
   test "S3 bytes remain private to the moderated account and restoration uses retained data", c do
     bytes = "shared moderated S3 object"
     cid = CID.create(bytes, :raw)
