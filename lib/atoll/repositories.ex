@@ -13,7 +13,7 @@ defmodule Atoll.Repositories do
   """
   import Ecto.Query
   alias Atoll.{CAR, CBOR, CID, Commit, DataModel, MST, Repo, SigningKey, Storage, Syntax, TID}
-  alias Atoll.Repositories.{Events, Head, Record, Revision, Snapshot}
+  alias Atoll.Repositories.{Events, Head, Record, Revision, Snapshot, Takedown, Takedowns}
 
   @doc "Creates a repository and encrypted signing key atomically. Requires the key vault master key."
   def create_managed(did, curve \\ :k256) when curve in [:p256, :k256] do
@@ -306,7 +306,15 @@ defmodule Atoll.Repositories do
   end
 
   def get_record(did, path) when is_binary(did) and is_binary(path) do
-    with {:ok, _} <- get_active_head(did), do: read_record(did, path)
+    Repo.transaction(fn ->
+      locked_head!(did, "FOR SHARE")
+      Takedowns.ensure_visible!(did, path)
+
+      case read_record(did, path) do
+        {:ok, result} -> result
+        {:error, reason} -> Repo.rollback(reason)
+      end
+    end)
   end
 
   @doc "Reads a record version proven to belong to this path in a retained signed revision."
@@ -317,6 +325,8 @@ defmodule Atoll.Repositories do
          {:ok, %{codec: :dag_cbor}} <- CID.decode(cid) do
       Repo.transaction(fn ->
         head = locked_head!(did, "FOR SHARE")
+
+        Takedowns.ensure_visible!(did, path)
 
         # Block membership alone is insufficient: a CID could belong to another path.
         revisions =
@@ -376,12 +386,16 @@ defmodule Atoll.Repositories do
     prefix = collection <> "/"
     upper = collection <> "0"
 
-    with {:ok, _} <- get_active_head(did) do
+    Repo.transaction(fn ->
+      locked_head!(did, "FOR SHARE")
+
       query =
         from r in Record,
           join: b in Atoll.Storage.Block,
           on: b.cid == r.cid,
-          where: r.did == ^did,
+          left_join: t in Takedown,
+          on: t.did == r.did and t.path == r.path,
+          where: r.did == ^did and is_nil(t.path),
           where:
             fragment(
               "? COLLATE \"C\" >= ? AND ? COLLATE \"C\" < ?",
@@ -434,12 +448,12 @@ defmodule Atoll.Repositories do
               result
             end
 
-          {:ok, result}
+          result
 
-        error ->
-          error
+        {:error, reason} ->
+          Repo.rollback(reason)
       end
-    end
+    end)
   end
 
   @doc """

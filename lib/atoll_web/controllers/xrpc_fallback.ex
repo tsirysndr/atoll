@@ -6,7 +6,7 @@ defmodule AtollWeb.XRPCFallback do
 
   def call(conn, {:error, :unsupported_moderation_subject}),
     do:
-      error(conn, 400, "InvalidRequest", "Only local repository and blob subjects are supported.")
+      error(conn, 400, "InvalidRequest", "Expected a local repository, record, or blob subject.")
 
   def call(conn, {:error, :invalid_invite_allocation}),
     do: error(conn, 503, "ServiceUnavailable", "Invite allocation is misconfigured.")

@@ -104,6 +104,7 @@ defmodule Atoll.Lexicon.Query do
         (is_nil(schema[high]) or value <= schema[high])
 
   defp format?(_, nil), do: true
+  defp format?(value, "at-uri"), do: Syntax.at_uri?(value)
   defp format?(value, "did"), do: Syntax.did?(value)
   defp format?(value, "handle"), do: Syntax.handle?(value)
   defp format?(value, "at-identifier"), do: Syntax.did?(value) or Syntax.handle?(value)

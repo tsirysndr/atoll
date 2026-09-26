@@ -20,6 +20,22 @@ defmodule Atoll.Lexicon.QueryTest do
     assert {:error, _} = Query.decode("com.atproto.sync.getRepo", "did=did:plc:test&since=bad")
   end
 
+  test "record subject queries validate at-uri syntax" do
+    method = "com.atproto.admin.getSubjectStatus"
+    uri = "at://did:web:example.com/com.example.record/one"
+    assert {:ok, %{"uri" => ^uri}} = Query.decode(method, URI.encode_query(%{"uri" => uri}))
+
+    for invalid <- [
+          "https://example.com",
+          "at://bad",
+          uri <> "/extra",
+          "at://did:web:example.com/com.example.record/.."
+        ] do
+      assert {:error, :invalid_request} =
+               Query.decode(method, URI.encode_query(%{"uri" => invalid}))
+    end
+  end
+
   test "integers and booleans are validated while preserving controller input strings" do
     assert {:ok, %{"limit" => "1000"}} = Query.decode("com.atproto.sync.listRepos", "limit=1000")
 

@@ -5,6 +5,9 @@ defmodule Atoll.Accounts.SubjectStatus do
   alias Atoll.Repositories.{Events, Head}
   @repo_type "com.atproto.admin.defs#repoRef"
 
+  def get(%{"uri" => uri} = params) when map_size(params) == 1,
+    do: Atoll.Repositories.Takedowns.get(uri)
+
   def get(%{"did" => did, "blob" => cid} = params) when map_size(params) == 2,
     do: Atoll.Blobs.Takedowns.get(did, cid)
 
@@ -20,6 +23,9 @@ defmodule Atoll.Accounts.SubjectStatus do
   end
 
   def get(_), do: {:error, :unsupported_moderation_subject}
+
+  def update(%{"subject" => %{"$type" => "com.atproto.repo.strongRef"}} = params),
+    do: Atoll.Repositories.Takedowns.update(params)
 
   def update(%{"subject" => %{"$type" => "com.atproto.admin.defs#repoBlobRef"}} = params),
     do: Atoll.Blobs.Takedowns.update(params)

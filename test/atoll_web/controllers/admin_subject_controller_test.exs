@@ -132,23 +132,6 @@ defmodule AtollWeb.AdminSubjectControllerTest do
       assert Events.latest_seq() == seq
     end
 
-    cid = Atoll.CID.create("record", :dag_cbor) |> Atoll.CID.to_base32()
-
-    for subject <- [
-          %{
-            "$type" => "com.atproto.repo.strongRef",
-            "uri" => "at://#{@did}/com.example.record/one",
-            "cid" => cid
-          }
-        ] do
-      assert %{
-               "error" => "InvalidRequest",
-               "message" => "Only local repository and blob subjects are supported."
-             } =
-               update(c, %{"subject" => subject, "takedown" => %{"applied" => true}})
-               |> json_response(400)
-    end
-
     missing = Map.put(@subject, "did", "did:web:missing.example.com")
     assert %{"error" => "NotFound"} = update(c, %{"subject" => missing}) |> json_response(400)
     assert auth(c.conn) |> get(@get, %{did: missing["did"]}) |> json_response(400)

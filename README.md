@@ -685,7 +685,8 @@ events. The `[:atoll, :identity, :refresh]` telemetry event reports a count and
 - [ ] General API rate limits, distributed limits, and trusted-proxy client IP handling.
 - [x] Operator account status reads, takedowns, restoration, and deactivation.
 - [x] Account-scoped blob takedowns across PostgreSQL/S3 serving, uploads, references, and cleanup.
-- [ ] Record takedowns, remaining administrative account controls, and full moderation audit history.
+- [x] Operator record takedowns for JSON record reads and listings (signed sync data remains available).
+- [ ] Remaining administrative account controls and full moderation audit history.
 - [ ] Production configuration, HTTPS deployment, and signing-key protection.
 - [ ] Database and blob backup / restore workflow.
 - [x] `GET /health/ready` database connectivity readiness with bounded queries and outcome telemetry.
@@ -1520,8 +1521,9 @@ a takedown without `ref` clears the previous reference; lifting it also clears i
 `deactivated.ref` is accepted metadata but is not retained. This stores current
 state, not a complete moderation audit history.
 
-Record subjects are explicitly rejected until record takedown enforcement is
-implemented. Blob subjects are supported as described below.
+Record and blob subjects are supported as described below. Each subject type has
+its own enforcement boundary; record visibility controls do not withhold signed
+repository synchronization data.
 
 
 ### Administrative blob takedowns
@@ -1568,3 +1570,45 @@ retain descriptors for restricted blobs, but serving/upload checks remain in for
 and migration's missing-blob inventory omits them until the restriction is lifted.
 Private references stay out of public events and request logs. Previously downloaded
 copies on other services are outside this PDS's control.
+
+
+### Administrative record visibility
+
+`GET com.atproto.admin.getSubjectStatus?uri=...` accepts a full record AT URI with
+a local DID, collection, and record key. It returns a `com.atproto.repo.strongRef`
+subject and its `takedown` attribute. Handle authorities are not accepted for
+operator targets. Use that subject in `POST com.atproto.admin.updateSubjectStatus`
+with `takedown: {"applied": true}` (optionally a private `ref`) or `false` to lift it.
+Record subjects do not accept `deactivated`.
+
+**Record takedown filters `com.atproto.repo.getRecord` and `listRecords`; it does
+not withhold signed sync exports or event replay.** This follows the separation in
+the upstream [indexed record reader](https://github.com/bluesky-social/atproto/blob/main/packages/pds/src/actor-store/record/reader.ts)
+and [signed repository reader](https://github.com/bluesky-social/atproto/blob/main/packages/pds/src/actor-store/repo/sql-repo-reader.ts).
+The record remains reachable through `sync.getRepo`, `sync.getRecord`,
+`sync.getBlocks`, and historical subscription events. Use an account takedown to
+withhold public repository synchronization. Blob bytes have their separate,
+account/CID takedown described above; hiding a record does not hide its attachments.
+
+A hidden record returns `RecordNotFound` from the JSON API, including historical
+CID requests at that URI. Listings exclude restrictions before pagination, in both
+sort directions. Other record paths and accounts remain visible even if they have
+identical record CIDs. Collection inventories continue to describe the signed
+repository, including collections containing hidden records.
+
+Updates take the event lock and repository head lock, and compare the submitted
+strong reference CID with the current record. A stale CID returns `InvalidSwap`
+without changing moderation state. Public record reads and listings hold a shared
+head lock, so they observe a consistent visibility decision and record snapshot.
+The operator can moderate inactive accounts without changing their availability.
+Repeated changes are idempotent, private refs use the existing 2000-byte limit and
+log filtering, and no moderation operation rewrites the signed tree or fabricates
+a repository event.
+
+Atoll retains the URI restriction across owner edits, delete/recreate, and CAR
+imports. Owners can still edit or delete their records, but these operations do not
+lift the restriction. Status reads return the current CID when present, or the last
+moderated CID for a deleted record; operators can lift a retained restriction using
+that returned subject. A missing record without a retained restriction returns
+`NotFound`. Account deletion removes its restrictions. This is current moderation
+state, not a complete audit history.
