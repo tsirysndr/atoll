@@ -39,6 +39,7 @@ defmodule AtollWeb.Endpoint do
 
   plug AtollWeb.ClientIP
   plug AtollWeb.OAuthRequestPlug
+  plug AtollWeb.OAuthResource
   plug AtollWeb.XRPCRequestPlug
   plug AtollWeb.SubscribeReposPlug
   plug AtollWeb.AdminRequestPlug

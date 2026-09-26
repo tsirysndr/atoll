@@ -398,7 +398,9 @@ mutation. Deletes and empty batches need no record schema, even with `validate: 
 - [x] Persisted OAuth client/DPoP/session bindings and source password-session deletion cascades.
 - [x] OAuth refresh rotation with persistent reuse revocation, per-access scope narrowing, and observed confidential-key removal revocation.
 - [ ] Periodic confidential-client key checks independent of refresh requests.
-- [ ] OAuth resource authorization and localhost virtual client metadata.
+- [x] OAuth resource read guard and DPoP `getSession`, with per-access-token email scope enforcement.
+- [ ] OAuth authorization for repository/blob writes, service auth, exports, and remaining resource routes.
+- [ ] Localhost virtual client metadata.
 - [ ] OAuth nonce challenges and proof admission integrated into remaining authorization/resource server routes.
 - [ ] ATProto OAuth authorization and resource server support.
 - [x] Live-session and repository ownership checks for blob uploads and single/batch record writes.
@@ -4376,7 +4378,8 @@ with the local database transaction; the audit records the head actually observe
 returns its JWK thumbprint, proof ID, issue time, and nonce. It uses the existing
 JOSE library for signature verification and RFC JWK thumbprints. This is an
 internal cryptographic component used by the PAR adapter; it is not an OAuth
-authorization endpoint. Browser authorization and resource authentication remain unfinished.
+authorization endpoint. Browser authorization and remaining resource integrations
+remain unfinished; the `getSession` integration is described below.
 
 The caller supplies the externally visible method/URL, current time, and a recent
 server-issued nonce. For protected-resource requests it must supply both the
@@ -4439,7 +4442,8 @@ reclaim them.
 Tests cover nonce expiry and issuer/role separation, token binding, concurrent
 admission through independent database transactions, rollback behavior, replay
 with a fresh nonce, and capacity exhaustion/reclamation. PAR nonce challenges
-are implemented; OAuth authorization flows and resource-route integration remain pending.
+are implemented; browser authorization and remaining resource-route integration
+remain pending. `getSession` uses resource proof admission as described below.
 
 ### OAuth client metadata foundation
 
@@ -4615,7 +4619,7 @@ are described below. Protocol references:
 and returns HTTP 201 with `request_uri` and `expires_in` after successful admission.
 Configure `ATOLL_OAUTH_NONCE_SECRET` as described above; without it this route
 returns HTTP 503 `temporarily_unavailable`. No complete OAuth server is advertised:
-discovery, browser authorization/consent, and resource authorization
+discovery, browser authorization/consent, and remaining resource authorization
 still need implementation, so the returned reference cannot yet complete a login.
 
 The boundary runs before general body parsing, method rewriting, and Phoenix
@@ -4688,7 +4692,7 @@ and keys, revocation during metadata retrieval, expiry, capacity rollback, and
 concurrent decisions through independent database connections.
 
 This service does not render login/consent. The internal exchange below redeems
-codes; browser consent and resource authorization remain unfinished.
+codes; browser consent and remaining resource authorization remain unfinished.
 
 ### Authorization-code exchange and opaque sessions
 
@@ -4729,9 +4733,9 @@ against the separate 10,000-code cap.
 Tests cover digest-only storage, binding failures, source-session revocation,
 expiry, client metadata/key changes, access-only clients, capacity rollback,
 marker retention, and concurrent redemption. The HTTP adapter below exposes this
-service. Refresh rotation is described below. Resource routes do not yet accept
-these access tokens. Browser consent, discovery, periodic key-removal checks,
-and resource scope enforcement remain unchecked above.
+service. Refresh rotation and DPoP `getSession` are described below. Browser
+consent, discovery, periodic key-removal checks, and remaining resource scope
+enforcement remain unchecked above.
 
 
 ### Token HTTP adapter
@@ -4801,7 +4805,7 @@ token, whose scope is stored explicitly; the replacement refresh token retains
 the original grant. Omitting scope uses the original grant. The migration
 backfills existing access-token scopes from their sessions before enforcing a
 non-null column. Resource authorization must enforce the access token's scope;
-that route integration remains pending.
+`getSession` now does so, while write and other resource integrations remain pending.
 
 On refresh, a valid current confidential key set with the bound key removed or
 replaced causes permanent session revocation, including an empty inline or
@@ -4824,3 +4828,50 @@ and expiry, metadata-time revocation, key replacement/removal, transient lookup
 failure, storage capacity, bounded cleanup, and the HTTP refresh response.
 The behavior follows the [ATProto token/session profile](https://atproto.com/specs/oauth#tokens-and-session-lifetime)
 and [OAuth refresh semantics](https://www.rfc-editor.org/rfc/rfc6749.html#section-6).
+
+
+### DPoP resource reads and session identity
+
+`GET /xrpc/com.atproto.server.getSession` accepts `Authorization: DPoP <access_token>`
+and a DPoP proof containing `ath` for that exact token, `htm: GET`, and `htu` for
+the configured origin plus request path. It requires a resource-server nonce,
+which is distinct from the authorization-server nonce used at `/oauth/token`.
+An old or wrong-role nonce produces HTTP 401 with a fresh `DPoP-Nonce` and
+`WWW-Authenticate: DPoP error="use_dpop_nonce", algs="ES256"`. Retry with a new
+proof containing the supplied nonce.
+
+`Atoll.OAuth.Resource.read/5` validates the opaque access-token digest, issuer,
+proof/key binding, token hash, and shared replay state. Proof admission commits
+before the read transaction. It then takes shared row locks on the account,
+source password session, OAuth session, and access token, checks their current
+expiry/status and scope, and invokes a trusted read callback while holding those
+locks. The database clock is read after lock acquisition. A rollback in the
+callback cannot restore an admitted proof. Callers may require additional scopes;
+`atproto` and membership in the session's original grant are always required.
+This callback is for database reads only, not network requests or writes.
+
+The session response contains DID, handle, and active status. `transition:email`
+in the **access token** adds email and confirmation status; a broader OAuth
+session cannot restore email access to a narrowed token. OAuth responses omit
+`emailAuthFactor` and never contain password-session JWTs. Inactive accounts,
+expired/revoked tokens or source sessions, and unknown issuers cannot read through
+this guard. Other routes retain their existing authentication requirements;
+OAuth does not grant account-management access.
+
+The resource header plug runs before XRPC rate/method/query guards, so recognized
+DPoP attempts receive fresh resource nonces even on early errors. CORS permits
+the `dpop` request header and exposes `dpop-nonce` and `www-authenticate`, with
+no credentials. Configuration/storage failures return 503, proof/token failures
+return 401, and insufficient scopes return 403. Opaque OAuth tokens presented as
+Bearer credentials are rejected. Legacy password-JWT `getSession` continues to
+use its existing authentication and response behavior.
+
+HTTP tests cover token issuance through session reads, email scope narrowing,
+nonce roles, method/target/key/hash checks, proof replay, expiry/revocation,
+account status, Bearer downgrade rejection, account-management denial, CORS,
+rate-limit errors, configured-origin binding, and rollback persistence. An
+independent-connection test verifies all four row locks remain held through the
+read and that later reads fail after session deletion. Resource
+challenges follow [RFC 9449 sections 7 and 9](https://www.rfc-editor.org/rfc/rfc9449.html#section-7).
+Repository/blob writes, service authorization, exports, and other resource routes
+still need OAuth integration and endpoint-specific scope enforcement.

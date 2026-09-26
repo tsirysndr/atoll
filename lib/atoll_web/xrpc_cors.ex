@@ -2,8 +2,8 @@ defmodule AtollWeb.XRPCCORS do
   @moduledoc "Public-origin XRPC access using explicit Authorization headers, never cookies."
   import Plug.Conn
 
-  @headers ~w(accept accept-language authorization content-type atproto-proxy atproto-accept-labelers)
-  @exposed "atproto-content-labelers, atproto-repo-rev, retry-after, ratelimit-limit, ratelimit-remaining, ratelimit-reset, www-authenticate"
+  @headers ~w(accept accept-language authorization dpop content-type atproto-proxy atproto-accept-labelers)
+  @exposed "atproto-content-labelers, atproto-repo-rev, retry-after, dpop-nonce, ratelimit-limit, ratelimit-remaining, ratelimit-reset, www-authenticate"
 
   def headers(conn) do
     conn

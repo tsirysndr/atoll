@@ -104,9 +104,19 @@ defmodule AtollWeb.SessionController do
   end
 
   def show(conn, _params) do
-    with {:ok, token} <- bearer(conn),
-         {:ok, head} <- Sessions.authenticate_session(token) do
-      json(conn, identity(head))
+    if AtollWeb.OAuthResource.attempt?(conn) do
+      AtollWeb.OAuthResource.read(conn, fn principal ->
+        result = identity(principal)
+
+        if "transition:email" in String.split(principal.scope, " "),
+          do: Map.delete(result, :emailAuthFactor),
+          else: Map.drop(result, [:email, :emailConfirmed, :emailAuthFactor])
+      end)
+    else
+      with {:ok, token} <- bearer(conn),
+           {:ok, head} <- Sessions.authenticate_session(token) do
+        json(conn, identity(head))
+      end
     end
   end
 
