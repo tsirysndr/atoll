@@ -157,6 +157,7 @@ record Lexicons or grant access to account data.
 - [ ] Streaming imports and bounded-memory repository metadata traversal.
 - [x] Incremental CARv1 decoding with bounded framing buffers and verified block callbacks.
 - [x] Request-scoped private disk staging for incrementally validated CAR blocks.
+- [x] Signed repository snapshot validation over staged block readers without collecting record bodies.
 - [x] Lazy CARv1 encoding with per-block validation and upstream cancellation cleanup.
 
 `com.atproto.repo.getRecord` returns the current record unless `cid` selects a
@@ -3185,3 +3186,17 @@ stale-file cleanup and disk-capacity planning remain necessary before public
 streaming import integration. This stage validates transport integrity only;
 repository signatures, complete MST membership, account authorization, and quotas
 must still pass before publication. Public imports have not switched to staging yet.
+
+`Atoll.Repositories.Snapshot.from_stage/4` validates a staged repository using the
+same signature, five-minute future-revision bound, canonical MST reconstruction,
+complete reachable-block membership, and record data-model checks as the buffered
+snapshot decoder. It returns repository metadata, the reachable block CID list,
+and a `read_block` callback instead of a map of all block bodies. Unreferenced
+staged blocks are omitted from that CID list. Records are checked individually
+against the 1,000,000-byte limit and their collection's `$type`.
+
+The callback remains valid only inside `Stage.with_chunks/3`; publishing imports
+must finish all staged reads there. The record/CID map and reconstructed MST still
+occupy memory proportional to repository metadata. This validator does not publish
+blocks or update accounts, blob references, quotas, or event streams. Transactional
+publication and HTTP import integration remain pending.

@@ -67,8 +67,8 @@ defmodule Atoll.MST do
     end
   end
 
-  @doc "Loads verified blocks and requires the reconstructed canonical root to match."
-  def load(root, blocks) when is_binary(root) and is_map(blocks) do
+  @doc "Loads a block map or CID reader returning {:ok, bytes}; requires the reconstructed canonical root to match."
+  def load(root, blocks) when is_binary(root) and (is_map(blocks) or is_function(blocks, 1)) do
     try do
       {records, _seen} = read_node(root, blocks, %{}, MapSet.new(), 0)
 
@@ -125,7 +125,7 @@ defmodule Atoll.MST do
 
   defp read_node(cid, blocks, records, seen, depth) do
     if depth > 128 or MapSet.size(seen) >= 100_000 or MapSet.member?(seen, cid), do: invalid!()
-    bytes = Map.get(blocks, cid)
+    bytes = read_block(blocks, cid)
     unless is_binary(bytes) and CID.verify(cid, bytes) == :ok, do: invalid!()
 
     case CBOR.decode(bytes) do
@@ -165,5 +165,14 @@ defmodule Atoll.MST do
     do: read_node(cid, blocks, records, seen, depth + 1)
 
   defp read_child(_, _, _, _, _), do: invalid!()
+  defp read_block(blocks, cid) when is_map(blocks), do: Map.get(blocks, cid)
+
+  defp read_block(reader, cid) do
+    case reader.(cid) do
+      {:ok, bytes} when is_binary(bytes) -> bytes
+      _ -> invalid!()
+    end
+  end
+
   defp invalid!, do: throw(:invalid_mst)
 end
