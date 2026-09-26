@@ -72,4 +72,37 @@ defmodule Atoll.CARStageTest do
 
     assert File.ls!(c.directory) == []
   end
+
+  test "stateful readers preserve final source state and clean up read failures", c do
+    {:ok, archive} = CAR.encode([], %{})
+    next = fn :start -> {:ok, archive, :finished} end
+
+    assert :consumed =
+             Stage.with_reader(
+               :start,
+               next,
+               fn stage, :finished ->
+                 assert stage.roots == []
+                 :consumed
+               end,
+               directory: c.directory
+             )
+
+    assert File.ls!(c.directory) == []
+
+    next = fn
+      :start -> {:more, archive, :read_again}
+      :read_again -> {:error, :request_timeout, :timed_out}
+    end
+
+    assert {:error, :request_timeout, :timed_out} =
+             Stage.with_reader(
+               :start,
+               next,
+               fn _, _ -> flunk("failed reader reached consumer") end,
+               directory: c.directory
+             )
+
+    assert File.ls!(c.directory) == []
+  end
 end

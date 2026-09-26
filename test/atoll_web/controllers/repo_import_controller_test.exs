@@ -147,7 +147,9 @@ defmodule AtollWeb.RepoImportControllerTest do
         c.key
       )
 
-    assert AtollWeb.RepoImportController.create(ingested, %{}) == {:error, :invalid_swap}
+    assert %{"error" => "InvalidSwap"} =
+             AtollWeb.RepoImportController.create(ingested, %{}) |> json_response(400)
+
     assert %{"error" => "InvalidRequest"} = post_upload(c, old) |> json_response(400)
     assert Repositories.get_head(@did) == {:ok, changed}
   end
@@ -180,11 +182,14 @@ defmodule AtollWeb.RepoImportControllerTest do
       assert upload_conn(c, bytes)
              |> change.()
              |> AtollWeb.RepoImportPlug.call([])
+             |> then(fn conn ->
+               if conn.halted, do: conn, else: AtollWeb.RepoImportController.create(conn, %{})
+             end)
              |> json_response(400)
     end
 
     assert upload_conn(c, bytes)
-           |> put_req_header("content-length", "67108865")
+           |> put_req_header("content-length", "1073741825")
            |> AtollWeb.RepoImportPlug.call([])
            |> json_response(413)
 
@@ -308,6 +313,24 @@ defmodule AtollWeb.RepoImportControllerTest do
              Atoll.CAR.Stage.with_chunks([bytes], fn stage ->
                Repositories.import_staged(c.pair.access_jwt, stage, imported.head)
              end)
+  end
+
+  test "streams an HTTP upload larger than 64 MiB and deduplicates repeated blocks", c do
+    bytes =
+      archive(c,
+        record: %{"$type" => "com.example.record", "text" => String.duplicate("x", 975_000)}
+      )
+
+    {:ok, %{roots: roots, blocks: blocks}} = CAR.decode(bytes)
+    repeated = Enum.max_by(blocks, fn {_, bytes} -> byte_size(bytes) end)
+    sections = Stream.concat(blocks, Stream.repeatedly(fn -> repeated end) |> Stream.take(69))
+    {:ok, chunks} = CAR.encode_stream(roots, sections)
+    upload = chunks |> Enum.to_list() |> IO.iodata_to_binary()
+    assert byte_size(upload) > 64 * 1024 * 1024
+    result = post_upload(c, upload)
+    assert response(result, 200) == ""
+    assert {:ok, %{value: value}} = Repositories.get_record(@did, @path)
+    assert byte_size(value["text"]) == 975_000
   end
 
   defp upload_conn(c, bytes) do

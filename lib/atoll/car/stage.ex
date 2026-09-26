@@ -11,6 +11,40 @@ defmodule Atoll.CAR.Stage do
 
   def with_chunks(chunks, consume, opts \\ []) when is_function(consume, 1) do
     decoder = Decoder.new(Keyword.take(opts, [:max_bytes, :max_blocks]))
+    with_file(opts, fn io -> stage(chunks, decoder, %__MODULE__{io: io}, consume) end)
+  end
+
+  @doc "Stage a stateful reader returning {:more | :ok, bytes, state} or {:error, reason, state}."
+  def with_reader(source, next, consume, opts \\ []) do
+    decoder = Decoder.new(Keyword.take(opts, [:max_bytes, :max_blocks]))
+    with_file(opts, fn io -> read_source(source, next, decoder, %__MODULE__{io: io}, consume) end)
+  end
+
+  defp read_source(source, next, decoder, staged, consume) do
+    case next.(source) do
+      {status, bytes, source} when status in [:ok, :more] ->
+        case Decoder.feed(decoder, bytes, staged, &store/2) do
+          {:ok, decoder, staged} when status == :more ->
+            read_source(source, next, decoder, staged, consume)
+
+          {:ok, decoder, staged} ->
+            case Decoder.finish(decoder) do
+              :ok -> consume.(staged, source)
+              {:error, reason} -> {:error, reason, source}
+            end
+
+          {:error, reason} ->
+            {:error, reason, source}
+        end
+
+      {:error, _, _} = error ->
+        error
+    end
+  catch
+    :car_staging_unavailable -> {:error, :car_staging_unavailable, source}
+  end
+
+  defp with_file(opts, callback) do
     parent = Keyword.get(opts, :directory, System.tmp_dir!())
     name = "atoll-car-" <> Base.url_encode64(:crypto.strong_rand_bytes(18), padding: false)
     directory = Path.join(parent, name)
@@ -24,7 +58,7 @@ defmodule Atoll.CAR.Stage do
                    Path.join(directory, "blocks"),
                    [:read, :write, :binary, :exclusive],
                    fn io ->
-                     stage(chunks, decoder, %__MODULE__{io: io}, consume)
+                     callback.(io)
                    end
                  ) do
             result

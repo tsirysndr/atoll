@@ -154,7 +154,8 @@ record Lexicons or grant access to account data.
 - [x] Authenticated `com.atproto.repo.importRepo` for existing repositories, with bounded uploads and atomic replacement.
 - [x] Existing-DID migration provisioning with source-key verification and destination-key signing.
 - [x] Chunked repository exports with lazy record-body reads.
-- [ ] Streaming imports and bounded-memory repository metadata traversal.
+- [x] Streamed HTTP imports with private staging and atomic publication.
+- [ ] Bounded-memory repository metadata traversal.
 - [x] Incremental CARv1 decoding with bounded framing buffers and verified block callbacks.
 - [x] Request-scoped private disk staging for incrementally validated CAR blocks.
 - [x] Signed repository snapshot validation over staged block readers without collecting record bodies.
@@ -854,10 +855,16 @@ Authorization is checked again under the write lock. Records, blob references,
 the head, and the sync event change atomically; identical-head retries emit no
 additional event. Older revisions are rejected.
 
-Uploads are buffered in memory with a 64 MiB limit, a five-second per-read timeout,
-and a 30-second overall read budget. Imports allow ten attempts per direct peer IP
-per five minutes on each server process. Blob bytes must be transferred separately;
-streaming migration remains pending.
+Uploads are staged incrementally on disk with a 1 GiB limit, 64 KiB body reads,
+a five-second per-read timeout, and a 30-second overall read budget. The declared
+length must match the actual bytes. Imports allow ten attempts per peer IP per
+five minutes using the configured memory, PostgreSQL, or Redis request limiter.
+Blob bytes must be transferred separately. Record bodies are read individually
+from private staging during validation and atomic publication; repository metadata
+and the reconstructed MST still scale in memory with the record count. Normal
+completion, malformed input, read errors, and publication failures close and remove
+the staging files. A hard process/host crash may leave private files behind; monitor
+temporary-disk capacity and clean stale files operationally.
 
 For migration, `createAccount` requires an existing DID, a bidirectionally verified
 handle, a password, and a one-use service JWT for this PDS and the createAccount
@@ -3097,8 +3104,8 @@ timeout; slow readers hold a database connection and can delay repository writes
 Snapshot construction still holds the record/CID map and reconstructed MST in
 memory, so metadata memory scales with repository size. Record bodies and the
 complete archive are no longer accumulated. The streaming callback must finish
-consuming the enumerable before returning. CAR decoding and imports remain
-buffered. Tests compare full and incremental block sets with the buffered codec,
+consuming the enumerable before returning. The legacy `CAR.decode/1` and `import_archive/3` APIs remain buffered;
+HTTP imports use incremental decoding and staging. Tests compare full and incremental block sets with the buffered codec,
 exercise cancellation/corruption, and stream a repository larger than 64 MiB.
 
 ### Optional Redis
@@ -3162,9 +3169,8 @@ limits, cancellation, and decoding over 64 MiB without accumulating output.
 Callbacks can observe valid blocks before a later archive error. Import consumers
 must stage those blocks and publish nothing until final framing, repository
 signature, MST completeness, ownership, and quota validation all succeed. This
-codec performs no database writes and does not authenticate repositories. Public
-HTTP imports still use the buffered importer; staging and request-body integration
-remain pending.
+codec performs no database writes and does not authenticate repositories. Public HTTP imports use this decoder through private staging before
+transactional publication.
 
 ### Private CAR staging
 
@@ -3183,10 +3189,10 @@ staging error. Callers can choose a trusted `directory` and decoder byte/block
 limits; defaults use the system temporary directory and the decoder's 1 GiB /
 1,000,000-section limits. These options must not come from client request input.
 A process or host crash can leave private temporary files behind, so operational
-stale-file cleanup and disk-capacity planning remain necessary before public
-streaming import integration. This stage validates transport integrity only;
+stale-file cleanup and disk-capacity planning remain necessary when operating public
+streaming imports. This stage validates transport integrity only;
 repository signatures, complete MST membership, account authorization, and quotas
-must still pass before publication. Public imports have not switched to staging yet.
+must still pass before publication. Public HTTP imports now use this staging path.
 
 `Atoll.Repositories.Snapshot.from_stage/4` validates a staged repository using the
 same signature, five-minute future-revision bound, canonical MST reconstruction,
@@ -3199,8 +3205,7 @@ against the 1,000,000-byte limit and their collection's `$type`.
 The callback remains valid only inside `Stage.with_chunks/3`; publishing imports
 must finish all staged reads there. The record/CID map and reconstructed MST still
 occupy memory proportional to repository metadata. This validator does not publish
-blocks or update accounts, blob references, quotas, or event streams. HTTP import
-integration remains pending.
+blocks or update accounts, blob references, quotas, or event streams. The HTTP importer uses this validator before staged publication.
 
 `Atoll.Repositories.import_staged/3` publishes a stage inside its owning callback.
 It authenticates the management session, validates the staged snapshot, then
@@ -3215,5 +3220,6 @@ against its recorded source key and re-sign with the local repository key. The
 source commit is replaced in the published block set, while its CID/revision are
 retained in migration metadata. The destination stays deactivated. Tests cover
 staged publication, unreachable-block exclusion, quota rollback including blob
-references, and cross-curve migration re-signing/retries. Public HTTP imports still
-use the buffered request reader until request-body staging is connected.
+references, and cross-curve migration re-signing/retries. Public HTTP imports now use a stateful bounded reader with
+`Stage.with_reader/4`, retaining the updated connection through completion or
+failure. Tests include an HTTP upload larger than 64 MiB with duplicate sections.

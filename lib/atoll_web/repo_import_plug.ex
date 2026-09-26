@@ -2,7 +2,7 @@ defmodule AtollWeb.RepoImportPlug do
   @moduledoc "Authenticated, bounded CAR request ingestion before general parsing."
   import Plug.Conn
   alias Atoll.Accounts.{SessionLimiter, Sessions}
-  @max_bytes 64 * 1024 * 1024
+  @max_bytes 1024 * 1024 * 1024
 
   def init(opts), do: opts
 
@@ -17,18 +17,10 @@ defmodule AtollWeb.RepoImportPlug do
          {:ok, token} <- AtollWeb.BearerToken.get(conn),
          {:ok, head} <- Sessions.authenticate_management(token),
          :ok <- media_type(conn),
-         {:ok, length} <- content_length(conn),
-         {:ok, bytes, conn} <- AtollWeb.BoundedBody.read(conn, @max_bytes) do
-      if length == byte_size(bytes) do
-        conn = %{conn | body_params: %{}}
-        put_private(conn, :atoll_repo_import, %{token: token, bytes: bytes, head: head.head})
-      else
-        fail(conn, {:error, :invalid_request})
-      end
+         {:ok, length} <- content_length(conn) do
+      conn = %{conn | body_params: %{}}
+      put_private(conn, :atoll_repo_import, %{token: token, length: length, head: head.head})
     else
-      {:error, reason, conn} ->
-        fail(conn, {:error, reason})
-
       {:error, {:rate_limited, seconds}} ->
         conn
         |> put_resp_header("retry-after", Integer.to_string(seconds))
