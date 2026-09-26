@@ -2,6 +2,7 @@ defmodule Atoll.Accounts.Tokens do
   @moduledoc """
   Locally signed HS256 session JWTs. Options are for trusted internal callers only.
   Access tokens live for two hours; refresh tokens live for ninety days.
+  New tokens use the active key; a bounded verification-only key ring permits rotation overlap.
   Cryptographic verification alone does not establish that a session is still live.
   """
   alias Atoll.Syntax
@@ -43,14 +44,20 @@ defmodule Atoll.Accounts.Tokens do
 
   def verify(token, kind, opts)
       when is_binary(token) and byte_size(token) <= 8192 and kind in [:access, :refresh] do
-    with {:ok, key, audience} <- configuration(opts) do
-      verify_signed(
-        token,
-        kind,
-        key,
-        audience,
-        Keyword.get(opts, :now, System.system_time(:second))
-      )
+    with {:ok, key, audience} <- configuration(opts),
+         {:ok, previous} <- verification_keys(opts) do
+      Enum.reduce_while([key | previous], {:error, :invalid_token}, fn candidate, _ ->
+        case verify_signed(
+               token,
+               kind,
+               candidate,
+               audience,
+               Keyword.get(opts, :now, System.system_time(:second))
+             ) do
+          {:error, :invalid_token} = error -> {:cont, error}
+          result -> {:halt, result}
+        end
+      end)
     end
   end
 
@@ -106,6 +113,45 @@ defmodule Atoll.Accounts.Tokens do
       do: {:ok, JOSE.JWK.from_oct(secret), audience},
       else: {:error, :session_configuration_missing}
   end
+
+  def previous_from_env!(nil), do: []
+  def previous_from_env!(""), do: []
+
+  def previous_from_env!(value) when is_binary(value) and byte_size(value) <= 256 do
+    encoded = String.split(value, ",")
+    if length(encoded) > 4, do: invalid_previous!()
+
+    Enum.map(encoded, fn text ->
+      case Base.decode64(String.trim(text)) do
+        {:ok, <<_::256>> = key} -> key
+        _ -> invalid_previous!()
+      end
+    end)
+    |> Enum.uniq()
+  end
+
+  def previous_from_env!(_), do: invalid_previous!()
+
+  defp verification_keys(opts) do
+    # Explicit secret overrides isolate internal/test issuers from the runtime key ring.
+    default =
+      if Keyword.has_key?(opts, :secret),
+        do: [],
+        else: Application.get_env(:atoll, :previous_session_signing_keys, [])
+
+    keys = Keyword.get(opts, :previous_secrets, default)
+
+    if is_list(keys) and length(keys) <= 4 and Enum.all?(keys, &match?(<<_::256>>, &1)),
+      do: {:ok, keys |> Enum.uniq() |> Enum.map(&JOSE.JWK.from_oct/1)},
+      else: {:error, :session_configuration_missing}
+  end
+
+  defp invalid_previous!,
+    do:
+      raise(
+        ArgumentError,
+        "ATOLL_PREVIOUS_SESSION_SIGNING_KEYS must contain at most four comma-separated base64 32-byte keys"
+      )
 
   defp valid_scope?(:access, scope),
     do:

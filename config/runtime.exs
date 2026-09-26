@@ -75,6 +75,12 @@ case Integer.parse(System.get_env("ATOLL_SESSION_MAX_COUNT", "100")) do
   _ -> raise "ATOLL_SESSION_MAX_COUNT must be an integer from 0 to 1000"
 end
 
+config :atoll,
+       :previous_session_signing_keys,
+       Atoll.Accounts.Tokens.previous_from_env!(
+         System.get_env("ATOLL_PREVIOUS_SESSION_SIGNING_KEYS")
+       )
+
 if encoded = System.get_env("ATOLL_SESSION_SIGNING_KEY") do
   case Base.decode64(encoded) do
     {:ok, <<_::binary-size(32)>> = key} -> config :atoll, :session_signing_key, key

@@ -319,6 +319,7 @@ mutation. Deletes and empty batches need no record schema, even with `validate: 
 - [x] Email updates authorized through the current confirmed address using the Worker.
 - [x] Email-based password reset through the Worker with atomic session revocation.
 - [x] Internal password session creation, scoped HS256 JWT verification, single-use refresh rotation, and persistent revocation.
+- [x] Session JWT signing-key rotation with bounded verification-only fallback keys.
 - [x] Public DID/password session creation, refresh, inspection, and revocation endpoints, with bounded requests and per-node rate limits.
 - [x] Bidirectionally verified handle/password login with normalized handles and DID-bound sessions.
 - [x] Deactivated-account login, refresh, session inspection, repository import, blob upload, missing-blob inventory, and migration-scoped service tokens.
@@ -413,7 +414,8 @@ repository status. Taken-down accounts can explicitly opt into export-only
 sessions as described below; refresh remains blocked during takedown. Suspended
 accounts cannot create or refresh sessions. Restrictions are enforced from current database status on each request,
 including sessions issued before deactivation. Sessions survive process restarts.
-Changing the signing key invalidates existing tokens. Key rotation with overlap remains pending. Write handlers recheck authorization inside the
+Changing the signing key without a verification fallback invalidates existing tokens.
+Session-key overlap is supported as described below. Write handlers recheck authorization inside the
 write transaction; token verification alone is not write permission.
 
 Expired session rows can be removed with `mix atoll.sessions.prune --limit 500`
@@ -2092,3 +2094,33 @@ PLC rotation keys must migrate before retiring an old master key.
 This rotates encryption protection, not repository signing keys, PLC authority,
 JWT secrets, or server identity keys. It cannot recover an envelope when every
 key capable of decrypting it has been lost. No rotation is scheduled automatically.
+
+### Session JWT signing-key rotation
+
+`ATOLL_SESSION_SIGNING_KEY` always signs newly issued access and refresh JWTs.
+`ATOLL_PREVIOUS_SESSION_SIGNING_KEYS` optionally contains up to four comma-separated
+base64-encoded 32-byte keys used only to verify existing tokens. The active key
+must remain configured. Malformed fallback configuration fails startup; keys never
+come from request parameters or JWT headers. Application configuration uses
+`:previous_session_signing_keys` with decoded 32-byte binaries.
+
+For a rolling rotation, first distribute the new key as a verification fallback
+to every node while the old key remains active. Then switch all nodes to the new
+active key with the old key retained as a fallback. Existing sessions continue
+working, and each successful refresh rotates once to tokens signed by the active
+key. New logins also use only the active key. No database rewrite is required.
+
+Remove the old fallback once its remaining tokens may be invalidated. Access JWTs
+live for two hours; refresh JWTs can live for 90 days from their last issuance.
+Retain overlap for that maximum period after the last node stopped signing with
+the old key if all otherwise-valid refresh tokens must survive. Removing a key
+earlier forces holders of its remaining tokens to log in again. For a compromised
+key, remove it promptly rather than preserving overlap.
+
+Every candidate key is subject to the same HS256 algorithm, exact token-type,
+audience, scope, lifetime, and claim checks. Persistent session revocation and
+one-use refresh-token hashes still apply; accepting a signature under a fallback
+key does not restore a revoked session. Trusted internal callers with an explicit
+`:secret` do not inherit runtime fallbacks unless they explicitly provide
+`:previous_secrets`. This key ring is separate from repository encryption master
+keys, repository signing keys, PLC rotation keys, and service identity keys.
