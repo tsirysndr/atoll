@@ -8,7 +8,12 @@ defmodule AtollWeb.SubscribeReposPlug do
   def init(opts), do: opts
 
   @impl true
-  def call(%{request_path: @path} = conn, _) do
+  def call(conn, _) do
+    path = "/" <> Enum.map_join(conn.path_info, "/", &URI.decode/1)
+    if path == @path, do: subscribe(conn), else: conn
+  end
+
+  defp subscribe(conn) do
     cond do
       conn.method != "GET" ->
         conn |> put_resp_header("allow", "GET") |> error(405, "MethodNotAllowed")
@@ -30,8 +35,6 @@ defmodule AtollWeb.SubscribeReposPlug do
   rescue
     WebSockAdapter.UpgradeError -> error(conn, 400, "InvalidRequest")
   end
-
-  def call(conn, _), do: conn
 
   defp parse_cursor(query) do
     values = for {"cursor", value} <- URI.query_decoder(query), do: value

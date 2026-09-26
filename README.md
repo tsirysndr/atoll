@@ -3,7 +3,7 @@
 
 An AT Protocol Personal Data Server (PDS), built with Elixir, Phoenix, and PostgreSQL. Work in progress.
 
-Atoll currently provides server metadata, verified block storage, and internal APIs for signed repositories. Account hosting and federation are not implemented yet.
+Atoll provides account hosting, signed repositories, blob storage, and repository subscriptions. Federation interoperability and other production requirements remain under development; see the checklist below.
 
 ## Feature checklist
 
@@ -19,8 +19,19 @@ Checked items are implemented in this repository. Unchecked items are remaining 
 - [x] Controller test for unauthenticated server description.
 - [x] Validated runtime server DID and advertised domain configuration (development defaults to `did:web:localhost`).
 - [x] Configured hostname-based server DID document publication with a stable service key.
-- [ ] General XRPC request validation and protocol error responses.
+- [x] XRPC route/NSID validation and method checks before body parsing, including protocol errors for unsupported methods.
+- [ ] Complete XRPC parameter validation and protocol error handling for framework failures.
 - [ ] Lexicon-based record validation.
+
+XRPC routing uses the [HTTP API specification](https://atproto.com/specs/xrpc).
+Malformed paths return `400 InvalidRequest`; valid but unimplemented method NSIDs
+return `501 MethodNotImplemented`. Implemented routes require their declared HTTP
+method and otherwise return `405 MethodNotAllowed` with an `Allow` header, before
+body parsing or method override. These errors are JSON with `error` and `message`
+and are not cached. HTTP HEAD responses omit the body. Percent-encoded route
+spellings receive the same checks, including repository subscriptions. This does
+not yet provide general Lexicon parameter validation, CORS preflight support, or
+XRPC conversion of every framework exception.
 
 ### Content identifiers and encoding
 
