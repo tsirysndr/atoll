@@ -156,6 +156,7 @@ record Lexicons or grant access to account data.
 - [x] Chunked repository exports with lazy record-body reads.
 - [ ] Streaming imports and bounded-memory repository metadata traversal.
 - [x] Incremental CARv1 decoding with bounded framing buffers and verified block callbacks.
+- [x] Request-scoped private disk staging for incrementally validated CAR blocks.
 - [x] Lazy CARv1 encoding with per-block validation and upstream cancellation cleanup.
 
 `com.atproto.repo.getRecord` returns the current record unless `cid` selects a
@@ -3162,3 +3163,25 @@ signature, MST completeness, ownership, and quota validation all succeed. This
 codec performs no database writes and does not authenticate repositories. Public
 HTTP imports still use the buffered importer; staging and request-body integration
 remain pending.
+
+### Private CAR staging
+
+`Atoll.CAR.Stage.with_chunks/3` consumes an enumerable of binary chunks with the
+incremental decoder, writing each unique verified block to a request-private
+temporary file. The stage stores roots and a CID-to-offset/length index in memory;
+record bodies remain on disk. The consuming callback is invoked only after
+`Decoder.finish/1` succeeds. `Stage.read/2` reads and rechecks a staged block's hash
+while inside that callback. Duplicate sections still count against decoder limits
+but do not consume additional staging space.
+
+The random staging directory has mode 0700 and is removed, with the file closed,
+after normal return, invalid/truncated input, limit rejection, or exceptions.
+No data is inserted into public block storage. Disk/creation failures produce a
+staging error. Callers can choose a trusted `directory` and decoder byte/block
+limits; defaults use the system temporary directory and the decoder's 1 GiB /
+1,000,000-section limits. These options must not come from client request input.
+A process or host crash can leave private temporary files behind, so operational
+stale-file cleanup and disk-capacity planning remain necessary before public
+streaming import integration. This stage validates transport integrity only;
+repository signatures, complete MST membership, account authorization, and quotas
+must still pass before publication. Public imports have not switched to staging yet.
