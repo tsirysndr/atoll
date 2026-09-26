@@ -431,6 +431,13 @@ buckets are used. The tests cover SigV4 uploads and downloads, the 5 MiB boundar
 private buckets, account ownership, invalid credentials, missing buckets, and
 corrupt or missing objects. These tests are excluded from `mix precommit`.
 
+GitHub Actions builds this image with Buildx and saves all build stages to the
+GitHub Actions layer cache, including the Go compilation stage. It loads the
+result into Docker and runs `bash scripts/test_minio.sh --skip-build` to avoid a
+second build. The flag requires the tagged image to exist locally. Local runs
+without the flag still build normally; Dockerfile changes invalidate the relevant
+cached layers automatically.
+
 ## Protocol references
 
 - [AT Protocol overview](https://atproto.com/guides/overview)

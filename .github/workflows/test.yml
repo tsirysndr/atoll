@@ -63,8 +63,20 @@ jobs:
       - name: Run project checks and tests
         run: mix precommit
 
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Build cached MinIO test image
+        uses: docker/build-push-action@v7
+        with:
+          context: scripts/minio
+          load: true
+          tags: atoll-minio-test:2025-09-07
+          cache-from: type=gha,scope=atoll-minio-linux-amd64
+          cache-to: type=gha,scope=atoll-minio-linux-amd64,mode=max
+
       - name: Run MinIO integration tests
-        run: bash scripts/test_minio.sh
+        run: bash scripts/test_minio.sh --skip-build
 
       - name: Ensure checks did not modify tracked files
         run: git diff --exit-code

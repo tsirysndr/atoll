@@ -9,7 +9,19 @@ trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-docker build --tag atoll-minio-test:2025-09-07 scripts/minio
+if [[ $# -gt 1 ]]; then
+  echo 'Usage: scripts/test_minio.sh [--skip-build]' >&2
+  exit 2
+fi
+
+case "${1:-}" in
+  '') docker build --tag atoll-minio-test:2025-09-07 scripts/minio ;;
+  --skip-build)
+    # CI loads the image using Buildx and its remote layer cache first.
+    docker image inspect atoll-minio-test:2025-09-07 >/dev/null
+    ;;
+  *) echo 'Usage: scripts/test_minio.sh [--skip-build]' >&2; exit 2 ;;
+esac
 docker run --rm --detach --name "$container_name" \
   --publish 127.0.0.1::9000 --tmpfs /data:rw,size=1g \
   --env MINIO_ROOT_USER=atoll-test \
