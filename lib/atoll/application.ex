@@ -10,6 +10,7 @@ defmodule Atoll.Application do
     children = [
       AtollWeb.Telemetry,
       Atoll.Repo,
+      Atoll.Accounts.SessionLimiter,
       {DNSCluster, query: Application.get_env(:atoll, :dns_cluster_query) || :ignore},
       {Phoenix.PubSub, name: Atoll.PubSub},
       # Start to serve requests, typically the last entry

@@ -23,6 +23,10 @@ defmodule AtollWeb.Router do
     pipe_through :api
 
     get "/com.atproto.server.describeServer", ServerController, :describe
+    post "/com.atproto.server.createSession", SessionController, :create
+    get "/com.atproto.server.getSession", SessionController, :show
+    post "/com.atproto.server.refreshSession", SessionController, :refresh
+    post "/com.atproto.server.deleteSession", SessionController, :delete
     get "/com.atproto.identity.resolveHandle", IdentityController, :resolve_handle
     get "/com.atproto.repo.getRecord", RepoController, :get_record
     get "/com.atproto.repo.describeRepo", RepoController, :describe

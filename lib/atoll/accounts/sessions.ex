@@ -1,6 +1,6 @@
 defmodule Atoll.Accounts.Sessions do
   @moduledoc """
-  Internal password sessions for active repositories. Not an HTTP login API.
+  Password session lifecycle for active repositories, used by the HTTP session API.
 
   Refresh rotates the refresh token once, without a retry grace period. Older
   access tokens remain valid until expiry or session revocation. Every access

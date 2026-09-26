@@ -104,7 +104,8 @@ and history retention policy remain pending.
 - [x] Internal DID-scoped password credentials with salted Argon2id hashes, bounded input, redacted inspection, and duplicate protection.
 - [ ] Email verification, password changes, and account recovery.
 - [x] Internal password session creation, scoped HS256 JWT verification, single-use refresh rotation, and persistent revocation.
-- [ ] Public session creation, refresh, inspection, and revocation endpoints.
+- [x] Public DID/password session creation, refresh, inspection, and revocation endpoints, with bounded requests and per-node rate limits.
+- [ ] Handle/email login, authentication factors, and restricted sessions for inactive accounts.
 - [ ] App passwords.
 - [ ] ATProto OAuth authorization and resource server support.
 - [ ] Authorization checks for account and repository operations.
@@ -114,18 +115,18 @@ and history retention policy remain pending.
 a password to an existing repository DID. It never replaces an existing credential.
 `verify/2` returns only the DID on success, and the same `:invalid_credentials`
 error for missing credentials and incorrect passwords. It proves password possession;
-callers must separately check account status and authorization. No public signup or
-login route is exposed yet.
+callers must separately check account status and authorization. Public signup is
+not implemented; repositories and credentials must be provisioned internally.
 
 Passwords must be valid UTF-8, 8–1024 bytes, with no trimming or normalization.
 Hashes use [argon2_elixir](https://argon2-elixir.hexdocs.pm/Argon2.html) Argon2id
 with random salts and the library's default work factors (64 MiB memory, three
 iterations, four lanes). Only test configuration reduces the work factors.
 Building this dependency requires a C compiler and `make`. Hashes are redacted
-from schema inspection, and credential insertion disables query logging. Rate
-limits, email/handle login, public session endpoints, password changes, and recovery remain pending.
+from schema inspection, and credential insertion disables query logging.
+Email/handle login, password changes, and recovery remain pending.
 
-### Internal sessions
+### Sessions
 
 Set `ATOLL_SESSION_SIGNING_KEY` to a separately generated, base64-encoded 32-byte
 secret before starting Atoll. There is no development fallback key; session
@@ -136,8 +137,30 @@ share the same session key and configured PDS DID (the JWT audience).
 Trusted callers can use `Atoll.Accounts.Sessions.create(did, password)` to obtain
 `access_jwt` and `refresh_jwt`, `authenticate(access_jwt)` to verify a live session,
 `refresh(refresh_jwt)` to rotate its tokens, and `revoke(refresh_jwt)` to revoke it.
-These are internal APIs; they do not yet provide HTTP login, handle/email lookup,
-or complete account management.
+These internal APIs also back the following public XRPC routes:
+
+| Method | Route | Authentication / input |
+| --- | --- | --- |
+| POST | `/xrpc/com.atproto.server.createSession` | JSON `identifier` (hosted DID) and `password` |
+| GET | `/xrpc/com.atproto.server.getSession` | `Authorization: Bearer <accessJwt>` |
+| POST | `/xrpc/com.atproto.server.refreshSession` | `Authorization: Bearer <refreshJwt>` |
+| POST | `/xrpc/com.atproto.server.deleteSession` | `Authorization: Bearer <refreshJwt>` |
+
+Creation and refresh return `did`, `handle`, `active`, `accessJwt`, and `refreshJwt`.
+The handle comes from the last verified identity observation, or `handle.invalid`
+if none exists; login does not perform identity refresh. Session inspection omits
+tokens. Deletion returns an empty 200 response. Credentials must be in the JSON
+body, and tokens must be in a single Authorization header; query parameters cannot
+supply them. Session responses and errors use `Cache-Control: no-store`.
+
+Session request bodies are limited to 4 KiB before general parsing. Login permits
+20 attempts per direct peer IP per five minutes; other session methods share a
+300-request limit per peer per five minutes. The limiter retains at most 10000
+IP/bucket entries, expires old entries, and denies new keys while at capacity.
+It is per-node and resets on restart. Forwarded-IP headers are deliberately ignored:
+behind a reverse proxy, its clients share the proxy's limit until trusted-proxy
+handling is implemented. Distributed limits and account-level throttling remain pending.
+Passwords and token fields are filtered from Phoenix parameter logs.
 
 The JWT types, scopes, and lifetimes follow the
 [reference PDS token implementation](https://github.com/bluesky-social/atproto/blob/main/packages/pds/src/account-manager/helpers/auth.ts):

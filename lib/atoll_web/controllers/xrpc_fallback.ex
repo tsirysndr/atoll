@@ -1,6 +1,18 @@
 defmodule AtollWeb.XRPCFallback do
   use AtollWeb, :controller
 
+  def call(conn, {:error, reason}) when reason in [:auth_required, :invalid_credentials],
+    do: error(conn, 401, "AuthRequired", "Authentication required or credentials incorrect.")
+
+  def call(conn, {:error, :invalid_token}),
+    do: error(conn, 401, "InvalidToken", "Invalid session token.")
+
+  def call(conn, {:error, :expired_token}),
+    do: error(conn, 401, "ExpiredToken", "Session token has expired.")
+
+  def call(conn, {:error, :session_configuration_missing}),
+    do: error(conn, 503, "ServiceUnavailable", "Session signing is not configured.")
+
   def call(conn, {:error, :invalid_request}) do
     error(conn, 400, "InvalidRequest", "Invalid or unsupported query parameters.")
   end
