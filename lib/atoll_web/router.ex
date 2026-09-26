@@ -30,6 +30,9 @@ defmodule AtollWeb.Router do
     get "/com.atproto.identity.resolveHandle", IdentityController, :resolve_handle
     get "/com.atproto.repo.getRecord", RepoController, :get_record
     post "/com.atproto.repo.uploadBlob", BlobController, :upload
+    post "/com.atproto.repo.createRecord", RecordWriteController, :create
+    post "/com.atproto.repo.putRecord", RecordWriteController, :put
+    post "/com.atproto.repo.deleteRecord", RecordWriteController, :delete
     get "/com.atproto.repo.describeRepo", RepoController, :describe
     get "/com.atproto.repo.listRecords", RepoController, :list_records
     get "/com.atproto.sync.getLatestCommit", SyncController, :latest_commit

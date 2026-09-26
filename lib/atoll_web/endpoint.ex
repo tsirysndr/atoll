@@ -40,6 +40,7 @@ defmodule AtollWeb.Endpoint do
   plug AtollWeb.SubscribeReposPlug
   plug AtollWeb.SessionRequestPlug
   plug AtollWeb.BlobUploadPlug
+  plug AtollWeb.RecordWritePlug
 
   plug Plug.Parsers,
     parsers: [:urlencoded, :multipart, :json],

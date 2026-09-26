@@ -1,6 +1,28 @@
 defmodule AtollWeb.XRPCFallback do
   use AtollWeb, :controller
 
+  def call(conn, {:error, :forbidden}),
+    do: error(conn, 403, "Forbidden", "Token does not authorize this repository.")
+
+  def call(conn, {:error, :invalid_swap}),
+    do: error(conn, 400, "InvalidSwap", "Repository or record version does not match.")
+
+  def call(conn, {:error, :validation_unavailable}),
+    do: error(conn, 400, "InvalidRequest", "Required Lexicon validation is not available.")
+
+  def call(conn, {:error, reason})
+      when reason in [:invalid_record, :record_exists, :invalid_blob_metadata],
+      do: error(conn, 400, "InvalidRequest", "Invalid record data or record already exists.")
+
+  def call(conn, {:error, reason}) when reason in [:key_vault_unconfigured, :key_not_found],
+    do: error(conn, 503, "ServiceUnavailable", "Repository signing key is unavailable.")
+
+  def call(conn, {:error, :record_request_too_large}),
+    do: error(conn, 413, "InvalidRequest", "Record request body exceeds 2 MiB.")
+
+  def call(conn, {:error, :record_rate_limited}),
+    do: error(conn, 429, "RateLimitExceeded", "Too many record writes.")
+
   def call(conn, {:error, :blob_too_large}),
     do: error(conn, 413, "BlobTooLarge", "Blob exceeds the 5 MiB limit.")
 

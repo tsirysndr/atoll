@@ -74,7 +74,8 @@ record Lexicons or grant access to account data.
 - [x] Internal record create, put, delete, and read operations with collection/type checks (not Lexicon validation).
 - [x] Public `getRecord` and paginated `listRecords` for repository DIDs or bidirectionally verified handles and current record versions.
 - [x] Historical CID versions for record reads, verified against retained signed revisions and the exact record path.
-- [ ] Record writes and deletion (`createRecord`, `putRecord`, `deleteRecord`, `applyWrites`).
+- [x] Authenticated `createRecord`, `putRecord`, and `deleteRecord` for repository DIDs, with atomic commit/record compare-and-swap.
+- [ ] Public batch `applyWrites`, handle-addressed writes, and Lexicon validation.
 - [x] `com.atproto.repo.describeRepo` with resolved DID document, current collections, and bidirectional handle status.
 - [x] In-memory CARv1 encoding and decoding with block verification and resource limits.
 - [x] Consistent repository CAR export through the internal storage API.
@@ -88,6 +89,27 @@ an arbitrary stored block is not sufficient. This initial implementation scans
 candidate retained revisions and loads one snapshot at a time, so histories with
 many revisions or large repositories can be expensive. A dedicated version index
 and history retention policy remain pending.
+
+Single-record writes use POST with JSON and an access JWT in the Authorization
+header. `repo` must be the token owner's DID. `collection` and `record.$type` must
+match; `rkey` is required for put/delete and generated as a TID when omitted for
+create. The repository must have a persisted signing key and
+`ATOLL_KEY_ENCRYPTION_KEY` configured. Session authorization is rechecked while
+holding the repository write lock and remains locked through commit.
+
+`swapCommit` checks the current commit CID. Put/delete also accept `swapRecord`;
+omitting it skips that check, while an explicit null on put requires the record
+to be absent. Delete does not accept null. A mismatch returns `InvalidSwap`
+without changing records, blob references, revisions, or events. Create rejects
+an existing key. Deleting an absent record succeeds.
+
+Create/put return `uri`, `cid`, commit metadata, and `validationStatus: "unknown"`;
+delete returns commit metadata. General ATProto data-model, collection/type, blob
+ownership, and record-size checks run for every write. Lexicon schema validation
+is not implemented: omitted/false `validate` is accepted and `validate: true`
+is rejected. Request JSON is limited to 2 MiB; encoded records retain their 1 MB
+limit. Writes allow 300 requests per direct peer IP per five minutes using the
+same per-node limiter as sessions, and responses use `Cache-Control: no-store`.
 
 ### Identity, accounts, and authentication
 
@@ -109,7 +131,8 @@ and history retention policy remain pending.
 - [ ] Handle/email login, authentication factors, and restricted sessions for inactive accounts.
 - [ ] App passwords.
 - [ ] ATProto OAuth authorization and resource server support.
-- [ ] Authorization checks for account and repository operations.
+- [x] Live-session and repository ownership checks for blob uploads and single-record writes.
+- [ ] Authorization for remaining account and repository operations.
 - [ ] Account migration, identity updates, and signing-key lifecycle.
 
 `Atoll.Accounts.Credentials.create/2` is a trusted internal operation that attaches
@@ -177,8 +200,8 @@ Creation, access verification, and refresh currently require an active repositor
 revocation is also allowed for inactive repositories. Sessions survive process
 restarts. Changing the signing key invalidates existing tokens. Key rotation with
 overlap, expired-session cleanup, session-count limits, and restricted sessions for
-inactive accounts remain pending. Future write handlers must enforce authorization
-again inside the write transaction; token verification alone is not write permission.
+inactive accounts remain pending. Write handlers recheck authorization inside the
+write transaction; token verification alone is not write permission.
 
 ### Blobs
 
@@ -351,7 +374,7 @@ events. The `[:atoll, :identity, :refresh]` telemetry event reports a count and
 
 - [x] `mix precommit` checks compilation warnings, unused dependency locks, formatting, and tests.
 - [x] GitHub Actions runs checks and the Docker MinIO integration suite on every push (also available manually).
-- [x] Session and blob-upload rate limits and bounded request bodies.
+- [x] Session, blob-upload, and single-record-write rate limits and bounded request bodies.
 - [ ] General API rate limits, distributed limits, and trusted-proxy client IP handling.
 - [ ] Administrative account controls and takedowns.
 - [ ] Production configuration, HTTPS deployment, and signing-key protection.
