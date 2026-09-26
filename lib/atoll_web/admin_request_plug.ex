@@ -17,6 +17,7 @@ defmodule AtollWeb.AdminRequestPlug do
   @queries [
     "/xrpc/com.atproto.admin.getInviteCodes",
     "/xrpc/com.atproto.admin.getSubjectStatus",
+    "/xrpc/com.atproto.admin.searchAccounts",
     "/xrpc/com.atproto.admin.getAccountInfo",
     "/xrpc/com.atproto.admin.getAccountInfos"
   ]

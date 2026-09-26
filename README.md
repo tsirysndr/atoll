@@ -760,6 +760,7 @@ observations do not produce duplicate events. The
 - [x] Operator record takedowns for JSON record reads and listings (signed sync data remains available).
 - [x] Transactional history of successful account/record/blob subject-status decisions, with bounded operator export.
 - [x] Operator account inspection, singly and in bounded batches, with private metadata and invite histories.
+- [x] Operator account search with bounded DID pagination and exact email filtering.
 - [x] Audited operator email correction with invalidation of old email challenges.
 - [x] Audited operator password replacement with session, app-password, and pending-code revocation.
 - [x] Transactional audit history for account invite enable/disable decisions and private reason changes.
@@ -1843,6 +1844,25 @@ entries across all account views, including repeated appearances of a shared
 `invitedBy` code. Oversized histories return an explicit error instead of a partial
 account view. Use smaller DID batches or `com.atproto.admin.getInviteCodes`
 pagination to inspect large invite histories.
+
+### Administrative account search
+
+`GET com.atproto.admin.searchAccounts` returns `{ "accounts": [...] }` and an
+optional continuation `cursor`. `limit` defaults to 50 and accepts 1–100. Optional
+`email` matches a complete normalized email address exactly, without wildcard or
+substring matching. Results are ordered by DID and include inactive accounts and
+pending signup profiles; repositories without account profiles are omitted.
+
+Results contain account summaries with available email metadata and invitation
+controls. Invite histories are omitted; use `getAccountInfo` or `getAccountInfos`
+for those. The route requires operator Basic authentication before query parsing,
+shares the admin rate limit, and returns `no-store`. Each page uses one database
+query with one-second lock and five-second statement timeouts.
+
+Cursors are bound to the normalized email filter and continue after the last DID,
+even if that account has since been deleted. They are unsigned pagination markers,
+not authorization credentials. Pages do not share a database snapshot; concurrent
+insertions or email changes can change membership between requests.
 
 ### Operator email correction
 

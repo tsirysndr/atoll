@@ -3,6 +3,7 @@ defmodule AtollWeb.AdminAccountControllerTest do
   alias Atoll.{Repo, Repositories, SigningKey}
   alias Atoll.Accounts.{AdminInfo, Invite, InviteControl, Invites, InviteUse, Profile, Sessions}
   @get "/xrpc/com.atproto.admin.getAccountInfo"
+  @search "/xrpc/com.atproto.admin.searchAccounts"
   @batch "/xrpc/com.atproto.admin.getAccountInfos"
   @did "did:web:admin-info.example.com"
   @secret "separate-operator-secret-for-account-info"
@@ -32,6 +33,79 @@ defmodule AtollWeb.AdminAccountControllerTest do
       profile: profile,
       pair: pair
     }
+  end
+
+  test "search paginates summaries in DID order including inactive accounts", c do
+    second = "did:web:second-search.example.com"
+    third = "did:web:third-search.example.com"
+    account(second, "second-search.example.com", nil)
+    account(third, "third-search.example.com", "third@example.com")
+    {:ok, _} = Repositories.set_status(second, :takendown)
+    {:ok, _} = Repositories.set_status(third, :deactivated)
+    {:ok, _} = Repositories.create("did:web:without-profile.example.com", SigningKey.generate())
+    {:ok, _} = Invites.create(1, @did)
+    first = auth(c.conn) |> get(@search, %{limit: 1})
+    assert get_resp_header(first, "cache-control") == ["no-store"]
+    result = json_response(first, 200)
+    assert [%{"did" => @did} = summary] = result["accounts"]
+
+    assert Enum.sort(Map.keys(summary)) ==
+             Enum.sort(~w(did handle indexedAt email invitesDisabled))
+
+    refute Map.has_key?(summary, "invites")
+    refute Map.has_key?(summary, "invitedBy")
+    # Keyset pagination does not require the anchor account to continue existing.
+    Repo.delete!(Repo.get!(Atoll.Repositories.Head, @did))
+
+    page =
+      auth(c.conn) |> get(@search, %{limit: 1, cursor: result["cursor"]}) |> json_response(200)
+
+    assert [%{"did" => ^second} = summary] = page["accounts"]
+    refute Map.has_key?(summary, "email")
+
+    last =
+      auth(c.conn) |> get(@search, %{limit: 100, cursor: page["cursor"]}) |> json_response(200)
+
+    assert [%{"did" => ^third}] = last["accounts"]
+    refute Map.has_key?(last, "cursor")
+  end
+
+  test "search email filter is normalized exact matching and cursors bind the filter", c do
+    account("did:web:second-email.example.com", "second-email.example.com", "other@example.com")
+    result = auth(c.conn) |> get(@search, %{email: "PRIVATE@EXAMPLE.COM"}) |> json_response(200)
+    assert [%{"did" => @did, "email" => "private@example.com"}] = result["accounts"]
+    refute Map.has_key?(result, "cursor")
+
+    assert auth(c.conn) |> get(@search, %{email: "private%@example.com"}) |> json_response(200) ==
+             %{"accounts" => []}
+
+    unfiltered = auth(c.conn) |> get(@search, %{limit: 1}) |> json_response(200)
+
+    assert auth(c.conn)
+           |> get(@search, %{email: "private@example.com", cursor: unfiltered["cursor"]})
+           |> json_response(400)
+
+    seq = Atoll.Repositories.Events.latest_seq()
+    assert {:ok, %{accounts: accounts}} = Atoll.Accounts.AdminSearch.search(%{})
+    assert length(accounts) == 2
+    assert Atoll.Repositories.Events.latest_seq() == seq
+  end
+
+  test "search rejects malformed limits, cursors and undeclared parameters", c do
+    for params <- [
+          %{limit: 0},
+          %{limit: 101},
+          %{limit: "1.0"},
+          %{email: "invalid"},
+          %{cursor: "malformed"},
+          %{cursor: String.duplicate("a", 4097)},
+          %{extra: "unexpected"}
+        ] do
+      assert auth(c.conn) |> get(@search, params) |> json_response(400)
+    end
+
+    assert auth(c.conn) |> get(@search <> "?limit=1&limit=2") |> json_response(400)
+    assert get(c.conn, "/xrpc/com.atproto.admin.%73earchAccounts?bad=%ZZ") |> json_response(401)
   end
 
   test "returns complete private metadata and invite histories without allocating new invites",
@@ -112,7 +186,7 @@ defmodule AtollWeb.AdminAccountControllerTest do
 
   test "both routes authenticate before parsing, reject session tokens, and validate bounded input",
        c do
-    for path <- [@get, @batch] do
+    for path <- [@get, @batch, @search] do
       assert get(c.conn, path <> "?bad=%ZZ") |> json_response(401)
 
       assert c.conn
@@ -190,6 +264,7 @@ defmodule AtollWeb.AdminAccountControllerTest do
     result = auth(c.conn) |> get(@batch, %{dids: [@did]})
     assert json_response(result, 429)["error"] == "RateLimitExceeded"
     assert get_resp_header(result, "retry-after") != []
+    assert auth(c.conn) |> get(@search) |> json_response(429)
   end
 
   defp account(did, handle, email) do

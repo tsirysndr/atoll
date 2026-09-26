@@ -4,6 +4,10 @@ defmodule AtollWeb.AdminAccountController do
   plug AtollWeb.AdminAuth
   action_fallback AtollWeb.XRPCFallback
 
+  def search(conn, params) do
+    with {:ok, result} <- Atoll.Accounts.AdminSearch.search(params), do: json(conn, result)
+  end
+
   def send_email(conn, _) do
     with {:ok, result} <- Atoll.Accounts.AdminMessage.deliver(conn.body_params),
          do: json(conn, result)

@@ -88,11 +88,17 @@ defmodule Atoll.Accounts.AdminInfo do
   end
 
   defp format(profile, by_owner, invited_by) do
+    summary(profile)
+    |> Map.put(:invites, Map.get(by_owner, profile.did, []))
+    |> optional(:invitedBy, invited_by[profile.did])
+  end
+
+  @doc "Internal accountView summary, excluding expanded invite histories and secrets."
+  def summary(profile) do
     %{
       did: profile.did,
       handle: profile.handle || "handle.invalid",
       indexedAt: DateTime.to_iso8601(profile.inserted_at),
-      invites: Map.get(by_owner, profile.did, []),
       invitesDisabled: profile.invites_disabled
     }
     |> optional(:email, profile.email)
@@ -101,7 +107,6 @@ defmodule Atoll.Accounts.AdminInfo do
       profile.email_confirmed_at && DateTime.to_iso8601(profile.email_confirmed_at)
     )
     |> optional(:inviteNote, profile.invite_control_note)
-    |> optional(:invitedBy, invited_by[profile.did])
   end
 
   defp optional(map, _, nil), do: map
