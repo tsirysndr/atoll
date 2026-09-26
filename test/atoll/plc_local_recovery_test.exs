@@ -329,6 +329,147 @@ defmodule Atoll.PLCLocalRecoveryTest do
     assert {:ok, [%{kind: :identity}]} = Events.list_after(seq)
   end
 
+  test "combined recovery restores both keys after losing the old encryption master", c do
+    repository = SigningKey.generate(:p256)
+    authority = SigningKey.generate()
+
+    {op, cid, expected_repository, expected_authority} =
+      combined_recovery(c, repository, authority)
+
+    Application.put_env(:atoll, :key_encryption_key, :crypto.strong_rand_bytes(32))
+    seq = Events.latest_seq()
+    assert {:error, :key_decryption_failed} = KeyVault.fetch(c.did)
+    assert {:error, :key_decryption_failed} = Registrations.rotation_key(c.did)
+
+    assert {:ok, _} =
+             LocalRecovery.stage_keys(
+               c.did,
+               op,
+               {expected_repository, repository},
+               {expected_authority, authority},
+               c.opts
+             )
+
+    row = Repo.get_by!(Update, did: c.did, cid: cid)
+    assert row.signing_envelope && row.authority_envelope
+    assert {:ok, _} = LocalRecovery.resume(c.did, cid, c.opts)
+    assert KeyVault.fetch(c.did) == {:ok, repository}
+    assert Registrations.rotation_key(c.did) == {:ok, authority}
+    completed = Repo.get_by!(Update, did: c.did, cid: cid)
+    assert completed.completed_at
+    refute completed.signing_envelope
+    refute completed.authority_envelope
+    assert {:ok, [%{kind: :identity}, %{kind: :sync}]} = Events.list_after(seq)
+    assert {:error, _} = Sessions.authenticate(c.pair.access_jwt)
+    audit = Repo.one!(Atoll.Moderation.AuditEntry)
+    assert audit.before_state["authorityKey"] == expected_authority
+    {:ok, public} = Multikey.to_did_key(authority.curve, authority.public)
+    assert audit.after_state["authorityKey"] == public
+    {:ok, fresh} = Sessions.create_for_account(c.did)
+    assert {:ok, _} = LocalRecovery.resume(c.did, cid, c.opts)
+    assert {:ok, _} = Sessions.authenticate(fresh.access_jwt)
+    assert Agent.get(c.directory, & &1.posts) == 1
+  end
+
+  test "combined recovery rollback restores old authority and keeps both pending keys", c do
+    repository = SigningKey.generate(:p256)
+    authority = SigningKey.generate()
+
+    {op, cid, expected_repository, expected_authority} =
+      combined_recovery(c, repository, authority)
+
+    assert {:ok, _} =
+             LocalRecovery.stage_keys(
+               c.did,
+               op,
+               {expected_repository, repository},
+               {expected_authority, authority},
+               c.opts
+             )
+
+    Application.put_env(:atoll, :repository_quota, max_bytes: 0)
+    seq = Events.latest_seq()
+    assert {:error, :repository_quota_exceeded} = LocalRecovery.resume(c.did, cid, c.opts)
+    assert Registrations.rotation_key(c.did) == {:ok, c.high}
+    assert {:ok, _} = Sessions.authenticate(c.pair.access_jwt)
+    assert Events.latest_seq() == seq
+    assert {:ok, ^repository} = Atoll.Identity.PLC.PendingSigningKeys.fetch(c.did, cid)
+    assert {:ok, ^authority} = Atoll.Identity.PLC.PendingAuthorityKeys.fetch(c.did, cid)
+    Application.delete_env(:atoll, :repository_quota)
+    assert {:ok, _} = LocalRecovery.resume(c.did, cid, c.opts)
+    assert Agent.get(c.directory, & &1.posts) == 1
+  end
+
+  test "authority-only recovery repairs custody and leaves repository commit unchanged", c do
+    {:ok, repository} = KeyVault.fetch(c.did)
+    {op, cid, _, expected_authority} = combined_recovery(c, repository, c.high)
+
+    Repo.get!(Atoll.Identity.PLC.Registration, c.did)
+    |> Ecto.Changeset.change(rotation_envelope: :binary.copy(<<0>>, 61))
+    |> Repo.update!(log: false)
+
+    seq = Events.latest_seq()
+    assert {:ok, _} = LocalRecovery.stage_authority(c.did, op, expected_authority, c.high, c.opts)
+    assert {:ok, _} = LocalRecovery.resume(c.did, cid, c.opts)
+    assert Registrations.rotation_key(c.did) == {:ok, c.high}
+    assert Repositories.get_head(c.did) == {:ok, c.head}
+    assert {:ok, [%{kind: :identity}]} = Events.list_after(seq)
+  end
+
+  test "combined CLI staging resumes after both private files are removed", c do
+    repository = SigningKey.generate(:p256)
+    authority = SigningKey.generate()
+
+    {op, cid, expected_repository, expected_authority} =
+      combined_recovery(c, repository, authority)
+
+    base = Path.join(System.tmp_dir!(), "atoll-combined-#{System.unique_integer([:positive])}")
+    paths = Enum.map(["op", "repository", "authority"], &(base <> "." <> &1 <> ".json"))
+    [op_path, repository_path, authority_path] = paths
+    on_exit(fn -> Enum.each(paths, &File.rm/1) end)
+    File.write!(op_path, Jason.encode!(op))
+
+    for {path, key} <- [{repository_path, repository}, {authority_path, authority}] do
+      File.write!(
+        path,
+        Jason.encode!(%{curve: Atom.to_string(key.curve), privateKey: Base.encode64(key.private)})
+      )
+
+      File.chmod!(path, 0o600)
+    end
+
+    Application.put_env(:atoll, :identity_resolution_options, Keyword.drop(c.opts, [:plug]))
+    Application.put_env(:atoll, :plc_submission_options, Keyword.take(c.opts, [:plug]))
+
+    output =
+      ExUnit.CaptureIO.capture_io(fn ->
+        Mix.Tasks.Atoll.Plc.Recover.run([
+          "stage-keys",
+          c.did,
+          op_path,
+          repository_path,
+          expected_repository,
+          authority_path,
+          expected_authority
+        ])
+      end)
+
+    assert Jason.decode!(output)["cid"] == cid
+    refute output =~ Base.encode64(repository.private)
+    refute output =~ Base.encode64(authority.private)
+    File.rm!(repository_path)
+    File.rm!(authority_path)
+
+    output =
+      ExUnit.CaptureIO.capture_io(fn ->
+        Mix.Tasks.Atoll.Plc.Recover.run(["resume", c.did, cid])
+      end)
+
+    assert Jason.decode!(output)["result"] == "completed"
+    assert KeyVault.fetch(c.did) == {:ok, repository}
+    assert Registrations.rotation_key(c.did) == {:ok, authority}
+  end
+
   test "stage-key CLI bounds and redacts private input", c do
     new = SigningKey.generate(:p256)
     {op, cid, expected} = key_recovery(c, new)
@@ -411,6 +552,24 @@ defmodule Atoll.PLCLocalRecoveryTest do
         Mix.Tasks.Atoll.Plc.Recover.run(["stage", c.did, path])
       end
     end
+  end
+
+  defp combined_recovery(c, repository, authority) do
+    {:ok, public} = Multikey.to_did_key(repository.curve, repository.public)
+    {:ok, authority_public} = Multikey.to_did_key(authority.curve, authority.public)
+    {:ok, expected_repository} = Multikey.to_did_key(c.head.curve, c.head.public_key)
+    {:ok, expected_authority} = Atoll.Identity.PLC.RotationKeys.public_key(c.did)
+
+    {:ok, op} =
+      c.recovery
+      |> Map.delete("sig")
+      |> put_in(["verificationMethods", "atproto"], public)
+      |> Map.put("rotationKeys", [authority_public])
+      |> Operation.sign(c.high)
+
+    {:ok, cid} = Operation.cid(op)
+    Agent.update(c.directory, &%{&1 | operation: op})
+    {op, cid, expected_repository, expected_authority}
   end
 
   defp key_recovery(c, key) do

@@ -1,5 +1,5 @@
 defmodule Atoll.Identity.PLC.LocalRecovery do
-  @moduledoc "Operator reconciliation of signed PLC recovery with optional repository-key restoration."
+  @moduledoc "Operator reconciliation of signed PLC recovery with optional repository and authority key restoration."
   import Ecto.Query
   alias Atoll.{CBOR, KeyVault, Multikey, Repo, Repositories, SigningKey}
   alias Atoll.Accounts.{Profile, Signup}
@@ -9,6 +9,8 @@ defmodule Atoll.Identity.PLC.LocalRecovery do
     Client,
     Operation,
     PendingSigningKeys,
+    PendingAuthorityKeys,
+    RotationKeys,
     Recoveries,
     Registrations,
     Update,
@@ -59,25 +61,53 @@ defmodule Atoll.Identity.PLC.LocalRecovery do
     end
   end
 
-  def stage_key(did, operation, expected, key, opts \\ [])
+  def stage_key(did, operation, expected, key, opts \\ []),
+    do: stage_keys(did, operation, {expected, key}, nil, opts)
 
-  def stage_key(did, operation, expected, %SigningKey{} = key, opts) do
+  def stage_authority(did, operation, expected, key, opts \\ []),
+    do: stage_keys(did, operation, nil, {expected, key}, opts)
+
+  def stage_keys(did, operation, repository, authority, opts \\ []) do
     with false <- Repo.in_transaction?(),
          :ok <- Operation.validate_submission(operation),
-         {:ok, _} <- Multikey.from_did_key(expected),
-         {:ok, derived} <- SigningKey.from_private(key.curve, key.private),
-         true <- derived.public == key.public,
-         {:ok, public} <- Multikey.to_did_key(key.curve, key.public),
+         true <- not is_nil(repository) or not is_nil(authority),
+         {:ok, repository_context} <- validate_key(repository),
+         {:ok, authority_context} <- validate_key(authority),
          %Profile{} = profile <- Repo.get(Profile, did),
          observation = Repo.get(Observation, did),
          {:ok, %{entries: audit}} <- Client.fetch_audit(did, Keyword.take(opts, [:plug])),
          :ok <- forward(did, profile.handle, opts) do
       Repo.transaction(fn ->
         head = lock!(did)
-        fence!(head, operation, profile.handle, observation, {expected, public})
-        unwrap!(PendingSigningKeys.stage_recovery(did, audit, operation, expected, key))
+
+        fence!(
+          head,
+          operation,
+          profile.handle,
+          observation,
+          repository_context,
+          authority_context
+        )
+
+        if repository do
+          {expected, key} = repository
+          unwrap!(PendingSigningKeys.stage_recovery(did, audit, operation, expected, key))
+        end
+
+        if authority do
+          {expected, key} = authority
+          unwrap!(PendingAuthorityKeys.stage_recovery(did, audit, operation, expected, key))
+        end
+
         {:ok, cid} = Operation.cid(operation)
-        %{did: did, cid: cid, repository_key: public, result: :staged}
+
+        %{
+          did: did,
+          cid: cid,
+          repository_key: context_public(repository_context),
+          authority_key: context_public(authority_context),
+          result: :staged
+        }
       end)
     else
       true -> {:error, :plc_update_inside_transaction}
@@ -87,7 +117,22 @@ defmodule Atoll.Identity.PLC.LocalRecovery do
     end
   end
 
-  def stage_key(_, _, _, _, _), do: {:error, :invalid_key}
+  defp validate_key(nil), do: {:ok, nil}
+
+  defp validate_key({expected, %SigningKey{} = key}) do
+    with {:ok, _} <- Multikey.from_did_key(expected),
+         {:ok, derived} <- SigningKey.from_private(key.curve, key.private),
+         true <- derived.public == key.public,
+         {:ok, public} <- Multikey.to_did_key(key.curve, key.public) do
+      {:ok, {expected, public}}
+    else
+      _ -> {:error, :invalid_key}
+    end
+  end
+
+  defp validate_key(_), do: {:error, :invalid_key}
+  defp context_public(nil), do: nil
+  defp context_public({_, public}), do: public
 
   def resume(did, cid, opts \\ []) do
     with false <- Repo.in_transaction?(),
@@ -115,12 +160,14 @@ defmodule Atoll.Identity.PLC.LocalRecovery do
           current.operation,
           profile.handle,
           if(current.completed_at, do: Repo.get(Observation, did), else: observation),
-          key_context!(current)
+          key_context!(current),
+          authority_context!(current)
         )
 
         unless current.completed_at do
           counts = Atoll.Accounts.CredentialRevocation.revoke!(did)
           Events.append!(:identity, head, %{"handle" => profile.handle})
+          if current.authority_public_key, do: RotationKeys.restore_pending!(did, cid)
 
           updated =
             if current.signing_public_key do
@@ -149,6 +196,7 @@ defmodule Atoll.Identity.PLC.LocalRecovery do
 
           Updates.complete!(did, cid)
           if current.signing_public_key, do: PendingSigningKeys.release!(did, cid)
+          if current.authority_public_key, do: PendingAuthorityKeys.release!(did, cid)
           Atoll.Moderation.Audit.recovery!(current, counts)
         end
 
@@ -167,14 +215,12 @@ defmodule Atoll.Identity.PLC.LocalRecovery do
     Repo.transaction(fn ->
       head = lock!(row.did)
 
-      fence!(head, row.operation, handle, observation, key_context!(row))
+      fence!(head, row.operation, handle, observation, key_context!(row), authority_context!(row))
       :ok
     end)
   end
 
   defp key_context!(row) do
-    if row.authority_public_key, do: Repo.rollback(:unsupported_recovery_key_change)
-
     if row.signing_public_key && is_nil(row.completed_at) do
       key = unwrap!(PendingSigningKeys.fetch(row.did, row.cid))
       {:ok, public} = Multikey.to_did_key(key.curve, key.public)
@@ -182,7 +228,15 @@ defmodule Atoll.Identity.PLC.LocalRecovery do
     end
   end
 
-  defp fence!(head, operation, handle, observation, key_context \\ nil) do
+  defp authority_context!(row) do
+    if row.authority_public_key && is_nil(row.completed_at) do
+      key = unwrap!(PendingAuthorityKeys.fetch(row.did, row.cid))
+      {:ok, public} = Multikey.to_did_key(key.curve, key.public)
+      {row.expected_authority_key, public}
+    end
+  end
+
+  defp fence!(head, operation, handle, observation, key_context \\ nil, authority_context \\ nil) do
     unless head.status in [:active, :deactivated], do: Repo.rollback(:repo_inactive)
     check!(Operation.validate_submission(operation))
     {:ok, current_key} = Multikey.to_did_key(head.curve, head.public_key)
@@ -198,8 +252,18 @@ defmodule Atoll.Identity.PLC.LocalRecovery do
           replacement
       end
 
-    authority = unwrap!(Registrations.rotation_key(head.did))
-    {:ok, authority_id} = Multikey.to_did_key(authority.curve, authority.public)
+    authority_id =
+      case authority_context do
+        nil ->
+          authority = unwrap!(Registrations.rotation_key(head.did))
+          unwrap!(Multikey.to_did_key(authority.curve, authority.public))
+
+        {expected, replacement} ->
+          unless RotationKeys.public_key(head.did) == {:ok, expected},
+            do: Repo.rollback(:stale_rotation_key)
+
+          replacement
+      end
 
     unless get_in(operation, ["verificationMethods", "atproto"]) == key and
              get_in(operation, ["services", "atproto_pds"]) == %{

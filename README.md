@@ -149,7 +149,8 @@ record Lexicons or grant access to account data.
 - [x] Durable encrypted repository-key custody for signed recovery forks, including same-key repair.
 - [x] Operator recovery with supplied repository private keys, including unreadable-vault repair and atomic commit publication.
 - [x] Internal recovery custody and atomic restoration of PLC authority keys without decrypting old custody.
-- [ ] Operator recovery with replacement PLC authority keys, combined key restoration, and pending-operation conflict resolution.
+- [x] Operator authority-only and combined repository/authority key recovery, including old-master-key loss.
+- [ ] Recovery conflict resolution for existing pending operations and missing authority metadata.
 - [x] Per-revision signing-key provenance for historical record and block verification.
 - [x] Internal atomic repository signing-key replacement with unchanged-tree commits and vault rollback.
 - [x] PostgreSQL repository heads and atomic record, tree, and commit updates with optional head compare-and-swap.
@@ -331,7 +332,7 @@ mutation. Deletes and empty batches need no record schema, even with `validate: 
 - [x] Legacy PLC predecessor conversion and signed handle-update staging/completion.
 - [x] Operator installation of directory-authorized PLC rotation keys for imported modern/legacy accounts.
 - [x] Explicit operator replacement of installed rotation keys with expected-key checks and fresh authority verification.
-- [ ] On-directory rotation-key recovery workflows.
+- [x] Operator signed on-directory rotation-key recovery with supplied private keys.
 - [x] Authenticated account activation and deactivation with atomic status events.
 - [x] Service-authenticated `createAccount` for migration of an existing DID.
 - [x] Authenticated recommended DID credentials for the destination signing key and service.
@@ -3416,8 +3417,9 @@ fresh network authorization or submit an operation; its caller must do so.
 Custody uses a separate authenticated encryption domain from repository signing
 keys, binding the DID, operation CID, expected authority key, curve, and new
 public key. Exact retries preserve custody, and ambiguous delivery never removes
-it. One retained authority envelope per account and separate purposes for
-repository/authority transitions are enforced in PostgreSQL. The master-key
+it. One retained authority envelope per account is enforced in PostgreSQL. Ordinary
+updates permit one key purpose; verified recovery journals may retain both
+repository and authority keys. The master-key
 rewrap command includes pending authority envelopes in its `plc` count and aborts
 the whole page if an envelope cannot be verified.
 
@@ -3529,8 +3531,8 @@ acceptance. Expiry, rejection, conflicts and timeouts retain the exact staged
 operation. Generic ordinary-update submission paths cannot complete recovery
 journals. Account deletion cascades the journal. The operator command below
 provides authorized staging and atomic local completion for restoring existing
-readable local keys, with optional repository-key replacement. Recovery with
-replacement PLC authority keys and conflicting pending work remains unfinished.
+local keys, with optional repository and PLC authority key replacement. Recovery
+with conflicting pending work or missing authority metadata remains unfinished.
 
 ### Operator recovery of the current local identity
 
@@ -3567,9 +3569,9 @@ keys are still trusted and readable. It does not repair compromised account
 passwords/email, revoke service tokens already accepted by external services,
 replace lost/private keys, or overwrite another pending PLC operation. Use the
 existing password-management workflow when local credentials are compromised.
-Repository-key replacement is supported by `stage-key` below. Recovery requiring
-new PLC authority custody and pending-operation conflict reconciliation remains
-unfinished.
+Repository-key replacement is supported by `stage-key` below; `stage-authority`
+and `stage-keys` also restore PLC authority custody. Pending-operation conflict
+reconciliation and recovery with missing authority metadata remain unfinished.
 
 Directory acceptance and local completion cannot be atomic. Keep the journal
 after any interruption, and use `status` to recover its CID before retrying
@@ -3664,9 +3666,8 @@ and retains the encrypted key and confirmed journal for retry. Completed retries
 do not revoke newly created sessions or duplicate events/audits.
 
 This supports missing or unreadable repository custody; the retained PLC authority
-must still be readable and authorized by the recovery operation. Replacing or
-restoring lost PLC authority custody and handling conflicting pending operations
-remain unfinished. Recovery still requires an authorized signing key; private
+must still be readable and authorized by the recovery operation. Authority restoration and combined recovery are described below. Handling
+conflicting pending operations remains unfinished. Recovery still requires an authorized signing key; private
 keys cannot be reconstructed from public keys.
 
 ### Internal recovery of PLC authority custody
@@ -3699,6 +3700,44 @@ This supports loss of the old authority's encryption master key when the
 replacement private key and an authorized signed recovery are available. It
 does not recover private material from public metadata or repair other vault
 envelopes encrypted under a lost master key. The original signup envelope remains
-retained, with the installed authority taking precedence. Operator integration,
-simultaneous repository/authority recovery, and conflicting pending-operation
-handling remain unfinished.
+retained, with the installed authority taking precedence. Operator integration and simultaneous repository/authority recovery are
+described below. Conflicting pending-operation handling remains unfinished.
+
+### Operator authority-only and combined key recovery
+
+The recovery command also accepts an authority key alone, or both repository and
+authority keys under the same signed fork:
+
+```sh
+mix atoll.plc.recover stage-authority did:plc:ACCOUNT signed-recovery.json /secure/authority.json EXPECTED_AUTHORITY_DID_KEY
+mix atoll.plc.recover stage-keys did:plc:ACCOUNT signed-recovery.json /secure/repository.json EXPECTED_REPOSITORY_DID_KEY /secure/authority.json EXPECTED_AUTHORITY_DID_KEY
+mix atoll.plc.recover resume did:plc:ACCOUNT STAGED_OPERATION_CID
+```
+
+Each private-key file uses the same strict 4 KiB JSON format as `stage-key`. Each
+expected did:key is compared with the corresponding retained public metadata;
+the signed recovery must authorize the supplied repository key and include the
+supplied authority in its rotation-key list. Omitted keys must remain readable
+and compatible with the recovered identity. The local PDS service and handle
+checks, recovery priority/window verification, and reviewed-head protections
+apply to every form. The external key signing the fork is not supplied to Atoll.
+
+Both envelopes and the journal stage in one transaction. Resume needs only the
+CID after staging. Following verified directory acceptance, authority installation,
+repository restoration, credential revocation, identity observation/event, any
+new repository commit/sync event, journal completion, pending-secret erasure and
+public-metadata audit all commit atomically. Repository publication failure rolls
+back authority installation as well, leaving both pending keys available for
+retry. Authority-only repair does not change the repository commit.
+
+Combined recovery can restore both active vaults under a new master key even if
+the old master key is lost, provided authorized replacement private keys and a
+valid signed recovery remain available. Existing public authority metadata is
+required; missing metadata and conflicting pending operations still need an
+operator reconciliation workflow. The old signup envelope remains retained as
+historical custody and may remain unreadable; recovery does not restore lost
+master keys or make those old envelopes rewrappable.
+
+The migration permits both key purposes only for recovery journals. Ordinary
+rotation retains the one-purpose constraint. Rolling back this migration refuses
+existing combined-key journal rows rather than discarding their metadata.

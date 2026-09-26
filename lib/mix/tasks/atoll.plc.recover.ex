@@ -4,11 +4,14 @@ defmodule Mix.Tasks.Atoll.Plc.Recover do
   @moduledoc """
       mix atoll.plc.recover stage DID SIGNED_OPERATION_JSON_FILE
       mix atoll.plc.recover stage-key DID SIGNED_OPERATION_JSON_FILE PRIVATE_KEY_JSON_FILE EXPECTED_CURRENT_DID_KEY
+      mix atoll.plc.recover stage-authority DID SIGNED_OPERATION_JSON_FILE AUTHORITY_KEY_FILE EXPECTED_AUTHORITY_DID_KEY
+      mix atoll.plc.recover stage-keys DID SIGNED_OPERATION_JSON_FILE REPOSITORY_KEY_FILE EXPECTED_REPOSITORY_DID_KEY AUTHORITY_KEY_FILE EXPECTED_AUTHORITY_DID_KEY
       mix atoll.plc.recover status DID
       mix atoll.plc.recover resume DID OPERATION_CID
 
-  The signed recovery must match the local service, handle and retained PLC
-  authority. stage-key permits a supplied repository key; stage preserves it. Completion revokes sessions, app passwords,
+  The signed recovery must match the local service and handle. Supplied keys
+  replace the corresponding retained keys; omitted keys must remain readable
+  and authorized by the operation. Completion revokes sessions, app passwords
   and pending account challenges. Account password and email are unchanged.
   """
   def run(args) do
@@ -26,6 +29,37 @@ defmodule Mix.Tasks.Atoll.Plc.Recover do
             Atoll.Identity.PLC.LocalRecovery.stage_key(did, operation, expected, key, opts)
           end
 
+        ["stage-authority", "did:plc:" <> _ = did, path, key_path, expected] ->
+          operation = read_operation!(path)
+          key = read_key!(key_path)
+
+          fn opts ->
+            Atoll.Identity.PLC.LocalRecovery.stage_authority(did, operation, expected, key, opts)
+          end
+
+        [
+          "stage-keys",
+          "did:plc:" <> _ = did,
+          path,
+          repository_path,
+          expected_repository,
+          authority_path,
+          expected_authority
+        ] ->
+          operation = read_operation!(path)
+          repository = read_key!(repository_path)
+          authority = read_key!(authority_path)
+
+          fn opts ->
+            Atoll.Identity.PLC.LocalRecovery.stage_keys(
+              did,
+              operation,
+              {expected_repository, repository},
+              {expected_authority, authority},
+              opts
+            )
+          end
+
         ["status", "did:plc:" <> _ = did] ->
           fn _ -> Atoll.Identity.PLC.LocalRecovery.status(did) end
 
@@ -34,7 +68,7 @@ defmodule Mix.Tasks.Atoll.Plc.Recover do
 
         _ ->
           Mix.raise(
-            "Usage: mix atoll.plc.recover stage DID SIGNED_OPERATION_JSON_FILE | status DID | resume DID OPERATION_CID"
+            "Usage: mix atoll.plc.recover stage|stage-key|stage-authority|stage-keys|status|resume ... (see mix help atoll.plc.recover)"
           )
       end
 

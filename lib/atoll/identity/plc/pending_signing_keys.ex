@@ -59,7 +59,8 @@ defmodule Atoll.Identity.PLC.PendingSigningKeys do
 
         row = Repo.get_by!(Update, did: did, cid: cid)
 
-        if row.authority_public_key, do: Repo.rollback(:pending_key_conflict)
+        if row.authority_public_key && is_nil(row.recovery_expected_head),
+          do: Repo.rollback(:pending_key_conflict)
 
         cond do
           row.completed_at ->
