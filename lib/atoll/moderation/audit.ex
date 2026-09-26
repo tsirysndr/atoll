@@ -58,12 +58,17 @@ defmodule Atoll.Moderation.Audit do
   end
 
   @doc "Records a locally reconciled recovery with public scope and credential counts."
-  def recovery!(row, counts) do
+  def recovery!(row, counts, observed_head \\ nil) do
+    requested = %{operationCid: row.cid, nullifiedCids: row.recovery_nullified_cids}
+
+    requested =
+      if observed_head, do: Map.put(requested, :observedHead, observed_head), else: requested
+
     insert!(
-      "atoll.plc.recover",
+      if(observed_head, do: "atoll.plc.reconcileRecovery", else: "atoll.plc.recover"),
       row.did,
       %{kind: "plcRecovery", did: row.did},
-      %{operationCid: row.cid, nullifiedCids: row.recovery_nullified_cids},
+      requested,
       %{
         directoryHead: row.recovery_expected_head,
         repositoryKey: row.expected_signing_key,
@@ -72,7 +77,7 @@ defmodule Atoll.Moderation.Audit do
           not is_nil(row.authority_public_key) and is_nil(row.expected_authority_key)
       },
       %{
-        directoryHead: row.cid,
+        directoryHead: observed_head || row.cid,
         repositoryKey:
           if(row.signing_public_key,
             do: elem(Atoll.Multikey.to_did_key(row.signing_curve, row.signing_public_key), 1)

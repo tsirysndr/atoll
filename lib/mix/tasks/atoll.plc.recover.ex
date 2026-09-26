@@ -8,6 +8,7 @@ defmodule Mix.Tasks.Atoll.Plc.Recover do
       mix atoll.plc.recover stage-keys DID SIGNED_OPERATION_JSON_FILE REPOSITORY_KEY_FILE EXPECTED_REPOSITORY_DID_KEY AUTHORITY_KEY_FILE EXPECTED_AUTHORITY_DID_KEY
       mix atoll.plc.recover status DID
       mix atoll.plc.recover resume DID OPERATION_CID
+      mix atoll.plc.recover reconcile DID OPERATION_CID EXPECTED_DIRECTORY_HEAD_CID
 
   The signed recovery must match the local service and handle. Supplied keys
   replace the corresponding retained keys; omitted keys must remain readable
@@ -15,6 +16,8 @@ defmodule Mix.Tasks.Atoll.Plc.Recover do
   and pending account challenges. Account password and email are unchanged.
   Use literal "absent" for EXPECTED_AUTHORITY_DID_KEY only when no local authority
   public metadata exists; repository expected keys must always be did:key values.
+  Reconcile verifies historical acceptance and a compatible reviewed current head
+  before local completion, without resubmitting the recovery operation.
   """
   def run(args) do
     action =
@@ -74,9 +77,12 @@ defmodule Mix.Tasks.Atoll.Plc.Recover do
         ["resume", "did:plc:" <> _ = did, cid] ->
           fn opts -> Atoll.Identity.PLC.LocalRecovery.resume(did, cid, opts) end
 
+        ["reconcile", "did:plc:" <> _ = did, cid, expected] ->
+          fn opts -> Atoll.Identity.PLC.LocalRecovery.reconcile(did, cid, expected, opts) end
+
         _ ->
           Mix.raise(
-            "Usage: mix atoll.plc.recover stage|stage-key|stage-authority|stage-keys|status|resume ... (see mix help atoll.plc.recover)"
+            "Usage: mix atoll.plc.recover stage|stage-key|stage-authority|stage-keys|status|resume|reconcile ... (see mix help atoll.plc.recover)"
           )
       end
 

@@ -926,6 +926,150 @@ defmodule Atoll.PLCLocalRecoveryTest do
     end
   end
 
+  test "accepted recovery reconciles after compatible advancement without reposting or repeated revocation",
+       c do
+    {:ok, %{cid: cid}} = LocalRecovery.stage(c.did, c.recovery, c.opts)
+
+    expected =
+      advance_recovery(
+        c,
+        c.recovery,
+        c.high,
+        &put_in(&1, ["services", "extra"], %{
+          "type" => "ExampleService",
+          "endpoint" => "https://extra.example.com"
+        })
+      )
+
+    seq = Events.latest_seq()
+    assert {:ok, %{result: :completed}} = LocalRecovery.reconcile(c.did, cid, expected, c.opts)
+    assert {:error, _} = Sessions.authenticate(c.pair.access_jwt)
+    assert Repo.aggregate(AppPassword, :count) == 0
+    assert Repositories.get_head(c.did) == {:ok, c.head}
+    assert {:ok, [%{kind: :identity}]} = Events.list_after(seq)
+    row = Repo.get_by!(Update, did: c.did, cid: cid)
+    assert row.confirmed_at && row.completed_at
+    audit = Repo.one!(Atoll.Moderation.AuditEntry)
+    assert audit.operation == "atoll.plc.reconcileRecovery"
+    assert audit.requested["observedHead"] == expected
+    {:ok, fresh} = Sessions.create_for_account(c.did)
+    seq = Events.latest_seq()
+    assert {:ok, _} = LocalRecovery.reconcile(c.did, cid, expected, c.opts)
+    assert {:ok, _} = Sessions.authenticate(fresh.access_jwt)
+    assert Events.latest_seq() == seq
+    assert Repo.aggregate(Atoll.Moderation.AuditEntry, :count) == 1
+    assert Agent.get(c.directory, & &1.posts) == 0
+  end
+
+  test "combined recovery reconciliation preserves custody and credentials on quota rollback",
+       c do
+    repository = SigningKey.generate(:p256)
+    authority = SigningKey.generate()
+
+    {op, cid, expected_repository, expected_authority} =
+      combined_recovery(c, repository, authority)
+
+    Application.put_env(:atoll, :key_encryption_key, :crypto.strong_rand_bytes(32))
+
+    assert {:ok, _} =
+             LocalRecovery.stage_keys(
+               c.did,
+               op,
+               {expected_repository, repository},
+               {expected_authority, authority},
+               c.opts
+             )
+
+    expected = advance_recovery(c, op, authority, & &1)
+    seq = Events.latest_seq()
+    Application.put_env(:atoll, :repository_quota, max_bytes: 0)
+
+    assert {:error, :repository_quota_exceeded} =
+             LocalRecovery.reconcile(c.did, cid, expected, c.opts)
+
+    assert {:ok, _} = Sessions.authenticate(c.pair.access_jwt)
+    assert Events.latest_seq() == seq
+    row = Repo.get_by!(Update, did: c.did, cid: cid)
+    assert row.signing_envelope && row.authority_envelope
+    assert is_nil(row.confirmed_at) && is_nil(row.completed_at)
+    Application.delete_env(:atoll, :repository_quota)
+    assert {:ok, _} = LocalRecovery.reconcile(c.did, cid, expected, c.opts)
+    assert KeyVault.fetch(c.did) == {:ok, repository}
+    assert Registrations.rotation_key(c.did) == {:ok, authority}
+    row = Repo.get_by!(Update, did: c.did, cid: cid)
+    refute row.signing_envelope || row.authority_envelope
+    assert {:error, _} = Sessions.authenticate(c.pair.access_jwt)
+    assert {:ok, [%{kind: :identity}, %{kind: :sync}]} = Events.list_after(seq)
+    assert Agent.get(c.directory, & &1.posts) == 0
+  end
+
+  test "reviewed recovery scope and deadline must match historical acceptance", c do
+    {:ok, %{cid: cid}} = LocalRecovery.stage(c.did, c.recovery, c.opts)
+    expected = advance_recovery(c, c.recovery, c.high, & &1)
+    row = Repo.get_by!(Update, did: c.did, cid: cid)
+
+    for changes <- [
+          [recovery_expected_head: hd(c.audit)["cid"]],
+          [recovery_deadline: DateTime.add(row.recovery_deadline, -1, :second)],
+          [recovery_nullified_cids: [hd(c.audit)["cid"]]]
+        ] do
+      Repo.get_by!(Update, did: c.did, cid: cid)
+      |> Ecto.Changeset.change(changes)
+      |> Repo.update!()
+
+      assert {:error, _} = LocalRecovery.reconcile(c.did, cid, expected, c.opts)
+
+      Repo.get_by!(Update, did: c.did, cid: cid)
+      |> Ecto.Changeset.change(
+        recovery_expected_head: row.recovery_expected_head,
+        recovery_deadline: row.recovery_deadline,
+        recovery_nullified_cids: row.recovery_nullified_cids
+      )
+      |> Repo.update!()
+
+      assert {:ok, _} = Sessions.authenticate(c.pair.access_jwt)
+      assert is_nil(Repo.get_by!(Update, did: c.did, cid: cid).confirmed_at)
+    end
+
+    assert {:error, _} = LocalRecovery.reconcile(c.did, cid, cid, c.opts)
+    assert Repo.aggregate(Atoll.Moderation.AuditEntry, :count) == 0
+  end
+
+  test "incompatible current recovery identity leaves credentials and pending journal unchanged",
+       c do
+    {:ok, %{cid: cid}} = LocalRecovery.stage(c.did, c.recovery, c.opts)
+
+    for change <- [
+          &Map.put(&1, "alsoKnownAs", ["at://other.example.com"]),
+          &put_in(&1, ["services", "atproto_pds", "endpoint"], "https://other.example.com"),
+          &Map.put(&1, "rotationKeys", c.bad["rotationKeys"])
+        ] do
+      expected = advance_recovery(c, c.recovery, c.high, change)
+      assert {:error, _} = LocalRecovery.reconcile(c.did, cid, expected, c.opts)
+      assert {:ok, _} = Sessions.authenticate(c.pair.access_jwt)
+      assert is_nil(Repo.get_by!(Update, did: c.did, cid: cid).confirmed_at)
+    end
+
+    assert Agent.get(c.directory, & &1.posts) == 0
+  end
+
+  defp advance_recovery(c, operation, signer, change) do
+    {:ok, unsigned} = Operation.successor(operation)
+    {:ok, advanced} = Operation.sign(change.(unsigned), signer)
+    now = DateTime.utc_now()
+
+    audit = [
+      hd(c.audit),
+      Map.put(List.last(c.audit), "nullified", true),
+      entry(c.did, operation, now),
+      entry(c.did, advanced, DateTime.add(now, 1, :second))
+    ]
+
+    Agent.update(c.directory, &%{&1 | audit: audit, last: advanced})
+    {:ok, cid} = Operation.cid(advanced)
+    cid
+  end
+
   defp show_nullification(c, operation) do
     audit = [
       hd(c.audit),

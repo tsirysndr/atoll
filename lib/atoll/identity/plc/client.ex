@@ -115,7 +115,7 @@ defmodule Atoll.Identity.PLC.Client do
          {:ok, %{entries: audit, state: state}} <- fetch_audit(did, opts) do
       cond do
         state.cid == cid ->
-          recovery_accepted(audit, cid, reviewed)
+          verify_recovery_acceptance(audit, cid, reviewed)
 
         state.cid != expected_head ->
           {:error, :plc_conflict}
@@ -130,7 +130,7 @@ defmodule Atoll.Identity.PLC.Client do
 
             case fetch_audit(did, opts) do
               {:ok, %{state: %{cid: ^cid}, entries: accepted}} ->
-                recovery_accepted(accepted, cid, reviewed)
+                verify_recovery_acceptance(accepted, cid, reviewed)
 
               {:ok, %{state: %{cid: ^expected_head}}} ->
                 update_failure(posted)
@@ -153,7 +153,8 @@ defmodule Atoll.Identity.PLC.Client do
        else: {:error, :plc_recovery_conflict}
   end
 
-  defp recovery_accepted(entries, cid, reviewed) do
+  @doc "Internal acceptance check for a verified chronological audit prefix ending at the reviewed recovery."
+  def verify_recovery_acceptance(entries, cid, reviewed) do
     with [accepted, prior | _] <- Enum.reverse(entries),
          true <- accepted["cid"] == cid and prior["cid"] == reviewed.expected_head,
          {:ok, received, 0} <- DateTime.from_iso8601(accepted["createdAt"]),

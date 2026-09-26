@@ -156,63 +156,7 @@ defmodule Atoll.Identity.PLC.LocalRecovery do
          {:ok, %{state: state}} <- Client.fetch_audit(did, Keyword.take(opts, [:plug])),
          true <- not state.tombstoned and state.cid == cid,
          :ok <- forward(did, profile.handle, opts) do
-      Repo.transaction(fn ->
-        head = lock!(did)
-
-        current =
-          Repo.get_by(Update, did: did, cid: cid) || Repo.rollback(:plc_recovery_not_found)
-
-        unless is_nil(current.nullified_at) and current.operation == row.operation and
-                 current.confirmed_at,
-               do: Repo.rollback(:plc_conflict)
-
-        fence!(
-          head,
-          current.operation,
-          profile.handle,
-          if(current.completed_at, do: Repo.get(Observation, did), else: observation),
-          key_context!(current),
-          authority_context!(current)
-        )
-
-        unless current.completed_at do
-          counts = Atoll.Accounts.CredentialRevocation.revoke!(did)
-          Events.append!(:identity, head, %{"handle" => profile.handle})
-          if current.authority_public_key, do: RotationKeys.restore_pending!(did, cid)
-
-          updated =
-            if current.signing_public_key do
-              key = unwrap!(PendingSigningKeys.fetch(did, cid))
-              unwrap!(Repositories.recover_signing_key(did, key, head.head))
-            else
-              head
-            end
-
-          fingerprint =
-            :crypto.hash(
-              :sha256,
-              CBOR.encode!(%{
-                "handle" => profile.handle,
-                "claimedHandle" => profile.handle,
-                "pds" => AtollWeb.Endpoint.url(),
-                "curve" => Atom.to_string(updated.curve),
-                "key" => %CBOR.Bytes{data: updated.public_key}
-              })
-            )
-
-          Repo.insert!(%Observation{did: did, handle: profile.handle, fingerprint: fingerprint},
-            on_conflict: {:replace, [:handle, :fingerprint]},
-            conflict_target: [:did]
-          )
-
-          Updates.complete!(did, cid)
-          if current.signing_public_key, do: PendingSigningKeys.release!(did, cid)
-          if current.authority_public_key, do: PendingAuthorityKeys.release!(did, cid)
-          Atoll.Moderation.Audit.recovery!(current, counts)
-        end
-
-        %{did: did, cid: cid, result: :completed}
-      end)
+      finish(row, profile.handle, observation)
     else
       true -> {:error, :plc_update_inside_transaction}
       false -> {:error, :plc_conflict}
@@ -220,6 +164,123 @@ defmodule Atoll.Identity.PLC.LocalRecovery do
       %Update{} -> {:error, :plc_recovery_not_found}
       error -> error
     end
+  end
+
+  @doc "Reconcile a previously accepted recovery after compatible directory advancement; never submits."
+  def reconcile(did, cid, expected_head, opts \\ []) do
+    with false <- Repo.in_transaction?(),
+         %Update{nullified_at: nil, recovery_expected_head: expected} = row
+         when is_binary(expected) <- Repo.get_by(Update, did: did, cid: cid),
+         %Profile{} = profile <- Repo.get(Profile, did),
+         observation = Repo.get(Observation, did),
+         {:ok, %{entries: entries, state: state}} <-
+           Client.fetch_audit(did, Keyword.take(opts, [:plug])),
+         true <- not state.tombstoned and state.cid == expected_head and cid in state.active_cids,
+         {before, [accepted | _]} <- Enum.split_while(entries, &(&1["cid"] != cid)),
+         true <- accepted["operation"] == row.operation,
+         :ok <-
+           Client.verify_recovery_acceptance(before ++ [accepted], cid, %{
+             expected_head: row.recovery_expected_head,
+             valid_until: row.recovery_deadline,
+             nullified_cids: row.recovery_nullified_cids
+           }),
+         true <- state.operation["rotationKeys"] == row.operation["rotationKeys"],
+         :ok <- forward(did, profile.handle, opts) do
+      finish(row, profile.handle, observation, state)
+    else
+      true -> {:error, :plc_update_inside_transaction}
+      {:error, _} = error -> error
+      _ -> {:error, :plc_recovery_conflict}
+    end
+  end
+
+  defp finish(row, handle, observation, verified_head \\ nil) do
+    did = row.did
+    cid = row.cid
+
+    Repo.transaction(fn ->
+      head = lock!(did)
+
+      current =
+        Repo.get_by(Update, did: did, cid: cid) || Repo.rollback(:plc_recovery_not_found)
+
+      unless is_nil(current.nullified_at) and current.operation == row.operation and
+               (current.confirmed_at || verified_head),
+             do: Repo.rollback(:plc_conflict)
+
+      if verified_head do
+        unless current.previous == row.previous and
+                 current.recovery_expected_head == row.recovery_expected_head and
+                 current.recovery_deadline == row.recovery_deadline and
+                 current.recovery_nullified_cids == row.recovery_nullified_cids and
+                 verified_head.operation["rotationKeys"] == current.operation["rotationKeys"],
+               do: Repo.rollback(:plc_recovery_conflict)
+
+        fence!(
+          head,
+          verified_head.operation,
+          handle,
+          if(current.completed_at, do: Repo.get(Observation, did), else: observation),
+          key_context!(current),
+          authority_context!(current)
+        )
+
+        if is_nil(current.confirmed_at),
+          do: current |> Ecto.Changeset.change(confirmed_at: DateTime.utc_now()) |> Repo.update!()
+      end
+
+      fence!(
+        head,
+        current.operation,
+        handle,
+        if(current.completed_at, do: Repo.get(Observation, did), else: observation),
+        key_context!(current),
+        authority_context!(current)
+      )
+
+      unless current.completed_at do
+        counts = Atoll.Accounts.CredentialRevocation.revoke!(did)
+        Events.append!(:identity, head, %{"handle" => handle})
+        if current.authority_public_key, do: RotationKeys.restore_pending!(did, cid)
+
+        updated =
+          if current.signing_public_key do
+            key = unwrap!(PendingSigningKeys.fetch(did, cid))
+            unwrap!(Repositories.recover_signing_key(did, key, head.head))
+          else
+            head
+          end
+
+        fingerprint =
+          :crypto.hash(
+            :sha256,
+            CBOR.encode!(%{
+              "handle" => handle,
+              "claimedHandle" => handle,
+              "pds" => AtollWeb.Endpoint.url(),
+              "curve" => Atom.to_string(updated.curve),
+              "key" => %CBOR.Bytes{data: updated.public_key}
+            })
+          )
+
+        Repo.insert!(%Observation{did: did, handle: handle, fingerprint: fingerprint},
+          on_conflict: {:replace, [:handle, :fingerprint]},
+          conflict_target: [:did]
+        )
+
+        Updates.complete!(did, cid)
+        if current.signing_public_key, do: PendingSigningKeys.release!(did, cid)
+        if current.authority_public_key, do: PendingAuthorityKeys.release!(did, cid)
+
+        Atoll.Moderation.Audit.recovery!(
+          current,
+          counts,
+          if(verified_head, do: verified_head.cid)
+        )
+      end
+
+      %{did: did, cid: cid, result: :completed}
+    end)
   end
 
   defp preflight(row, handle, observation) do

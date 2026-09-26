@@ -156,7 +156,8 @@ record Lexicons or grant access to account data.
 - [x] Operator reconciliation of ordinary pending PLC operations retained in active history after compatible directory advancement.
 - [x] Operator completion of retained authority-key rotations after compatible directory advancement, without resubmission.
 - [x] Operator completion of repository signing-key rotations after compatible directory advancement, with atomic commit and custody publication.
-- [ ] Recovery or incompatible-identity conflict resolution after directory advancement, and resolution of pending operations absent from history.
+- [x] Operator completion of accepted recoveries after compatible directory advancement, including combined key restoration and credential revocation.
+- [ ] Conflicts caused by incompatible directory identities, and pending operations absent from directory history.
 - [x] Per-revision signing-key provenance for historical record and block verification.
 - [x] Internal atomic repository signing-key replacement with unchanged-tree commits and vault rollback.
 - [x] PostgreSQL repository heads and atomic record, tree, and commit updates with optional head compare-and-swap.
@@ -3738,6 +3739,34 @@ mix atoll.plc.recover stage did:plc:ACCOUNT signed-recovery.json
 mix atoll.plc.recover status did:plc:ACCOUNT
 mix atoll.plc.recover resume did:plc:ACCOUNT STAGED_OPERATION_CID
 ```
+
+If recovery was accepted but the directory advanced before local reconciliation:
+
+```sh
+mix atoll.plc.recover reconcile did:plc:ACCOUNT STAGED_OPERATION_CID EXPECTED_DIRECTORY_HEAD_CID
+```
+
+This command verifies fresh full audit history, the exact expected current head,
+and continued membership of the recovery CID in the active chain. It reconstructs
+the audit prefix at recovery acceptance and verifies the originally reviewed head,
+displaced CID list, and deadline. The deadline is checked at historical acceptance
+time; the command does not extend the recovery window or expand the reviewed scope.
+The latest identity must retain the recovery's authority list in the same order,
+intended repository key, local PDS service, and profile handle. Unrelated service
+changes are allowed. Forward ownership and local profile/observation checks remain
+required.
+
+No recovery POST occurs. One account transaction confirms historical acceptance,
+restores any retained repository and/or authority keys, revokes old credentials,
+publishes the identity and any required signed repository transition, completes the
+journal, releases pending key envelopes, and records an
+`atoll.plc.reconcileRecovery` audit with the observed directory head. Missing old
+custody is handled only by the explicitly staged restoration contexts; this does
+not weaken expected-key or absent-authority checks. Quota or custody failures roll
+back the full local transition, including credential revocation. Completed retries
+verify fresh compatible evidence without revoking newly issued credentials or
+repeating events/audits. Incompatible, absent, or nullified recovery operations
+remain for their respective reconciliation workflows.
 
 The operation must already be signed by an authority allowed to recover from its
 chosen surviving ancestor. The JSON file is bounded to 64 KiB, rejects duplicate
