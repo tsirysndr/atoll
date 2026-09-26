@@ -411,7 +411,8 @@ mutation. Deletes and empty batches need no record schema, even with `validate: 
 - [x] HTTP authorization-code token exchange with DPoP nonce challenges, strict forms, rate limits, and CORS.
 - [x] Browser pushed-request authorization and explicit consent with optional scope narrowing and account-hint enforcement.
 - [x] Internal ES256 WebAuthn registration/assertion verification with a Chrome virtual-authenticator fixture.
-- [ ] Optional passkey enrollment, authentication, management, and recovery.
+- [x] Internal persisted passkey enrollment, one-use ceremonies, user-verified login, inventory and cascading revocation.
+- [ ] Optional passkey browser enrollment, authentication, management, and recovery.
 - [x] OAuth `prompt=create` account-creation flow, including pushed-request validation and browser signup.
 - [x] Internal RFC 6238 TOTP verification, authenticator provisioning URIs, and account-bound encrypted secret envelopes.
 - [x] Internal persistent TOTP enrollment and confirmation, one-time login codes, database attempt limits, and key rotation.
@@ -5394,9 +5395,8 @@ bytes, oversized/deep structures, tags, indefinite lengths and unsupported types
 Client-data JSON rejects duplicate top-level keys. This profile does not assert
 hardware provenance, accept attestation certificates, or offer other algorithms.
 
-This is not yet a public passkey login. Persistent one-use, expiring ceremonies,
-browser/session binding, owner-authorized enrollment, unique credential ownership,
-locked counter updates, management/revocation and login integration remain pending.
+This verifier is connected to the internal lifecycle below; public browser passkey
+screens remain pending.
 Callers must supply trusted context and stored credentials; verification alone
 cannot prevent challenge replay or authorize a session.
 
@@ -5408,3 +5408,61 @@ To regenerate it locally with Node 22+ and Chrome/Chromium, run
 `mix test test/atoll/web_authn_test.exs`. Ordinary CI uses the fixture and does not
 need a browser. Tests also cover malformed inputs, altered signatures, wrong
 origins, user verification, backup flags, extension framing and counter reuse.
+
+
+### Persistent passkey lifecycle
+
+`Atoll.Accounts.Passkeys` connects the WebAuthn verifier to PostgreSQL and account
+sessions. It is an internal API: browser controllers must supply a random 256-bit
+cookie binding, enforce CSRF and rate limits, and never accept trusted admission
+state from a request. The browser interface is not implemented yet.
+
+`begin_registration/5` requires a live full-account session, fresh password and,
+when enabled, an unused authenticator or recovery code via `:totp_code`. Its
+options request a discoverable, user-verified ES256 key with no attestation.
+Each account receives a stable random 32-byte user handle, unrelated to its DID
+or email. Accounts can register at most ten passkeys, each named with 1–64 UTF-8
+bytes. Existing credentials appear in the authenticator exclusion list.
+
+`complete_registration/4` checks the live session, account, browser, ceremony,
+origin, password digest and current authenticator enrollment version. It consumes
+the challenge and persists only public credential data. Credential IDs are unique
+across all accounts and cannot be reassigned by enrolling an existing ID. Logout,
+password recovery or operator session revocation invalidates pending enrollment.
+Account deletion cascades through its user handle, keys and pending enrollments.
+
+`begin_login/1` returns account-independent discoverable options.
+`complete_login/3` verifies the assertion under the account lock, updates the
+counter/backup state and consumes the challenge before issuing a full-account
+session. A short-lived internal admission is rechecked for account status,
+credential ownership, revocation, password replacement and endpoint origin during
+session creation. Consumed proofs remain consumed when issuance hits a session
+limit. Hardware or synced passkeys with user verification are an alternative to
+the password and its optional email/TOTP factors; enrollment remains opt-in.
+
+Challenges expire after five minutes, use PostgreSQL time, bind the exact endpoint
+origin, and never slide their expiry. Only digests of request references and
+browser bindings are persisted. A shared lock caps storage at 10,000 ceremonies;
+admission reclaims at most 1,000 expired rows. Matched malformed responses consume
+the challenge; a wrong browser or ceremony cannot consume someone else's request.
+All lifecycle writes are bounded by lock/statement timeouts. Public ceremony
+responses are not logged, and sensitive schema fields are redacted from inspection.
+
+`list/1` returns only owner-visible management IDs, names, timestamps and backup
+flags. `revoke/4` requires the live account session, fresh password and any enabled
+TOTP proof. Deleting a passkey cascades through sessions created with it, including
+their OAuth grants and tokens; other sessions remain intact. Operator credential
+revocation also removes passkeys. Password-based sign-in with any configured
+factors remains available for recovering from a lost passkey; password resets do
+not themselves remove registered keys.
+
+Set `config :atoll, :passkeys_enabled, false` or `ATOLL_PASSKEYS_ENABLED=false` to
+disable new registration and login ceremonies (default `true`). The environment
+overrides configuration only when supplied. Owner inventory and removal remain
+available while disabled; existing sessions are not automatically revoked.
+
+Tests cover persistence, user handles, duplicate ownership, account isolation,
+password/session/factor changes, counter regression, bad signatures, expiry,
+challenge/account caps, session-cap failures and cascading OAuth revocation.
+Independent database connections race both enrollment and zero-counter login:
+exactly one request succeeds for each shared challenge.

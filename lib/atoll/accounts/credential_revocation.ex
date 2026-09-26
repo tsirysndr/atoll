@@ -1,5 +1,5 @@
 defmodule Atoll.Accounts.CredentialRevocation do
-  @moduledoc "Internal atomic invalidation of sessions, app passwords and pending account challenges."
+  @moduledoc "Internal atomic invalidation of sessions, passkeys, app passwords and pending account challenges."
   import Ecto.Query
   alias Atoll.Repo
   alias Atoll.Accounts.{AppPassword, Profile, Session}
@@ -26,6 +26,7 @@ defmodule Atoll.Accounts.CredentialRevocation do
         Repo.rollback(:account_not_found)
 
     {sessions, _} = Repo.delete_all(from(s in Session, where: s.did == ^did), log: false)
+    Repo.delete_all(from(k in Atoll.Accounts.Passkey, where: k.did == ^did), log: false)
     {apps, _} = Repo.delete_all(from(a in AppPassword, where: a.did == ^did), log: false)
 
     profile

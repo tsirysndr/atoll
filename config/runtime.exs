@@ -336,3 +336,10 @@ if config_env() == :prod do
   #
   # Check `Plug.SSL` for all available options in `force_ssl`.
 end
+
+case System.get_env("ATOLL_PASSKEYS_ENABLED") do
+  nil -> :ok
+  "true" -> config :atoll, :passkeys_enabled, true
+  "false" -> config :atoll, :passkeys_enabled, false
+  _ -> raise "ATOLL_PASSKEYS_ENABLED must be true or false"
+end

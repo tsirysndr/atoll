@@ -56,6 +56,11 @@ defmodule Atoll.Accounts.Sessions do
       id = Tokens.random_id()
 
       Repo.transaction(fn ->
+        if opts[:passkey_id] do
+          Repo.query!("SET LOCAL lock_timeout = '1s'")
+          Repo.query!("SET LOCAL statement_timeout = '5s'")
+        end
+
         # Serialize account logins before counting so parallel creates cannot exceed the cap.
         head = active_head!(did, true, true, opts[:allow_takendown] == true)
         if Atoll.Accounts.Signup.pending?(did), do: Repo.rollback(:signup_pending)
@@ -69,6 +74,10 @@ defmodule Atoll.Accounts.Sessions do
                    log: false
                  ),
                  do: Repo.rollback(:invalid_credentials)
+        end
+
+        if passkey_id = opts[:passkey_id] do
+          Atoll.Accounts.Passkeys.session_key!(did, passkey_id, opts[:passkey_admission])
         end
 
         if app_id = opts[:app_password_id] do
@@ -111,6 +120,7 @@ defmodule Atoll.Accounts.Sessions do
             id: id,
             did: did,
             app_password_id: opts[:app_password_id],
+            passkey_id: opts[:passkey_id],
             access_scope: Keyword.get(opts, :access_scope, "com.atproto.access"),
             refresh_hash: pair.refresh_hash,
             expires_at: pair.expires_at
