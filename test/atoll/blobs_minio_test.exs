@@ -31,6 +31,44 @@ defmodule Atoll.BlobsMinioTest do
     }
   end
 
+  test "inventory paginates real objects and reports ownership without deleting anything", c do
+    {:ok, _} = Blobs.stage(@did, "tracked inventory", "text/plain", c.opts)
+    tracked = CID.create("tracked inventory", :raw)
+    orphan = CID.create("untracked inventory", :raw)
+    queued = CID.create("queued inventory", :raw)
+    assert :ok = Atoll.Blobs.S3.put(orphan, "untracked inventory", c.config)
+    assert :ok = Atoll.Blobs.S3.put(queued, "queued inventory", c.config)
+
+    Repo.insert!(%Atoll.Blobs.CleanupJob{
+      cid: queued,
+      backend: :s3,
+      queued_at: DateTime.utc_now()
+    })
+
+    assert {:ok, %{status: 200}} =
+             s3_request(:put, c.bucket_url <> "/blobs/not-a-cid", "foreign", c.config)
+
+    {objects, cursor} =
+      Enum.reduce_while(1..10, {[], nil}, fn _, {objects, cursor} ->
+        assert {:ok, page} = Atoll.Blobs.Inventory.page(1, cursor, c.opts)
+        assert length(page.objects) <= 1
+        next = {objects ++ page.objects, Map.get(page, :cursor)}
+        if Map.has_key?(page, :cursor), do: {:cont, next}, else: {:halt, next}
+      end)
+
+    assert is_nil(cursor)
+    assert length(objects) == 4
+    assert length(Enum.uniq_by(objects, & &1.key)) == 4
+    states = Map.new(objects, &{&1.key, &1.status})
+    assert states["blobs/" <> CID.to_base32(tracked)] == "owned"
+    assert states["blobs/" <> CID.to_base32(orphan)] == "untracked"
+    assert states["blobs/" <> CID.to_base32(queued)] == "pending_cleanup"
+    assert states["blobs/not-a-cid"] == "unrecognized_key"
+    assert {:ok, "untracked inventory"} = Atoll.Blobs.S3.get(orphan, c.config)
+    assert {:ok, "queued inventory"} = Atoll.Blobs.S3.get(queued, c.config)
+    assert Repo.get_by!(Atoll.Blobs.CleanupJob, cid: queued, backend: :s3)
+  end
+
   test "real signed uploads and downloads preserve empty, binary and maximum-sized blobs", %{
     opts: opts,
     key: key

@@ -471,7 +471,7 @@ inventory to assess transfer progress first.
 - [x] Durable cleanup queue for withdrawn/expired blob ownership, shared-owner checks, PostgreSQL/S3 deletion, and retryable S3 failures.
 - [x] Opt-in supervised cleanup scheduling with bounded batches, task deadlines, failure recovery, and outcome telemetry.
 - [x] Transactional per-account blob byte and object-count quotas across both storage backends.
-- [ ] Untracked-object inventory.
+- [x] Read-only paginated S3 inventory of owned, queued, untracked, and unrecognized objects.
 
 Staged blobs are private until referenced by a current record with matching
 metadata. Imports may reference missing blobs; matching uploads make those blobs
@@ -2296,3 +2296,54 @@ independent of automatic leases and retain their existing authorization and
 observation concurrency checks. The leases fence automatic observation/event
 publication, not resolver cache fills. Tests include simultaneous claims through
 independent database connections and stale-worker publication rejection.
+
+
+### S3 object inventory
+
+With S3 blob storage configured, inspect one read-only page using:
+
+```sh
+mix atoll.blobs.inventory --limit 100
+mix atoll.blobs.inventory --limit 100 --cursor 'TOKEN_FROM_PREVIOUS_PAGE'
+```
+
+The command uses the existing S3 endpoint, bucket, region, and signing credentials.
+It requires bucket listing permission (`s3:ListBucket` on AWS) in addition to any
+object permissions used by normal uploads. It sends signed
+[ListObjectsV2](https://docs.aws.amazon.com/AmazonS3/latest/API/API_ListObjectsV2.html)
+requests restricted to `blobs/`, requesting URL-encoded keys. Limits are 1–1000
+objects per page, default 100. Continue using the returned opaque `cursor` until
+it is absent, even if a page is empty. The command makes one request per invocation
+and does not follow redirects or retry automatically.
+
+JSON output includes `objects` and per-status `counts`. Each object includes its
+key, listed byte size, last-modified timestamp, and one of these statuses:
+
+- `owned`: at least one account has S3 ownership metadata for this raw CID.
+- `pending_cleanup`: no S3 owner exists, but an S3 cleanup job is queued.
+- `untracked`: a canonical raw-CID object has neither S3 ownership nor a cleanup job.
+- `unrecognized_key`: the key is not Atoll's canonical `blobs/<raw CID>` format.
+
+Ownership takes precedence over a queued cleanup job, including shared blobs.
+PostgreSQL ownership of the same CID does not establish ownership of an S3 object.
+All metadata classifications within a page use one database query snapshot.
+Objects marked `untracked` may result from a failed upload transaction, but may
+also be uploads that have reached S3 and have not committed their metadata yet.
+The report is not deletion authorization. It never deletes objects, queues cleanup,
+changes ownership, or downloads object contents.
+
+A listing response is bounded to 5 MiB and parsed using OTP's SAX XML parser without
+dynamic atoms, DTDs, or external entities. Parsing also bounds nesting, node count,
+and text fields, validates sizes/timestamps/keys, and rejects duplicate keys and
+inconsistent pagination metadata. Database reads use one-second lock and five-second
+statement limits; listing requests use the existing S3 connection/request limits.
+Errors do not copy provider responses or credentials into command output.
+
+Inventory covers current objects under `blobs/` in the configured bucket. It does
+not inventory previous object versions, multipart uploads, other prefixes, or raw
+PostgreSQL blocks, and it does not verify bytes against CIDs or detect missing
+objects absent from the listing. Concurrent bucket and database changes mean a
+multi-page scan is not a global snapshot. Automated deletion of untracked objects
+remains unimplemented. Tests include real signed pagination and classification
+against disposable loopback MinIO, with confirmation that inventory preserves bytes
+and queued cleanup jobs.

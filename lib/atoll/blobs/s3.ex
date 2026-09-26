@@ -24,37 +24,62 @@ defmodule Atoll.Blobs.S3 do
     end
   end
 
-  defp request(method, cid, body, config) do
-    with {:ok, url, signing} <- options(cid, config) do
-      req = Keyword.get(config, :request, Req.new())
+  def list(config, limit \\ 100, cursor \\ nil) do
+    if is_integer(limit) and limit in 1..1000 and Atoll.Blobs.S3Listing.cursor?(cursor) do
+      with {:ok, base, signing} <- options(config) do
+        params = [
+          {"list-type", "2"},
+          {"prefix", "blobs/"},
+          {"encoding-type", "url"},
+          {"max-keys", Integer.to_string(limit)}
+        ]
 
-      Req.request(req,
-        method: method,
-        url: url,
-        body: body,
-        headers: [{"content-type", "application/octet-stream"}],
-        aws_sigv4: signing,
-        retry: false,
-        redirect: false,
-        raw: true,
-        compressed: false,
-        connect_options: [timeout: 3000],
-        receive_timeout: 10_000,
-        request_timeout: 15_000,
-        into: fn {:data, bytes}, {request, response} ->
-          previous = response.body || ""
+        params = if cursor, do: params ++ [{"continuation-token", cursor}], else: params
 
-          if byte_size(previous) + byte_size(bytes) <= @max_bytes do
-            {:cont, {request, %{response | body: previous <> bytes}}}
-          else
-            {:halt, {request, %{response | status: 502, body: ""}}}
-          end
+        case request_url(:get, base <> "?" <> URI.encode_query(params), "", signing, config) do
+          {:ok, %{status: 200, body: xml}} -> Atoll.Blobs.S3Listing.parse(xml, limit)
+          _ -> {:error, :blob_storage_unavailable}
         end
-      )
+      end
+    else
+      {:error, :invalid_inventory_query}
     end
   end
 
-  defp options(cid, config) when is_list(config) do
+  defp request(method, cid, body, config) do
+    with {:ok, base, signing} <- options(config),
+         do: request_url(method, base <> "/blobs/" <> CID.to_base32(cid), body, signing, config)
+  end
+
+  defp request_url(method, url, body, signing, config) do
+    req = Keyword.get(config, :request, Req.new())
+
+    Req.request(req,
+      method: method,
+      url: url,
+      body: body,
+      headers: [{"content-type", "application/octet-stream"}],
+      aws_sigv4: signing,
+      retry: false,
+      redirect: false,
+      raw: true,
+      compressed: false,
+      connect_options: [timeout: 3000],
+      receive_timeout: 10_000,
+      request_timeout: 15_000,
+      into: fn {:data, bytes}, {request, response} ->
+        previous = response.body || ""
+
+        if byte_size(previous) + byte_size(bytes) <= @max_bytes do
+          {:cont, {request, %{response | body: previous <> bytes}}}
+        else
+          {:halt, {request, %{response | status: 502, body: ""}}}
+        end
+      end
+    )
+  end
+
+  defp options(config) when is_list(config) do
     endpoint = Keyword.get(config, :endpoint, "")
     bucket = Keyword.get(config, :bucket, "")
     key = Keyword.get(config, :access_key_id)
@@ -78,13 +103,11 @@ defmodule Atoll.Blobs.S3 do
           do: Keyword.put(signing, :token, token),
           else: signing
 
-      {:ok,
-       String.trim_trailing(endpoint, "/") <> "/" <> bucket <> "/blobs/" <> CID.to_base32(cid),
-       signing}
+      {:ok, String.trim_trailing(endpoint, "/") <> "/" <> bucket, signing}
     else
       {:error, :blob_storage_unavailable}
     end
   end
 
-  defp options(_, _), do: {:error, :blob_storage_unavailable}
+  defp options(_), do: {:error, :blob_storage_unavailable}
 end
