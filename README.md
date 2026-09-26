@@ -123,7 +123,10 @@ Raw CID support and generic block storage are implemented; the ATProto blob API 
 - [x] Internal durable event sequencing and cursor replay, recorded atomically with repository creation, writes, imports, and status changes.
 - [ ] Event retention / compaction and higher-throughput sequencing (writes currently share a PostgreSQL transaction advisory lock to preserve commit order).
 - [ ] `com.atproto.sync.subscribeRepos` WebSocket stream with resume cursors.
-- [ ] Wire-format commit, sync, identity, and account events (the internal outbox stores transition metadata; CAR framing and publication are pending).
+- [x] Wire-format commit, sync, and account event encoding, plus CBOR stream/error framing, from immutable historical blocks.
+- [x] Commit CARs with full MSTs, changed records, prior roots, and operation metadata; oversized commits fall back to commit-only sync messages.
+- [ ] Compact inductive commit proofs (event encoding currently includes the complete MST).
+- [ ] Identity events and public event delivery, including repository availability filtering.
 - [ ] Relay discovery / crawl requests and federation interoperability tests.
 - [ ] Service authentication and request proxying to AppViews and other services.
 

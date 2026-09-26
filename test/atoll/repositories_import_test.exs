@@ -32,6 +32,10 @@ defmodule Atoll.RepositoriesImportTest do
     assert event.kind == :sync
     assert event.payload["commit"] == %Link{cid: commit.cid}
     assert event.payload["since"] == head.rev
+    assert {:ok, "#sync", message} = Atoll.Repositories.EventEncoder.message(event)
+    assert {:ok, %{roots: [sync_root], blocks: sync_blocks}} = CAR.decode(message["blocks"].data)
+    assert sync_root == commit.cid
+    assert sync_blocks == %{commit.cid => commit.bytes}
     assert imported.head == commit.cid
     assert {:ok, %{value: value}} = Repositories.get_record(@did, @path)
     assert value["text"] == "imported"
