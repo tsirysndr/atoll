@@ -38,6 +38,7 @@ defmodule AtollWeb.Endpoint do
   plug Plug.Telemetry, event_prefix: [:phoenix, :endpoint]
 
   plug AtollWeb.ClientIP
+  plug AtollWeb.AccountBrowserPlug
   plug AtollWeb.OAuthRequestPlug
   plug AtollWeb.OAuthResource
   plug AtollWeb.XRPCRequestPlug

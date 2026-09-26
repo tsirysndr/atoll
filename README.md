@@ -396,7 +396,7 @@ mutation. Deletes and empty batches need no record schema, even with `validate: 
 - [x] HTTP authorization-code token exchange with DPoP nonce challenges, strict forms, rate limits, and CORS.
 - [ ] Browser authorization/consent flow.
 - [x] Internal owner-authenticated OAuth session inventory and per-grant revocation.
-- [ ] Browser interface for viewing and revoking OAuth sessions.
+- [x] Browser account login, OAuth session inventory/revocation, and logout with encrypted cookies and CSRF protection.
 - [x] Persisted OAuth client/DPoP/session bindings and source password-session deletion cascades.
 - [x] OAuth refresh rotation with persistent reuse revocation, per-access scope narrowing, and observed confidential-key removal revocation.
 - [x] Configurable periodic confidential-client key checks, including idle sessions, with bounded revocation and sweep progress after failures.
@@ -5117,7 +5117,7 @@ export tests continue to exercise owner/operator and anonymous access.
 UI operations for OAuth grants. Both require a live full-account access JWT;
 app-password sessions, refresh JWTs and opaque OAuth credentials cannot manage
 grants. Deactivated owners retain access through the existing account-management
-authorization policy. The browser routes and interface remain pending.
+authorization policy. The browser routes and interface are described below.
 
 Inventory is scoped to the authenticated owner, excludes expired OAuth grants or
 expired source sessions, and returns at most 100 entries (default 50). Results
@@ -5142,3 +5142,35 @@ cascade deletion. A full token-exchange integration test confirms that owner
 revocation blocks subsequent resource reads and refreshes while preserving the
 owner's password session. Previously issued service JWTs remain valid until their
 own expiry, subject to the receiving service's policy.
+
+### Browser account session management
+
+Open `/account/login` to sign in with your **account password** and email address
+or DID, then view connected applications at `/account/sessions`. Email-factor
+accounts must enter the code sent through the existing configured email Worker.
+App passwords cannot open this account-management interface. The page lists the
+client URL, granted scope, expiry and a revoke button, with pagination after 50
+entries. Client strings are escaped and rendered as text without remote metadata,
+images or scripts. Revocation removes only the selected owned OAuth grant.
+
+The browser uses a separate encrypted, signed, HttpOnly `SameSite=Lax` cookie.
+Its one-hour lifetime is also enforced on the server, and each management action
+rechecks the underlying live full-account session. Login renews session state and
+CSRF tokens. Logout revokes the browser's password session and clears its cookie;
+other password sessions and independently created OAuth grants remain intact.
+Cookies use `Secure` when the configured endpoint origin is HTTPS. Production
+must serve the account pages over HTTPS with a stable secret key base.
+
+All mutations use CSRF-protected POST forms. The account boundary runs before
+general parsing/logging, admits only canonical routes/methods, bounds raw forms
+to 8 KiB, and rejects duplicate fields. Login has a separate 10-request/five-minute
+peer budget; other browser requests have a 100-request/five-minute budget through
+the configured memory/PostgreSQL/Redis limiter. Responses disable caching, framing,
+referrer disclosure, scripts and external resources. Query and body data never
+choose a redirect destination; redirects stay on fixed account paths.
+
+HTTP tests explicitly enable CSRF protection and cover the complete login/list/
+revoke/logout flow, email and DID login, restricted credential rejection, email
+factor prompts, cookie tampering, expired browser/account sessions, HTML escaping,
+request limits, and invalid forms/methods. Browser OAuth authorization/consent and
+server discovery remain pending; this page manages existing grants.
