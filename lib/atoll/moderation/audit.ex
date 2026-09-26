@@ -28,6 +28,19 @@ defmodule Atoll.Moderation.Audit do
     )
   end
 
+  @doc "Records an ordinary PLC authority-key replacement without private material."
+  def authority_rotation!(did, cid, expected, replacement) do
+    insert!(
+      "atoll.plc.rotateAuthority",
+      did,
+      %{kind: "plcRotationKey", did: did},
+      %{operationCid: cid, expectedKey: expected},
+      %{key: expected},
+      %{key: replacement},
+      "operator"
+    )
+  end
+
   @doc "Records local operator key custody changes using public metadata only."
   def rotation_key!(did, expected, observed_cid, before_key, after_key, result) do
     insert!(

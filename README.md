@@ -141,7 +141,8 @@ record Lexicons or grant access to account data.
 - [x] Encrypted pending signing-key custody bound to durable PLC updates, with master-key rewrapping.
 - [x] Operator PLC repository signing-key rotation with durable staging and resumable publication.
 - [x] Internal encrypted pending custody and atomic installation for PLC directory-authority replacement keys.
-- [ ] Operator directory-authority rotation orchestration and PLC recovery workflows.
+- [x] Operator PLC authority-key rotation with preserved priority, durable staging, and resumable completion.
+- [ ] PLC recovery workflows.
 - [x] Per-revision signing-key provenance for historical record and block verification.
 - [x] Internal atomic repository signing-key replacement with unchanged-tree commits and vault rollback.
 - [x] PostgreSQL repository heads and atomic record, tree, and commit updates with optional head compare-and-swap.
@@ -3415,4 +3416,45 @@ the repository signing key. The original signup envelope remains retained; the
 installed replacement takes precedence for future PLC signing. This primitive
 is not a fresh-authority check or an operator command. Generic account
 `submitPlcOperation` cannot complete a journal carrying staged key custody.
-Operator-facing authority rotation and recovery orchestration remain pending.
+The operator workflow below provides ordinary authority rotation; recovery
+orchestration remains pending.
+
+### Operator PLC directory-authority key rotation
+
+Use the currently retained PLC authority public did:key as the expected key:
+
+```sh
+mix atoll.plc.rotate_authority stage did:plc:ACCOUNT EXPECTED_AUTHORITY_DID_KEY p256
+mix atoll.plc.rotate_authority status did:plc:ACCOUNT
+mix atoll.plc.rotate_authority resume did:plc:ACCOUNT STAGED_OPERATION_CID
+```
+
+`stage` accepts `k256` or `p256` and generates the replacement inside the durable
+staging transaction. Fresh verified directory history must authorize the
+expected retained authority and match the local repository key, PDS service,
+and bidirectionally verified handle. The operation replaces that one authority
+in its existing priority position and preserves all other identity fields.
+Only public metadata, including the CID and replacement public key, is printed.
+
+`resume` checks fresh directory history before submission and again before local
+completion. A matching current directory operation permits retries without a
+second POST. Under mutation locks, completion rechecks the retained authority,
+account status, repository key, handle and identity observation; installs the
+encrypted replacement; completes the journal; erases pending custody; and adds
+a private operator audit of public keys and operation CID. These local changes
+commit atomically. Subsequent PLC signing uses the installed authority.
+
+Authority keys are internal to PLC and do not appear in the resolved DID document.
+This transition leaves the repository commit and key unchanged and emits no
+repository or identity events. Completed retries still verify current authority
+and local identity but create no duplicate audit. Active and deactivated
+accounts are supported, preserving their status.
+
+Back up the database and encryption master key before production rotation. The
+new authority exists only in encrypted database custody; this command does not
+export its private key. Directory acceptance and local installation cannot be
+one transaction. After interruption, keep the journal and retry the same CID;
+`status` recovers a pending CID but reports local state, not fresh directory
+authority. A later conflicting directory operation fails closed with custody
+retained. Recovery forks, arbitrary priority changes, and recovery-key export
+are not implemented by this command.
