@@ -17,6 +17,7 @@ defmodule AtollWeb.Router do
     pipe_through :api
 
     get "/health", HealthController, :show
+    get "/health/ready", HealthController, :ready
   end
 
   scope "/xrpc", AtollWeb do

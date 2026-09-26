@@ -425,10 +425,22 @@ events. The `[:atoll, :identity, :refresh]` telemetry event reports a count and
 - [ ] Administrative account controls and takedowns.
 - [ ] Production configuration, HTTPS deployment, and signing-key protection.
 - [ ] Database and blob backup / restore workflow.
-- [ ] Database readiness checks and operational monitoring.
+- [x] `GET /health/ready` database connectivity readiness with bounded queries and outcome telemetry.
+- [ ] Comprehensive operational monitoring and alerting.
 - [ ] End-to-end compatibility tests with existing ATProto clients and servers.
 
 ## Local development
+
+Use `GET /health` for process liveness and `GET /health/ready` for PostgreSQL
+connectivity readiness. Both responses disable caching. Readiness runs `SELECT 1`
+with a one-second query timeout and no pool queueing, returning HTTP 200 with
+`{"status":"ok"}` or HTTP 503 with `{"status":"unavailable"}`. A busy pool can
+therefore report unavailable. Database errors and credentials are never included
+in the response. This probe does not verify migrations, signing keys, S3, or
+external identity services. Configure deployment probe intervals and failure
+thresholds accordingly; it is not a complete production-readiness assessment.
+The `[:atoll, :readiness, :check]` telemetry event includes `count`, `duration`
+(native monotonic time units), and an `outcome` of `ready` or `unavailable`.
 
 Install Elixir / Erlang and PostgreSQL. The project declares Elixir `~> 1.17`; see `mix.exs` for dependency requirements.
 
