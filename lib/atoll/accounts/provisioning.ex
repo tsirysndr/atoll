@@ -28,7 +28,9 @@ defmodule Atoll.Accounts.Provisioning do
 
         Events.lock!()
         if Repo.get(Head, input.did), do: Repo.rollback(:account_exists)
-        if Repo.get_by(Profile, handle: input.handle), do: Repo.rollback(:handle_not_available)
+
+        if Atoll.Identity.HandleChanges.claimed?(input.handle),
+          do: Repo.rollback(:handle_not_available)
 
         if input.email && Repo.get_by(Profile, email: input.email),
           do: Repo.rollback(:email_not_available)

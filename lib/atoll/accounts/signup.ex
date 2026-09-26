@@ -124,7 +124,9 @@ defmodule Atoll.Accounts.Signup do
          :ok <- session_ready(genesis.did) do
       Repo.transaction(fn ->
         Events.lock!()
-        if Repo.get_by(Profile, handle: input.handle), do: Repo.rollback(:handle_not_available)
+
+        if Atoll.Identity.HandleChanges.claimed?(input.handle),
+          do: Repo.rollback(:handle_not_available)
 
         if input.email && Repo.get_by(Profile, [email: input.email], log: false),
           do: Repo.rollback(:email_not_available)

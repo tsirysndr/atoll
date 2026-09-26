@@ -298,7 +298,8 @@ mutation. Deletes and empty batches need no record schema, even with `validate: 
 - [x] Handle-based repository reads with bidirectional verification and canonical DID record URIs.
 - [x] HTTPS handle-resolution redirects with per-hop address validation and bounded hops.
 - [x] Bounded positive handle caching with forced refresh for authorization and identity updates.
-- [ ] Handle updates.
+- [x] Internal full-session handle-change staging, durable reservations, and verified atomic completion.
+- [ ] Public handle-update endpoint and automatic operation signing.
 - [x] Authenticated account activation and deactivation with atomic status events.
 - [x] Service-authenticated `createAccount` for migration of an existing DID.
 - [x] Authenticated recommended DID credentials for the destination signing key and service.
@@ -2659,3 +2660,35 @@ against a directory withholding both views, authenticate its unsigned timestamps
 or prevent changes after either response. Public DID resolution retains its own
 fixed-directory policy; this configured-directory lookup is for internal identity
 mutation workflows.
+
+
+### Handle-change reservations and completion
+
+Migration `20260926155031` adds durable handle reservations linked to their exact PLC
+journal operation. `Atoll.Identity.HandleChanges.stage/5` authorizes an active
+account's full access session, validates a signed handle-only update against verified
+audit evidence and the locally hosted signing key/service, and reserves the target
+name in the same transaction as the journal entry. Other identity fields must remain
+unchanged. The new operation uses a single `at://` alias. This currently accepts
+modern PLC predecessors; legacy PLC and did:web handle mutation remain pending.
+
+Hosted names use the configured server domains. Custom names must freshly resolve
+to the owner's DID. Authorization is checked again under the account lock after
+network resolution. App passwords and inactive accounts cannot stage changes.
+Signup and migration check both current profile handles and reservations under the
+shared event lock, so another account cannot claim a pending target. The old profile
+and hosted handle response remain in place while submission is pending.
+
+After directory submission is confirmed, `complete/3` fetches a fresh verified audit
+and requires the exact reserved operation to be latest. It rechecks custom-handle
+ownership, session authorization, and the local key/service before atomically updating
+the profile and identity observation, emitting one identity event, completing the
+journal, and releasing the reservation. Repeating a completed operation emits no
+second event. Conflicts retain the reservation and previous local handle for explicit
+reconciliation. Account deletion cascades reservations; it does not undo public PLC
+history. Existing resolver caches can retain old observations until their configured
+TTL; authorization lookups force refresh.
+
+These are internal workflow functions, not new HTTP endpoints. Public request
+orchestration, signing with the retained rotation key, and conflict recovery still
+need implementation. No real directory updates were submitted during tests.

@@ -1,0 +1,196 @@
+defmodule Atoll.Identity.HandleChanges do
+  @moduledoc "Authorized staging of handle-only PLC updates with durable name reservations."
+  import Ecto.Query
+  alias Atoll.{Multikey, Repo, Syntax}
+  alias Atoll.Accounts.{Profile, Sessions, Signup}
+  alias Atoll.Identity.{Handle, HandleReservation, Resolver}
+  alias Atoll.Identity.PLC.{AuditLog, Client, Operation, Update, Updates}
+  alias Atoll.Repositories.{Events, Head}
+
+  @doc "Checks current names and pending reservations; mutations must hold the Events lock."
+  def claimed?(handle) do
+    Repo.exists?(from p in Profile, where: p.handle == ^handle) or
+      Repo.exists?(from r in HandleReservation, where: r.handle == ^handle)
+  end
+
+  @doc """
+  Stage an already signed handle-only operation for a full-session owner.
+  Audit evidence and the operation are internal workflow inputs, not HTTP parameters.
+  Keeps the current profile and hosted resolution unchanged until a later completion.
+  """
+  def stage(token, handle, audit, operation, opts \\ []) do
+    with false <- Repo.in_transaction?(),
+         {:ok, head} <- Sessions.authenticate_management(token),
+         :ok <- active(head),
+         {:ok, handle} <- normalize(handle),
+         {:ok, state} <- AuditLog.verify(head.did, audit),
+         :ok <- handle_only(state, operation, handle, head),
+         :ok <- forward_claim(handle, head.did, opts) do
+      Repo.transaction(fn ->
+        Events.lock!()
+
+        current =
+          Repo.one(from h in Head, where: h.did == ^head.did, lock: "FOR UPDATE") ||
+            Repo.rollback(:account_not_found)
+
+        unwrap!(Sessions.authenticate_management(token))
+        check!(active(current))
+        check!(handle_only(state, operation, handle, current))
+        profile = Repo.get(Profile, head.did) || Repo.rollback(:account_not_found)
+
+        unless profile.handle == handle or not claimed?(handle),
+          do: own_reservation!(handle, head.did)
+
+        journal = unwrap!(Updates.stage(head.did, audit, operation))
+        if journal.completed, do: Repo.rollback(:plc_update_completed)
+
+        case Repo.get_by(HandleReservation, did: head.did) do
+          nil -> Repo.insert!(%HandleReservation{handle: handle, did: head.did, cid: journal.cid})
+          %{handle: ^handle, cid: cid} when cid == journal.cid -> :ok
+          _ -> Repo.rollback(:plc_update_pending)
+        end
+
+        journal
+      end)
+    else
+      true -> {:error, :plc_update_inside_transaction}
+      error -> error
+    end
+  end
+
+  defp own_reservation!(handle, did) do
+    case {Repo.get_by(Profile, handle: handle), Repo.get(HandleReservation, handle)} do
+      {nil, %{did: ^did}} -> :ok
+      _ -> Repo.rollback(:handle_not_available)
+    end
+  end
+
+  @doc "Complete a confirmed handle update only after a fresh verified directory-head check."
+  def complete(token, cid, opts \\ []) do
+    with false <- Repo.in_transaction?(),
+         {:ok, head} <- Sessions.authenticate_management(token),
+         :ok <- active(head),
+         %Update{} = row <- Repo.get_by(Update, did: head.did, cid: cid),
+         true <- not is_nil(row.confirmed_at),
+         ["at://" <> handle] <- row.operation["alsoKnownAs"],
+         {:ok, %{state: state}} <- Client.fetch_audit(head.did, Keyword.take(opts, [:plug])),
+         true <- state.cid == cid,
+         :ok <- forward_claim(handle, head.did, opts) do
+      Repo.transaction(fn ->
+        Events.lock!()
+
+        current =
+          Repo.one(from h in Head, where: h.did == ^head.did, lock: "FOR UPDATE") ||
+            Repo.rollback(:account_not_found)
+
+        unwrap!(Sessions.authenticate_management(token))
+        check!(active(current))
+        {:ok, prior_cid} = Operation.cid(row.previous)
+
+        check!(
+          handle_only(
+            %{tombstoned: false, operation: row.previous, cid: prior_cid},
+            row.operation,
+            handle,
+            current
+          )
+        )
+
+        journal =
+          Repo.get_by(Update, did: head.did, cid: cid) || Repo.rollback(:plc_update_not_found)
+
+        profile = Repo.get(Profile, head.did) || Repo.rollback(:account_not_found)
+
+        if journal.completed_at && profile.handle != handle, do: Repo.rollback(:plc_conflict)
+
+        unless journal.completed_at do
+          case Repo.get(HandleReservation, handle) do
+            %{did: did, cid: ^cid} when did == head.did -> :ok
+            _ -> Repo.rollback(:handle_not_available)
+          end
+
+          if Repo.exists?(from p in Profile, where: p.handle == ^handle and p.did != ^head.did),
+            do: Repo.rollback(:handle_not_available)
+
+          profile |> Ecto.Changeset.change(handle: handle) |> Repo.update!()
+
+          fingerprint =
+            :crypto.hash(
+              :sha256,
+              Atoll.CBOR.encode!(%{
+                "handle" => handle,
+                "claimedHandle" => handle,
+                "pds" => AtollWeb.Endpoint.url(),
+                "curve" => Atom.to_string(current.curve),
+                "key" => %Atoll.CBOR.Bytes{data: current.public_key}
+              })
+            )
+
+          Repo.insert!(
+            %Atoll.Identity.Observation{did: head.did, handle: handle, fingerprint: fingerprint},
+            on_conflict: {:replace, [:handle, :fingerprint]},
+            conflict_target: [:did]
+          )
+
+          Events.append!(:identity, current, %{"handle" => handle})
+          Updates.complete!(head.did, cid)
+
+          Repo.delete_all(
+            from r in HandleReservation, where: r.did == ^head.did and r.cid == ^cid
+          )
+        end
+
+        %{did: head.did, handle: handle}
+      end)
+    else
+      true -> {:error, :plc_update_inside_transaction}
+      nil -> {:error, :plc_update_not_found}
+      false -> {:error, :plc_conflict}
+      {:error, _} = error -> error
+      _ -> {:error, :invalid_handle_update}
+    end
+  end
+
+  defp normalize(handle) do
+    with true <- Syntax.handle?(handle),
+         normalized = String.downcase(handle),
+         {:ok, _} <- Resolver.resolution_url("did:web:" <> normalized) do
+      {:ok, normalized}
+    else
+      _ -> {:error, :invalid_handle}
+    end
+  end
+
+  defp forward_claim(handle, did, opts) do
+    if Signup.hosted_handle?(handle) or
+         Handle.resolve(handle, Keyword.put(opts, :force_refresh, true)) == {:ok, did},
+       do: :ok,
+       else: {:error, :unverified_handle}
+  end
+
+  defp handle_only(%{tombstoned: false, operation: previous, cid: cid}, operation, handle, head)
+       when is_map(operation) do
+    {:ok, key} = Multikey.to_did_key(head.curve, head.public_key)
+
+    expected =
+      previous
+      |> Map.delete("sig")
+      |> Map.put("prev", cid)
+      |> Map.put("alsoKnownAs", ["at://" <> handle])
+
+    if previous["type"] == "plc_operation" and
+         get_in(previous, ["verificationMethods", "atproto"]) == key and
+         get_in(previous, ["services", "atproto_pds", "endpoint"]) == AtollWeb.Endpoint.url() and
+         Map.delete(operation, "sig") == expected,
+       do: :ok,
+       else: {:error, :invalid_handle_update}
+  end
+
+  defp handle_only(_, _, _, _), do: {:error, :invalid_handle_update}
+  defp active(%{status: :active}), do: :ok
+  defp active(%{status: status}), do: {:error, {:repo_inactive, status}}
+  defp check!(:ok), do: :ok
+  defp check!({:error, reason}), do: Repo.rollback(reason)
+  defp unwrap!({:ok, result}), do: result
+  defp unwrap!({:error, reason}), do: Repo.rollback(reason)
+end
