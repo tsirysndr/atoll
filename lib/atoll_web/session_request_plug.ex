@@ -3,6 +3,8 @@ defmodule AtollWeb.SessionRequestPlug do
   import Plug.Conn
   @prefix "/xrpc/com.atproto.server."
   @procedures [
+    @prefix <> "requestEmailConfirmation",
+    @prefix <> "confirmEmail",
     @prefix <> "createAccount",
     @prefix <> "createSession",
     @prefix <> "refreshSession",
@@ -67,7 +69,8 @@ defmodule AtollWeb.SessionRequestPlug do
        when path in [
               @prefix <> "createSession",
               @prefix <> "createAccount",
-              @prefix <> "deactivateAccount"
+              @prefix <> "deactivateAccount",
+              @prefix <> "confirmEmail"
             ] do
     case get_req_header(conn, "content-type") do
       [type] ->

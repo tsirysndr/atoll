@@ -1,6 +1,28 @@
 defmodule AtollWeb.XRPCFallback do
   use AtollWeb, :controller
 
+  def call(conn, {:error, :invalid_email}),
+    do: error(conn, 400, "InvalidEmail", "Email does not match the account.")
+
+  def call(conn, {:error, :invalid_email_token}),
+    do: error(conn, 400, "InvalidToken", "Invalid email confirmation token.")
+
+  def call(conn, {:error, :expired_email_token}),
+    do: error(conn, 400, "ExpiredToken", "Email confirmation token has expired.")
+
+  def call(conn, {:error, :account_not_found}),
+    do: error(conn, 400, "AccountNotFound", "Account profile is unavailable.")
+
+  def call(conn, {:error, :email_rate_limited}),
+    do: error(conn, 429, "RateLimitExceeded", "Wait one minute before requesting another email.")
+
+  def call(conn, {:error, reason})
+      when reason in [
+             :email_not_configured,
+             :email_delivery_unavailable,
+             :email_delivery_rejected
+           ], do: error(conn, 503, "ServiceUnavailable", "Email delivery is unavailable.")
+
   def call(conn, {:error, reason})
       when reason in [:invalid_service_token, :service_token_replayed],
       do: error(conn, 401, "InvalidToken", "Invalid or already used service token.")

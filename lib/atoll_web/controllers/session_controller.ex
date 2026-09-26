@@ -3,6 +3,18 @@ defmodule AtollWeb.SessionController do
   alias Atoll.Accounts.Sessions
   action_fallback AtollWeb.SessionFallback
 
+  def request_email_confirmation(conn, _params) do
+    with {:ok, token} <- bearer(conn),
+         {:ok, _} <- Atoll.Accounts.EmailConfirmation.request(token),
+         do: send_resp(conn, 200, "")
+  end
+
+  def confirm_email(conn, _params) do
+    with {:ok, token} <- bearer(conn),
+         {:ok, _} <- Atoll.Accounts.EmailConfirmation.confirm(token, conn.body_params),
+         do: send_resp(conn, 200, "")
+  end
+
   def create_account(conn, _params) do
     with {:ok, token} <- bearer(conn),
          {:ok, account} <- Atoll.Accounts.Provisioning.import_account(token, conn.body_params),
@@ -116,6 +128,15 @@ defmodule AtollWeb.SessionController do
         end,
       active: status == :active
     }
+
+    result =
+      if profile && profile.email,
+        do:
+          Map.merge(result, %{
+            email: profile.email,
+            emailConfirmed: not is_nil(profile.email_confirmed_at)
+          }),
+        else: result
 
     if status == :active, do: result, else: Map.put(result, :status, Atom.to_string(status))
   end

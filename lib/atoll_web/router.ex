@@ -24,6 +24,12 @@ defmodule AtollWeb.Router do
     pipe_through :api
 
     get "/com.atproto.server.describeServer", ServerController, :describe
+
+    post "/com.atproto.server.requestEmailConfirmation",
+         SessionController,
+         :request_email_confirmation
+
+    post "/com.atproto.server.confirmEmail", SessionController, :confirm_email
     post "/com.atproto.server.createSession", SessionController, :create
     post "/com.atproto.server.createAccount", SessionController, :create_account
     get "/com.atproto.server.getSession", SessionController, :show

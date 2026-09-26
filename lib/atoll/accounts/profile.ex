@@ -6,6 +6,9 @@ defmodule Atoll.Accounts.Profile do
     field :handle, :string
     field :email, :string, redact: true
     field :email_confirmed_at, :utc_datetime_usec
+    field :email_confirmation_digest, :binary, redact: true
+    field :email_confirmation_expires_at, :integer
+    field :email_confirmation_requested_at, :integer
     field :import_curve, Ecto.Enum, values: [:k256, :p256]
     field :import_public_key, :binary
     field :import_head, :binary

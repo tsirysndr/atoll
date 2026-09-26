@@ -156,7 +156,8 @@ The same `validate: true` restriction applies to batch requests.
 - [ ] Fresh DID signup and account deletion.
 - [x] Internal DID-scoped password credentials with salted Argon2id hashes, bounded input, redacted inspection, and duplicate protection.
 - [x] Shared configurable Cloudflare Worker email delivery client.
-- [ ] Email verification, password changes, and account recovery through the Worker.
+- [x] Email confirmation requests and one-use confirmation through the Worker.
+- [ ] Email updates, password changes, and account recovery through the Worker.
 - [x] Internal password session creation, scoped HS256 JWT verification, single-use refresh rotation, and persistent revocation.
 - [x] Public DID/password session creation, refresh, inspection, and revocation endpoints, with bounded requests and per-node rate limits.
 - [x] Bidirectionally verified handle/password login with normalized handles and DID-bound sessions.
@@ -734,6 +735,20 @@ and 5xx responses as unavailable; other responses are rejected. Response bodies
 are discarded. Redirects and automatic retries are disabled. Callers must retain
 the same key for retries of a logical message, including ambiguous timeouts.
 
-This increment provides the delivery boundary, configuration, and mocked HTTP
-tests. Verification/recovery endpoints, durable retry scheduling, and the external
-Worker deployment remain pending. No real email is sent by the tests.
+`POST com.atproto.server.requestEmailConfirmation` takes a live access token and
+no body. It sends a code to the account profile's email using the Worker.
+`POST com.atproto.server.confirmEmail` takes the same authentication and a JSON
+object containing `email` and `token`. Codes contain 192 bits of randomness,
+expire after 15 minutes, and are stored only as email-bound hashes. Confirmation
+consumes the code atomically. Requests are limited to one per account per minute
+across server instances, in addition to the session endpoint IP limits. Resending
+replaces the old code. Already-confirmed requests succeed without sending email.
+Active and deactivated accounts can confirm; suspended and taken-down accounts cannot.
+Session responses include `email` and `emailConfirmed` when a profile has an email.
+
+Delivery is synchronous after token persistence and outside database locks. A
+Worker failure returns 503, leaves the email unconfirmed, and retains the cooldown;
+a new request after one minute can issue a replacement code. A crash between
+persistence and delivery requires another request. Durable retry scheduling,
+email changes, password recovery, and the external Worker deployment remain
+pending. No real email is sent by the tests.
