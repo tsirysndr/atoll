@@ -10,7 +10,12 @@ defmodule AtollWeb.AdminRequestPlug do
     "/xrpc/com.atproto.admin.enableAccountInvites",
     "/xrpc/com.atproto.admin.updateSubjectStatus"
   ]
-  @queries ["/xrpc/com.atproto.admin.getInviteCodes", "/xrpc/com.atproto.admin.getSubjectStatus"]
+  @queries [
+    "/xrpc/com.atproto.admin.getInviteCodes",
+    "/xrpc/com.atproto.admin.getSubjectStatus",
+    "/xrpc/com.atproto.admin.getAccountInfo",
+    "/xrpc/com.atproto.admin.getAccountInfos"
+  ]
   @parser Plug.Parsers.init(
             parsers: [:json],
             json_decoder: Jason,

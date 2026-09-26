@@ -1,6 +1,18 @@
 defmodule AtollWeb.XRPCFallback do
   use AtollWeb, :controller
 
+  def call(conn, {:error, :admin_account_not_found}),
+    do: error(conn, 400, "NotFound", "Account not found.")
+
+  def call(conn, {:error, :account_info_too_large}),
+    do:
+      error(
+        conn,
+        400,
+        "InvalidRequest",
+        "Account history is too large; use smaller batches or administrator invite pagination."
+      )
+
   def call(conn, {:error, :subject_not_found}),
     do: error(conn, 400, "NotFound", "Subject not found.")
 

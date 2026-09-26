@@ -43,7 +43,7 @@ Phoenix for server-side reporting. Non-XRPC routes retain their existing error
 format. Failures rejected by the HTTP adapter before reaching Phoenix and errors
 after a response or WebSocket upgrade has begun are outside this JSON renderer.
 
-Routed GET query parameters are checked against 22 unmodified upstream Lexicons
+Routed GET query parameters are checked against 24 unmodified upstream Lexicons
 vendored in `priv/lexicons`, pinned to the revision recorded there with its MIT
 license. Validation covers required parameters, string identifier formats and
 lengths, integer bounds, booleans, and repeated-key arrays. Controller-specific
@@ -687,6 +687,7 @@ events. The `[:atoll, :identity, :refresh]` telemetry event reports a count and
 - [x] Account-scoped blob takedowns across PostgreSQL/S3 serving, uploads, references, and cleanup.
 - [x] Operator record takedowns for JSON record reads and listings (signed sync data remains available).
 - [x] Transactional history of successful account/record/blob subject-status decisions, with bounded operator export.
+- [x] Operator account inspection, singly and in bounded batches, with private metadata and invite histories.
 - [ ] Remaining administrative account controls and audit coverage for other operator actions.
 - [ ] Production configuration, HTTPS deployment, and signing-key protection.
 - [ ] Database and blob backup / restore workflow.
@@ -1700,3 +1701,34 @@ recovery revocation apply unchanged.
 These exports do not reactivate the account or reopen public synchronization.
 Administrator-token export overrides remain unimplemented; operator Basic credentials
 are only accepted by the dedicated administrative routes.
+
+
+### Administrative account inspection
+
+`GET com.atproto.admin.getAccountInfo?did=...` returns the local account's DID,
+stored handle, profile creation time (`indexedAt`), email and confirmation time when
+present, owned invite codes with usage history, the invite used to register the
+account when recorded, and invitation controls (`invitesDisabled` and optional
+`inviteNote`). Fields are explicitly selected; password hashes, email token digests,
+private signing material, and session credentials are never part of the response.
+
+`GET com.atproto.admin.getAccountInfos` accepts 1–100 DIDs as repeated `dids` query
+parameters (the `dids[]` spelling also works) and returns `{ "infos": [...] }`.
+Duplicate DIDs produce one entry in first-requested order. Missing accounts are
+omitted from batch responses; a missing single account returns `400 NotFound`.
+A local repository without an account profile is not an account-info result.
+Deactivated, taken-down, and suspended accounts remain inspectable by operators.
+For current availability use `getSubjectStatus`; `deactivatedAt`, threat signatures,
+and related records are omitted because those optional metadata are not tracked.
+
+Both routes require the separate operator Basic credentials, authenticate before
+query parsing, share the admin rate limit, and return `no-store`. Reads use the
+event lock and account/profile share locks for a consistent metadata/invitation
+view, with one-second lock and five-second statement timeouts. They do not allocate
+earned invitations, change state, resolve remote identities, or send email.
+
+A response is limited to 1000 distinct invite codes and 10,000 expanded usage
+entries across all account views, including repeated appearances of a shared
+`invitedBy` code. Oversized histories return an explicit error instead of a partial
+account view. Use smaller DID batches or `com.atproto.admin.getInviteCodes`
+pagination to inspect large invite histories.

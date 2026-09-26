@@ -28,7 +28,7 @@ defmodule Atoll.Accounts.InviteListing do
           end)
 
         page = Enum.reverse(page)
-        result = %{codes: details(page)}
+        result = %{codes: details!(page)}
 
         if length(rows) > length(page) and page != [],
           do: Map.put(result, :cursor, encode_cursor(List.last(page), sort)),
@@ -63,7 +63,7 @@ defmodule Atoll.Accounts.InviteListing do
              Enum.sum(Enum.map(rows, &(&1.use_count - &1.remaining))) > @max_uses,
            do: Repo.rollback(:invite_listing_too_large)
 
-        %{codes: details(rows)}
+        %{codes: details!(rows)}
       end)
     else
       false -> {:error, :invalid_request}
@@ -100,7 +100,8 @@ defmodule Atoll.Accounts.InviteListing do
              (i.inserted_at < ^time or (i.inserted_at == ^time and i.code > ^code)))
       )
 
-  defp details(rows) do
+  @doc "Internal bounded formatter; call inside a consistent invite read transaction."
+  def details!(rows) do
     codes = Enum.map(rows, & &1.code)
 
     uses =
