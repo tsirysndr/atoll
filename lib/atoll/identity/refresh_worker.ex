@@ -1,11 +1,11 @@
 defmodule Atoll.Identity.RefreshWorker do
   @moduledoc """
-  Opt-in, per-node identity sweeper. Visits hosted DIDs in order, with one
+  Opt-in identity sweeper with database-coordinated automatic refreshes. Visits hosted DIDs in order, with one
   supervised refresh task at a time. Failures advance the cursor and retry on
   the next sweep. The cursor is in memory; restart safely repeats observations.
   """
   use GenServer
-  alias Atoll.{Repositories, Identity.Updates}
+  alias Atoll.{Repositories, Identity.RefreshLeases}
 
   def start_link(opts),
     do: GenServer.start_link(__MODULE__, opts, name: Keyword.get(opts, :name, __MODULE__))
@@ -23,7 +23,7 @@ defmodule Atoll.Identity.RefreshWorker do
       deadline: nil,
       supervisor: Keyword.get(opts, :task_supervisor, Atoll.Identity.TaskSupervisor),
       next: Keyword.get(opts, :next, &next_did/1),
-      refresh: Keyword.get(opts, :refresh, &Updates.refresh/1),
+      refresh: Keyword.get(opts, :refresh, &RefreshLeases.refresh/1),
       interval: Keyword.get(opts, :interval, 300_000),
       spacing: Keyword.get(opts, :spacing, 1000),
       timeout: Keyword.get(opts, :timeout, 20_000)
@@ -57,6 +57,7 @@ defmodule Atoll.Identity.RefreshWorker do
       case result do
         {:ok, :published} -> :published
         {:ok, :unchanged} -> :unchanged
+        {:ok, :skipped} -> :skipped
         _ -> :failed
       end
 

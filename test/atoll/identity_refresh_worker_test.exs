@@ -51,18 +51,20 @@ defmodule Atoll.IdentityRefreshWorkerTest do
       nil -> "a"
       "a" -> "b"
       "b" -> "c"
-      "c" -> nil
+      "c" -> "d"
+      "d" -> nil
     end
 
     refresh = fn
       "a" -> {:error, :identity_unavailable}
       "b" -> exit(:normal)
       "c" -> {:ok, :published}
+      "d" -> {:ok, :skipped}
     end
 
     worker = worker(context, next, refresh)
 
-    for {did, outcome} <- [{"a", :failed}, {"b", :failed}, {"c", :published}] do
+    for {did, outcome} <- [{"a", :failed}, {"b", :failed}, {"c", :published}, {"d", :skipped}] do
       RefreshWorker.run_now(worker)
       assert_receive {:result, ^did, ^outcome}
     end

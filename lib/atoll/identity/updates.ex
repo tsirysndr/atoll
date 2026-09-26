@@ -83,6 +83,9 @@ defmodule Atoll.Identity.Updates do
           head = Repo.one(from h in Head, where: h.did == ^did, lock: "FOR UPDATE")
           unless head, do: Repo.rollback(:not_found)
 
+          if Keyword.has_key?(opts, :refresh_lease),
+            do: Atoll.Identity.RefreshLeases.assert_current!(did, opts[:refresh_lease])
+
           if token do
             case Atoll.Accounts.Sessions.authenticate_management(token) do
               {:ok, %{did: ^did}} -> :ok

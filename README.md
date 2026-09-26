@@ -609,7 +609,8 @@ locking protects shared objects when collectors overlap.
 - [x] Internal `Atoll.Identity.Updates.refresh/2`: resolves hosted identities, verifies claimed handles, and atomically records changed observations with durable identity events.
 - [x] Opt-in supervised identity refresh scheduling, with one task at a time, timeouts, sweep retries, and outcome telemetry.
 - [x] Owner-authenticated identity refresh with fresh DID resolution and atomic observation events.
-- [ ] Remaining authenticated identity-management endpoints and distributed refresh coordination.
+- [x] PostgreSQL-coordinated automatic identity refreshes with expiring leases and publication fencing.
+- [ ] Remaining authenticated identity-management endpoints.
 - [x] Configurable operator crawl announcements to relay `com.atproto.sync.requestCrawl` endpoints.
 - [x] Opt-in supervised periodic crawl announcements to configured relays.
 - [ ] Automatic relay discovery and federation interoperability tests.
@@ -682,12 +683,13 @@ pinned signing key or move accounts.
 Set `ATOLL_IDENTITY_REFRESH_ENABLED=true` before starting Atoll to enable automatic
 refreshes. The worker starts after one second, waits one second between identities,
 and waits five minutes after each complete sweep. Each refresh has a 20-second
-deadline; failures are retried on the next sweep. All hosted identities, including
-inactive ones, are visited in DID order. The worker runs independently per node;
-enable it on one application instance until distributed coordination exists.
-Restarts begin a new sweep, and unchanged observations do not produce duplicate
-events. The `[:atoll, :identity, :refresh]` telemetry event reports a count and
-`published`, `unchanged`, `failed`, or `timeout` outcome.
+deadline; failures are retried on a later sweep. All hosted identities, including
+inactive ones, are visited in DID order. Workers coordinate through PostgreSQL
+leases, so automatic refresh can run on multiple instances sharing the database.
+Restarts begin a new sweep and honor existing leases and cooldowns. Unchanged
+observations do not produce duplicate events. The
+`[:atoll, :identity, :refresh]` telemetry event reports a count and `published`,
+`unchanged`, `skipped`, `failed`, or `timeout` outcome.
 
 ### Operations
 
@@ -2266,3 +2268,31 @@ History identifies the shared `admin` credential, not an individual human.
 Internal `Atoll.Accounts.Invites` calls and automatic account invite allocation do
 not fabricate an admin API audit entry. Existing audit retention and access rules
 apply, including retention after account deletion.
+
+
+### Distributed automatic identity refresh
+
+Migration `20260926145956` adds one lease row per visited repository, removed by
+account deletion. Automatic sweeper tasks atomically claim a DID for 60 seconds
+using PostgreSQL time and a random ownership token. Competing nodes skip leased
+DIDs without resolving them. Completed attempts, including resolution failures,
+set a shared five-minute cooldown. Leases and cooldowns survive node restarts;
+there is no separate leader or shared in-memory state.
+
+The worker's 20-second task deadline remains shorter than the lease. A timeout,
+crash, or shutdown leaves the lease to expire, allowing a later sweep to reclaim
+it. Before publishing an observation or identity event, the refresh transaction
+locks the lease row and checks the token and expiry after acquiring that lock.
+An expired or replaced task cannot publish, and an old completion cannot release
+a newer lease. Network resolution runs outside these database transactions.
+Coordination queries have one-second lock and five-second statement limits;
+a claim failure does not fall back to uncoordinated network work.
+
+Each node still scans its own DID cursor with one-second spacing and a five-minute
+pause between sweeps. This coordinates duplicate work; it does not distribute a
+central job queue or guarantee a five-minute refresh SLA for large repository
+lists. Owner-requested `refreshIdentity` and direct internal refresh calls remain
+independent of automatic leases and retain their existing authorization and
+observation concurrency checks. The leases fence automatic observation/event
+publication, not resolver cache fills. Tests include simultaneous claims through
+independent database connections and stale-worker publication rejection.
