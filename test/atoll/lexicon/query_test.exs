@@ -4,7 +4,7 @@ defmodule Atoll.Lexicon.QueryTest do
 
   test "every routed GET method has a vendored schema" do
     methods = for %{verb: :get, path: "/xrpc/" <> nsid} <- AtollWeb.Router.__routes__(), do: nsid
-    assert Enum.sort(methods) == Enum.sort(Query.methods())
+    assert Enum.sort(["com.atproto.sync.subscribeRepos" | methods]) == Enum.sort(Query.methods())
   end
 
   test "required fields and identifier formats are enforced" do

@@ -24,7 +24,7 @@ Checked items are implemented in this repository. Unchecked items are remaining 
 - [x] Sanitized XRPC JSON responses for framework exceptions, including malformed requests and unexpected server failures.
 - [x] Lexicon-based parameter validation for all routed XRPC GET endpoints.
 - [x] JSON procedure envelope validation against pinned upstream Lexicons.
-- [ ] Lexicon-based subscription parameter validation.
+- [x] Bounded Lexicon-based subscription parameter validation with protocol error frames.
 - [ ] Lexicon-based record validation.
 
 XRPC routing uses the [HTTP API specification](https://atproto.com/specs/xrpc).
@@ -33,7 +33,7 @@ return `501 MethodNotImplemented`. Implemented routes require their declared HTT
 method and otherwise return `405 MethodNotAllowed` with an `Allow` header, before
 body parsing or method override. These errors are JSON with `error` and `message`
 and are not cached. HTTP HEAD responses omit the body. Percent-encoded route
-spellings receive the same checks, including repository subscriptions. Subscription Lexicon validation remains pending.
+spellings receive the same checks, including repository subscriptions. Query, JSON procedure envelope, and subscription parameter schemas are validated.
 Framework failures rendered by Phoenix also use the XRPC error shape, with
 standard HTTP descriptions rather than exception details or stack traces. This
 applies in development as well as production; errors still propagate through
@@ -54,7 +54,11 @@ parameters, nested form keys, malformed percent escapes, and invalid UTF-8 retur
 `400 InvalidRequest`. Arrays preserve their order; `getBlocks` also retains its
 existing `cids[]` alias. Values remain strings at the controller boundary after
 validation. These limits supplement the HTTP server's request-target limits.
-Subscriptions keep their existing cursor validation before WebSocket upgrade.
+Subscriptions use the same bounded decoder and pinned parameter schema. Invalid
+parameters, including malformed extension parameters, retain the existing
+`InvalidRequest` binary error frame followed by a clean WebSocket close. Cursor
+values must be nonnegative safe integers; future-cursor and replay behavior remain
+separate stream checks. Real loopback WebSocket tests cover this error framing.
 
 JSON procedure bodies are validated after the existing bounded parsers and
 request guards. The pinned procedure schemas enforce required/nullable fields,

@@ -7,7 +7,7 @@ defmodule Atoll.Lexicon.Query do
 
   @schemas @files
            |> Enum.map(fn file -> file |> File.read!() |> Jason.decode!() end)
-           |> Enum.filter(&(get_in(&1, ["defs", "main", "type"]) == "query"))
+           |> Enum.filter(&(get_in(&1, ["defs", "main", "type"]) in ["query", "subscription"]))
            |> Map.new(fn doc ->
              {doc["id"], get_in(doc, ["defs", "main", "parameters"]) || %{}}
            end)

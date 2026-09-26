@@ -30,7 +30,14 @@ defmodule AtollWeb.RepoStreamTest do
           "cursor=no",
           "cursor=1.2",
           "cursor=9007199254740992",
-          "cursor=1&cursor=2"
+          "cursor=1&cursor=2",
+          "cursor=1&%63ursor=2",
+          "cursor[]=1",
+          "cursor=%FF",
+          "extension=%GG",
+          "extension[a]=1",
+          "extension=" <> String.duplicate("a", 32_769),
+          Enum.map_join(1..257, "&", &"key#{&1}=value")
         ] do
       assert (conn |> handshake() |> get(@path <> "?" <> query)).state == :upgraded
       assert_receive {_, :upgrade, {:websocket, {Socket, {:error, :invalid_cursor} = cursor, _}}}

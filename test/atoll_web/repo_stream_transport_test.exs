@@ -36,6 +36,16 @@ defmodule AtollWeb.RepoStreamTransportTest do
     :gen_tcp.close(socket)
   end
 
+  test "malformed subscription parameters send an error frame and clean close", %{port: port} do
+    for query <- ["0&cursor=1", "%FF", "0&extension=%GG", "0&extension[x]=y"] do
+      socket = connect(port, query)
+      assert {2, <<0xA1, 0x62, "op", 0x20, body::binary>>} = receive_frame(socket)
+      assert {:ok, %{"error" => "InvalidRequest"}} = CBOR.decode(body)
+      assert {8, <<1000::16>>} = receive_frame(socket)
+      :gen_tcp.close(socket)
+    end
+  end
+
   defp connect(port, cursor) do
     {:ok, socket} =
       :gen_tcp.connect({127, 0, 0, 1}, port, [:binary, active: false, packet: :http_bin], 2000)

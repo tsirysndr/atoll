@@ -37,27 +37,19 @@ defmodule AtollWeb.SubscribeReposPlug do
   end
 
   defp parse_cursor(query) do
-    values = for {"cursor", value} <- URI.query_decoder(query), do: value
-
-    case values do
-      [] ->
-        {:ok, nil}
-
-      [value] ->
-        if Regex.match?(~r/\A[0-9]{1,16}\z/, value) do
-          case Integer.parse(value) do
-            {n, ""} when n <= 9_007_199_254_740_991 -> {:ok, n}
-            _ -> {:error, :invalid_cursor}
-          end
-        else
-          {:error, :invalid_cursor}
+    case Atoll.Lexicon.Query.decode("com.atproto.sync.subscribeRepos", query) do
+      {:ok, %{"cursor" => value}} ->
+        case Integer.parse(value) do
+          {n, ""} when n >= 0 -> {:ok, n}
+          _ -> {:error, :invalid_cursor}
         end
 
-      _ ->
+      {:ok, _} ->
+        {:ok, nil}
+
+      {:error, _} ->
         {:error, :invalid_cursor}
     end
-  rescue
-    ArgumentError -> {:error, :invalid_cursor}
   end
 
   defp error(conn, status, name) do
