@@ -166,7 +166,8 @@ The same `validate: true` restriction applies to batch requests.
 - [x] Separately authenticated HTTP invite issuance, bulk issuance, and disabling by code/account.
 - [x] Cursor-paginated admin invite listings and full-session account-owned invite listings.
 - [x] Opt-in interval invite allocation with confirmed-email eligibility and an unused-code cap.
-- [ ] Per-account invite-allocation controls, custom-domain signup, phone verification, and abandoned signup reservation cleanup.
+- [x] Operator enable/disable controls for future account invite allocation, separate from existing-code revocation.
+- [ ] Custom-domain signup, phone verification, and abandoned signup reservation cleanup.
 - [x] Internal DID-scoped password credentials with salted Argon2id hashes, bounded input, redacted inspection, and duplicate protection.
 - [x] Shared configurable Cloudflare Worker email delivery client.
 - [x] Email confirmation requests and one-use confirmation through the Worker.
@@ -1286,5 +1287,28 @@ sends no email and does not enable any production policy automatically.
 New reservations using account-owned codes are rejected if the owner is taken down,
 suspended, or deleted. Deactivated owners' existing codes remain usable. This check
 is repeated at redemption, while already-committed signup reservations retain their
-original authorization. Disabling current codes does not disable future earning;
-per-account allocation controls remain pending.
+original authorization. Disabling current codes does not prevent future allocation;
+use the account controls below to pause automatic issuance.
+
+
+### Per-account invite controls
+
+The operator-authenticated POST methods
+`com.atproto.admin.disableAccountInvites` and
+`com.atproto.admin.enableAccountInvites` accept `account` (a local DID) and optional
+`note` (valid UTF-8, up to 2000 bytes, without NUL). They return an empty 200 response.
+Missing local account profiles return an account-not-found error. They inherit
+admin authentication, body limits, rate limits and no-store responses.
+
+Disabling stops automatic earned-code issuance; it does not invalidate existing
+codes, revoke sessions, or change repository status. Operators can still explicitly
+gift codes to the account. Use `disableInviteCodes` separately to revoke existing
+codes. Enabling resumes normal age-based allocation, including any eligible backlog
+under the unused-code cap. Other eligibility checks still apply.
+
+The flag, latest private note, and change timestamp are updated atomically with the
+same lock ordering as allocation and redemption. Repeating the same flag and note
+is idempotent. An omitted note clears the previous note on a change. Notes are
+redacted in schema inspection and request logs and are not returned in invite lists.
+This stores the latest control reason; a complete administrator audit log remains
+pending. No email is sent for these controls.

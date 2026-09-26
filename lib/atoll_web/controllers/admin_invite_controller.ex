@@ -4,6 +4,16 @@ defmodule AtollWeb.AdminInviteController do
   plug AtollWeb.AdminAuth
   action_fallback AtollWeb.XRPCFallback
 
+  def disable_account(conn, _) do
+    with {:ok, _} <- Atoll.Accounts.InviteControl.set(conn.body_params, true),
+         do: send_resp(conn, 200, "")
+  end
+
+  def enable_account(conn, _) do
+    with {:ok, _} <- Atoll.Accounts.InviteControl.set(conn.body_params, false),
+         do: send_resp(conn, 200, "")
+  end
+
   def index(conn, params) do
     with {:ok, result} <- Atoll.Accounts.InviteListing.admin(params), do: json(conn, result)
   end

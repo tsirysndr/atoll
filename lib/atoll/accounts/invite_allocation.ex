@@ -39,7 +39,8 @@ defmodule Atoll.Accounts.InviteAllocation do
       head = Repo.one(from h in Head, where: h.did == ^did, lock: "FOR SHARE")
       profile = Repo.one(from(p in Profile, where: p.did == ^did, lock: "FOR SHARE"), log: false)
 
-      if head && head.status == :active && profile && profile.email && profile.email_confirmed_at do
+      if head && head.status == :active && profile && not profile.invites_disabled &&
+           profile.email && profile.email_confirmed_at do
         earned = max(div(DateTime.diff(now, profile.inserted_at, :second), interval), 0)
         query = from i in Invite, where: i.created_by == ^did
         total = Repo.aggregate(query, :count)

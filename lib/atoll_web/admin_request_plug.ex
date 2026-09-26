@@ -5,7 +5,9 @@ defmodule AtollWeb.AdminRequestPlug do
   @paths [
     "/xrpc/com.atproto.server.createInviteCode",
     "/xrpc/com.atproto.server.createInviteCodes",
-    "/xrpc/com.atproto.admin.disableInviteCodes"
+    "/xrpc/com.atproto.admin.disableInviteCodes",
+    "/xrpc/com.atproto.admin.disableAccountInvites",
+    "/xrpc/com.atproto.admin.enableAccountInvites"
   ]
   @query "/xrpc/com.atproto.admin.getInviteCodes"
   @parser Plug.Parsers.init(

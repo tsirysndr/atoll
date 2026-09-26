@@ -4,6 +4,9 @@ defmodule Atoll.Accounts.Profile do
   @primary_key {:did, :string, autogenerate: false}
   schema "account_profiles" do
     field :handle, :string
+    field :invites_disabled, :boolean, default: false
+    field :invite_control_note, :string, redact: true
+    field :invites_updated_at, :utc_datetime_usec
     field :email, :string, redact: true
     field :email_confirmed_at, :utc_datetime_usec
     field :password_reset_digest, :binary, redact: true

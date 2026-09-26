@@ -29,6 +29,8 @@ defmodule AtollWeb.Router do
     post "/com.atproto.server.createInviteCode", AdminInviteController, :create
     post "/com.atproto.server.createInviteCodes", AdminInviteController, :create_many
     post "/com.atproto.admin.disableInviteCodes", AdminInviteController, :disable
+    post "/com.atproto.admin.disableAccountInvites", AdminInviteController, :disable_account
+    post "/com.atproto.admin.enableAccountInvites", AdminInviteController, :enable_account
     get "/com.atproto.admin.getInviteCodes", AdminInviteController, :index
     get "/com.atproto.server.getAccountInviteCodes", SessionController, :invite_codes
 
