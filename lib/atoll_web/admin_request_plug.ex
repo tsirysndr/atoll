@@ -9,7 +9,8 @@ defmodule AtollWeb.AdminRequestPlug do
     "/xrpc/com.atproto.admin.disableAccountInvites",
     "/xrpc/com.atproto.admin.enableAccountInvites",
     "/xrpc/com.atproto.admin.updateSubjectStatus",
-    "/xrpc/com.atproto.admin.updateAccountEmail"
+    "/xrpc/com.atproto.admin.updateAccountEmail",
+    "/xrpc/com.atproto.admin.updateAccountPassword"
   ]
   @queries [
     "/xrpc/com.atproto.admin.getInviteCodes",

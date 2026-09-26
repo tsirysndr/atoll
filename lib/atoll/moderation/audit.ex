@@ -33,6 +33,18 @@ defmodule Atoll.Moderation.Audit do
     )
   end
 
+  @doc "Records password replacement and revocation counts, never passwords or their hashes."
+  def password_change!(did, sessions, apps) do
+    insert!(
+      "com.atproto.admin.updateAccountPassword",
+      did,
+      %{"$type" => "com.atproto.admin.defs#repoRef", "did" => did},
+      %{"did" => did},
+      %{sessions: sessions, appPasswords: apps},
+      %{sessions: 0, appPasswords: 0, passwordChanged: true}
+    )
+  end
+
   defp email_state(profile) do
     %{
       email: profile.email,

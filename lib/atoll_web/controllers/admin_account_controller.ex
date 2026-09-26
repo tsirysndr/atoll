@@ -4,6 +4,11 @@ defmodule AtollWeb.AdminAccountController do
   plug AtollWeb.AdminAuth
   action_fallback AtollWeb.XRPCFallback
 
+  def update_password(conn, _) do
+    with {:ok, _} <- Atoll.Accounts.AdminPassword.update(conn.body_params),
+         do: send_resp(conn, 200, "")
+  end
+
   def update_email(conn, _) do
     with {:ok, _} <- Atoll.Accounts.AdminEmail.update(conn.body_params),
          do: send_resp(conn, 200, "")

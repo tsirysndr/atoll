@@ -689,6 +689,7 @@ events. The `[:atoll, :identity, :refresh]` telemetry event reports a count and
 - [x] Transactional history of successful account/record/blob subject-status decisions, with bounded operator export.
 - [x] Operator account inspection, singly and in bounded batches, with private metadata and invite histories.
 - [x] Audited operator email correction with invalidation of old email challenges.
+- [x] Audited operator password replacement with session, app-password, and pending-code revocation.
 - [ ] Remaining administrative account controls and audit coverage for other operator actions.
 - [ ] Production configuration, HTTPS deployment, and signing-key protection.
 - [ ] Database and blob backup / restore workflow.
@@ -1623,14 +1624,16 @@ recorded in the audit history described below.
 
 ### Moderation decision history
 
-Every successful `com.atproto.admin.updateSubjectStatus` or
-`com.atproto.admin.updateAccountEmail` call records an audit entry in the same
+Every successful `com.atproto.admin.updateSubjectStatus`,
+`com.atproto.admin.updateAccountEmail`, or `com.atproto.admin.updateAccountPassword` call records an audit entry in the same
 database transaction as its account, record, blob, or email change.
 Entries include the subject, requested attributes, before/after state, UTC time,
 and the shared operator identity `admin`. Account snapshots also include effective
 and underlying availability, so deactivation changes beneath a takedown are visible.
 Email snapshots contain the old/new private address, confirmation timestamp, and
-email-factor setting, but never challenge codes, digests, or credentials.
+email-factor setting, but never challenge codes, digests, or credentials. Password
+replacement entries contain only the target DID and revoked session/app-password
+counts, never the submitted password or its hash.
 Repeated decisions and private reference changes are recorded even when no public
 event is emitted. Validation errors, stale CIDs, failed authorization, and rolled-back
 transactions do not create decision entries.
@@ -1755,3 +1758,22 @@ no public repository event is emitted.
 This endpoint does not send a message automatically. The owner can request
 confirmation using `com.atproto.server.requestEmailConfirmation`; that request and
 all subsequent email flows use the configured Cloudflare Worker and the new address.
+
+### Operator password replacement
+
+`POST com.atproto.admin.updateAccountPassword` accepts JSON `did` and `password`
+with the configured operator Basic credential and returns an empty 200 response.
+Passwords use the same UTF-8, 8–1024-byte policy and Argon2id hashing as account
+password recovery. Hashing happens before acquiring database locks.
+
+The replacement atomically revokes every existing access/refresh session and app
+password, invalidates all pending email codes and their cooldowns, and appends a
+private audit entry. Previously verified password proofs cannot create new sessions
+after the replacement. Other accounts are unaffected. Repeating the same password
+still revokes credentials and codes.
+
+Confirmed email, the email login-factor preference, identity, repository data, and
+account availability remain unchanged. Inactive accounts can be repaired without
+activating them. The operation requires an existing profile and password credential;
+it does not provision an account. No email is sent automatically. Subsequent login
+codes and recovery messages continue through the configured Cloudflare Worker.
