@@ -25,7 +25,7 @@ Checked items are implemented in this repository. Unchecked items are remaining 
 - [x] Lexicon-based parameter validation for all routed XRPC GET endpoints.
 - [x] JSON procedure envelope validation against pinned upstream Lexicons.
 - [x] Bounded Lexicon-based subscription parameter validation with protocol error frames.
-- [x] Required, optimistic, and skipped record validation for built-in follow, block, like, and repost Lexicons.
+- [x] Required, optimistic, and skipped record validation for built-in follow, block, like, repost, post, and profile Lexicons.
 - [ ] Broader record Lexicon coverage and authenticated Lexicon discovery/resolution.
 
 XRPC routing uses the [HTTP API specification](https://atproto.com/specs/xrpc).
@@ -140,7 +140,7 @@ record Lexicons or grant access to account data.
 - [x] Authenticated `createRecord`, `putRecord`, and `deleteRecord`, with atomic commit/record compare-and-swap.
 - [x] Authenticated atomic `applyWrites` batches with ordered results and commit compare-and-swap.
 - [x] DID or bidirectionally verified handle addressing for single and batch record writes.
-- [ ] Broader record Lexicon coverage and resolution (four built-in record schemas supported).
+- [ ] Broader record Lexicon coverage and resolution (six built-in record schemas supported).
 - [x] `com.atproto.repo.describeRepo` with resolved DID document, current collections, and bidirectional handle status.
 - [x] In-memory CARv1 encoding and decoding with block verification and resource limits.
 - [x] Consistent repository CAR export through the internal storage API.
@@ -186,16 +186,28 @@ The three record validation modes are:
 - `false`: skip record schema validation.
 
 Built-in, pinned schemas currently cover `app.bsky.graph.follow`,
-`app.bsky.graph.block`, `app.bsky.feed.like`, and `app.bsky.feed.repost`, including
-`com.atproto.repo.strongRef` references. Validation checks required fields,
-identifier and datetime formats, and TID record keys. Successfully checked records
+`app.bsky.graph.block`, `app.bsky.feed.like`, `app.bsky.feed.repost`,
+`app.bsky.feed.post`, and `app.bsky.actor.profile`, with their reachable input
+references. Validation checks required fields, identifier/datetime/URI/language
+formats, byte and grapheme limits, arrays, and record keys (TIDs or profile `self`).
+Post dependencies include facets, replies, images, video/captions, galleries,
+external links, quoted records, and self-labels. Open unions accept future
+well-formed variant tags; known variants still require matching fields. Successfully checked records
 return `validationStatus: "valid"`; skipped or unknown schemas return `"unknown"`.
 Schema mismatch or unavailable required validation returns `400 InvalidRequest`.
 Unknown extension fields are retained. The validator does not fetch schemas from
-the network; other records, including posts and profiles, remain unknown until
-additional schema support is implemented. Internal low-level repository APIs and
+the network; other record collections remain unknown until additional schema
+support is implemented. Internal low-level repository APIs and
 CAR imports continue to enforce data integrity without applying this write-API
 Lexicon policy.
+
+Blob schema checks use the declared MIME type and size; the repository independently
+requires ownership and matching stored metadata. Profile images allow PNG/JPEG up
+to 1,000,000 bytes, while post image limits follow the pinned schemas. This does not
+inspect media contents or raise the local 5 MiB upload cap, even where a video
+schema permits larger files. Language tags use well-formed BCP 47 syntax without
+registry lookup or canonicalization. Schema validation does not enforce extra
+application semantics such as whether a facet range matches the text's bytes.
 
 Request JSON is limited to 2 MiB; encoded records retain their 1 MB
 limit. Writes allow 300 requests per direct peer IP per five minutes using the
@@ -391,7 +403,8 @@ inventory to assess transfer progress first.
 - [x] PostgreSQL and S3-compatible byte storage, with per-blob backend metadata and verified reads.
 - [x] Docker MinIO integration tests for signed storage operations, access isolation, and failure handling.
 - [x] Authenticated `com.atproto.repo.uploadBlob` with bounded raw-body reads, transactional session rechecks, and per-IP rate limiting.
-- [ ] Media-content sniffing and Lexicon-specific media validation.
+- [x] Lexicon MIME and size constraints for supported post/profile blob fields.
+- [ ] Media-content sniffing and media validation for additional record Lexicons.
 - [x] Atomic nested record-reference tracking, ownership/metadata checks on writes, and withdrawal when the last reference is removed.
 - [x] Public `com.atproto.sync.getBlob` and paginated `listBlobs`, with `since` filtering, repository status checks, and restrictive content headers.
 - [x] Authenticated `com.atproto.repo.listMissingBlobs` with account-scoped CID pagination and referencing record URIs.

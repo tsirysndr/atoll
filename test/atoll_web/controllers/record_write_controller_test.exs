@@ -110,6 +110,55 @@ defmodule AtollWeb.RecordWriteControllerTest do
     assert Enum.map(result["results"], & &1["validationStatus"]) == ["valid", "unknown"]
   end
 
+  test "post and profile writes validate media constraints without bypassing blob ownership", c do
+    {:ok, avatar} = Atoll.Blobs.stage(@did, "image fixture", "image/png")
+    record = %{"$type" => "app.bsky.actor.profile", "displayName" => "Alice", "avatar" => avatar}
+
+    input = %{
+      "repo" => @did,
+      "collection" => "app.bsky.actor.profile",
+      "rkey" => "self",
+      "record" => record,
+      "validate" => true
+    }
+
+    assert %{"validationStatus" => "valid"} = request(c, "putRecord", input) |> json_response(200)
+    {:ok, head} = Repositories.get_head(@did)
+    seq = Atoll.Repositories.Events.latest_seq()
+
+    for change <- [
+          %{"displayName" => String.duplicate("a", 65)},
+          %{"avatar" => Map.put(avatar, "size", 1_000_001)}
+        ] do
+      assert %{"error" => "InvalidRequest"} =
+               request(c, "putRecord", %{input | "record" => Map.merge(record, change)})
+               |> json_response(400)
+
+      assert Repositories.get_head(@did) == {:ok, head}
+      assert Atoll.Repositories.Events.latest_seq() == seq
+    end
+
+    missing = put_in(avatar, ["ref", "$link"], CID.create("missing", :raw) |> CID.to_base32())
+
+    assert request(c, "putRecord", %{input | "record" => Map.put(record, "avatar", missing)}).status ==
+             400
+
+    post = %{
+      "$type" => "app.bsky.feed.post",
+      "text" => "Hello",
+      "createdAt" => "2026-09-26T12:00:00Z",
+      "langs" => ["mg"]
+    }
+
+    assert %{"validationStatus" => "valid"} =
+             request(c, "createRecord", %{
+               "repo" => @did,
+               "collection" => "app.bsky.feed.post",
+               "record" => post
+             })
+             |> json_response(200)
+  end
+
   test "repository quota failures return a protocol error without publishing a write", c do
     previous = Application.fetch_env(:atoll, :repository_quota)
 

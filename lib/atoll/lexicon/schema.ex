@@ -84,10 +84,15 @@ defmodule Atoll.Lexicon.Schema do
       Enum.all?(value, &valid?(&1, items, doc, depth + 1))
   end
 
-  defp valid?(%{"$type" => type} = value, %{"type" => "union", "refs" => refs}, doc, depth)
+  defp valid?(
+         %{"$type" => type} = value,
+         %{"type" => "union", "refs" => refs} = schema,
+         doc,
+         depth
+       )
        when is_binary(type) do
     case Enum.find(refs, &(absolute_ref(&1, doc) == type)) do
-      nil -> false
+      nil -> schema["closed"] != true and union_tag?(type)
       ref -> valid?(value, %{"type" => "ref", "ref" => ref}, doc, depth + 1)
     end
   end
@@ -117,7 +122,33 @@ defmodule Atoll.Lexicon.Schema do
 
   defp valid?(value, %{"type" => "string"} = schema, _, _) when is_binary(value) do
     String.valid?(value) and bounds?(byte_size(value), schema, "minLength", "maxLength") and
+      bounds?(String.length(value), schema, "minGraphemes", "maxGraphemes") and
       (is_nil(schema["enum"]) or value in schema["enum"]) and format?(value, schema["format"])
+  end
+
+  defp valid?(
+         %{
+           "$type" => "blob",
+           "ref" => %{"$link" => cid} = ref,
+           "mimeType" => mime,
+           "size" => size
+         },
+         %{"type" => "blob"} = schema,
+         _,
+         _
+       ) do
+    with true <- map_size(ref) == 1 and is_integer(size) and size >= 0,
+         true <- is_nil(schema["maxSize"]) or size <= schema["maxSize"],
+         true <- is_binary(mime),
+         {:ok, type, subtype, params} <- Plug.Conn.Utils.media_type(mime),
+         true <- map_size(params) == 0,
+         {:ok, decoded} <- CID.from_base32(cid),
+         {:ok, %{codec: :raw}} <- CID.decode(decoded) do
+      accepted = schema["accept"] || ["*/*"]
+      Enum.any?(accepted, &(&1 in ["*/*", type <> "/*", type <> "/" <> subtype]))
+    else
+      _ -> false
+    end
   end
 
   # "unknown" in these procedure envelopes is record/plcOp data, not a promise
@@ -129,6 +160,14 @@ defmodule Atoll.Lexicon.Schema do
 
   defp valid?(_, _, _, _), do: false
 
+  defp union_tag?(type) do
+    case String.split(type, "#") do
+      [nsid] -> Syntax.nsid?(nsid)
+      [nsid, name] -> Syntax.nsid?(nsid) and Regex.match?(~r/\A[a-zA-Z][a-zA-Z0-9]*\z/, name)
+      _ -> false
+    end
+  end
+
   defp absolute_ref("#" <> _ = ref, doc), do: doc["id"] <> ref
   defp absolute_ref(ref, _), do: ref
 
@@ -138,6 +177,14 @@ defmodule Atoll.Lexicon.Schema do
         (is_nil(schema[high]) or value <= schema[high])
 
   defp format?(_, nil), do: true
+  defp format?(value, "language"), do: Atoll.Lexicon.Language.valid?(value)
+
+  defp format?(value, "uri") do
+    byte_size(value) <= 8192 and
+      Regex.match?(~r/\A[A-Za-z][A-Za-z0-9+.-]*:[A-Za-z0-9._~:!$&'()*+,;=\/@?%#\[\]-]*\z/, value) and
+      not Regex.match?(~r/%(?![0-9A-Fa-f]{2})/, value) and match?({:ok, _}, URI.new(value))
+  end
+
   defp format?(value, "at-uri"), do: Syntax.at_uri?(value)
   defp format?(value, "did"), do: Syntax.did?(value)
   defp format?(value, "handle"), do: Syntax.handle?(value)
