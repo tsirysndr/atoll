@@ -136,6 +136,15 @@ defmodule Atoll.Identity.Resolver do
 
   @doc "Fetch a public Lexicon record from an HTTPS PDS using the resolver's bounded, pinned transport."
   def fetch_lexicon(pds, did, nsid, opts \\ []) do
+    fetch_lexicon_response(pds, did, nsid, opts, :json)
+  end
+
+  @doc "Fetch the signed CAR search-path proof for a public Lexicon record."
+  def fetch_lexicon_proof(pds, did, nsid, opts \\ []) do
+    fetch_lexicon_response(pds, did, nsid, opts, :proof)
+  end
+
+  defp fetch_lexicon_response(pds, did, nsid, opts, mode) do
     with true <- is_binary(pds) and Syntax.did?(did) and Syntax.nsid?(nsid),
          {:ok,
           %URI{
@@ -148,10 +157,19 @@ defmodule Atoll.Identity.Resolver do
             fragment: nil
           } = uri} <- URI.new(pds),
          true <- is_binary(host) and host != "" and port in 1..65535 and path in [nil, "", "/"] do
-      query = URI.encode_query(repo: did, collection: "com.atproto.lexicon.schema", rkey: nsid)
-      url = URI.to_string(%{uri | path: "/xrpc/com.atproto.repo.getRecord", query: query})
+      {method, params, limit, accept} =
+        case mode do
+          :json ->
+            {"com.atproto.repo.getRecord", [repo: did], 262_144, "application/json"}
 
-      case fetch(url, opts, 262_144) do
+          :proof ->
+            {"com.atproto.sync.getRecord", [did: did], 2_097_152, "application/vnd.ipld.car"}
+        end
+
+      query = URI.encode_query(params ++ [collection: "com.atproto.lexicon.schema", rkey: nsid])
+      url = URI.to_string(%{uri | path: "/xrpc/" <> method, query: query})
+
+      case fetch(url, Keyword.put(opts, :accept, accept), limit) do
         {:ok, body} -> {:ok, body}
         {:error, :did_document_too_large} -> {:error, :lexicon_too_large}
         {:error, :did_not_found} -> {:error, :lexicon_not_found}
@@ -193,9 +211,13 @@ defmodule Atoll.Identity.Resolver do
           headers: [
             {"host", authority},
             {"accept",
-             if(max_bytes == 4096,
-               do: "text/plain",
-               else: "application/did+ld+json, application/json"
+             Keyword.get(
+               opts,
+               :accept,
+               if(max_bytes == 4096,
+                 do: "text/plain",
+                 else: "application/did+ld+json, application/json"
+               )
              )},
             {"accept-encoding", "identity"}
           ],

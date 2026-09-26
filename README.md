@@ -28,7 +28,7 @@ Checked items are implemented in this repository. Unchecked items are remaining 
 - [x] Required, optimistic, and skipped record validation for all 19 Bluesky record Lexicons in the pinned upstream revision.
 - [x] Configurable local custom record Lexicons with bounded startup validation.
 - [x] Exact DNS Lexicon namespace delegation with fresh DID/key/PDS resolution.
-- [x] Bounded Lexicon schema retrieval from the delegated HTTPS PDS with URI/CID checks.
+- [x] Bounded Lexicon schema retrieval with URI/CID checks and signed repository inclusion proofs.
 - [x] Bounded remote record-Lexicon dependency catalogs with schema/reference validation.
 - [x] Opt-in network Lexicon integration with record-write validation.
 
@@ -2986,9 +2986,19 @@ The returned URI must exactly match the delegated DID, schema collection, and
 normalized NSID. The value must declare the schema record type, Lexicon version 1,
 matching `id`, and nonempty named definitions. Its canonical DAG-CBOR SHA-256 CID
 must match the response CID. Success returns the document and its DID/URI/CID
-provenance without installing it. This trusts DNS, DID resolution, and the named
-PDS's authenticated HTTPS response; CID integrity is not a signed repository
-inclusion proof or a freshness guarantee. Signed inclusion proofs remain pending.
+provenance without installing it. Before returning success, it also requests
+`com.atproto.sync.getRecord` from the same PDS, bounded to 2 MiB, and verifies the
+CAR's signed commit with the freshly resolved account key. The MST inclusion path
+must identify the same schema CID as the JSON response. Invalid, missing,
+wrongly signed, or mismatched proofs fail without an unsigned fallback. A record
+change between the two reads can therefore fail the request; no automatic retry
+is made. Returned provenance includes the signed commit CID and revision.
+
+This still trusts DNS and DID resolution to identify the publisher and signing key.
+A valid older commit signed by that key can prove historical inclusion; the proof
+does not independently establish the latest revision. The PDS's current-record
+response supplies the freshness assertion. Signing-key rotation during retrieval
+may cause verification to fail until a new request resolves the updated identity.
 
 `Atoll.Lexicon.Catalog.resolve/2` follows external references through the same
 independent discovery/fetch process for each namespace. It supports the record
@@ -3004,7 +3014,7 @@ re-encoded schema JSON, in addition to the fetcher's per-response limit. A
 30-second elapsed-time budget is checked between fetches and before accepting
 the completed catalog. An in-flight DNS/HTTP operation retains its individual
 timeout, so this is not a hard 30-second cancellation deadline. Results contain
-the validated catalog plus DID/URI/CID provenance for each remote document; no
+the validated catalog plus DID/URI/CID/commit/revision provenance for each remote document; no
 global configuration, cache, or database state changes. Transport/clock options
 are trusted test hooks, never request parameters.
 
@@ -3045,5 +3055,6 @@ proofs, and tampered blocks fail. Both k256 and P-256 are supported.
 The caller must authenticate the signing key and establish freshness separately.
 A valid older signed commit can still prove historical inclusion; this API neither
 resolves identity nor proves that the commit is the latest. Network Lexicon
-retrieval does not yet invoke this verifier. The structure follows the
+retrieval invokes this verifier and requires its record CID to match the JSON
+response. The structure follows the
 [repository specification](https://atproto.com/specs/repository).

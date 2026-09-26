@@ -23,7 +23,7 @@ defmodule Atoll.LexiconFetcherTest do
     %{"uri" => @uri, "cid" => cid, "value" => value}
   end
 
-  defp options(handler, pds \\ "https://pds.example.com:8443") do
+  defp options(handler, pds \\ "https://pds.example.com:8443", proof_handler \\ nil) do
     key = Atoll.SigningKey.generate()
     {:ok, multikey} = Atoll.Multikey.encode(key.curve, key.public)
 
@@ -49,12 +49,40 @@ defmodule Atoll.LexiconFetcherTest do
         Req.new(
           plug: fn conn ->
             case conn.request_path do
-              "/" <> @did -> Req.Test.json(conn, doc)
-              "/xrpc/com.atproto.repo.getRecord" -> handler.(conn)
+              "/" <> @did ->
+                Req.Test.json(conn, doc)
+
+              "/xrpc/com.atproto.repo.getRecord" ->
+                handler.(conn)
+
+              "/xrpc/com.atproto.sync.getRecord" ->
+                if proof_handler do
+                  proof_handler.(conn, key)
+                else
+                  assert URI.decode_query(conn.query_string) == %{
+                           "did" => @did,
+                           "collection" => "com.atproto.lexicon.schema",
+                           "rkey" => @nsid
+                         }
+
+                  assert Plug.Conn.get_req_header(conn, "accept") == ["application/vnd.ipld.car"]
+                  Plug.Conn.send_resp(conn, 200, proof(key))
+                end
             end
           end
         )
     ]
+  end
+
+  defp proof(key, document \\ record()["value"]) do
+    bytes = Atoll.CBOR.encode!(document)
+    cid = Atoll.CID.create(bytes, :dag_cbor)
+    {:ok, tree} = Atoll.MST.new(%{("com.atproto.lexicon.schema/" <> @nsid) => cid})
+    {:ok, rev} = Atoll.TID.next()
+    {:ok, commit} = Atoll.Commit.create(@did, tree.root, rev, key)
+    blocks = tree.blocks |> Map.put(cid, bytes) |> Map.put(commit.cid, commit.bytes)
+    {:ok, archive} = Atoll.CAR.encode([commit.cid], blocks)
+    archive
   end
 
   test "fetches only the delegated PDS and checks URI, schema identity and content CID" do
@@ -77,6 +105,8 @@ defmodule Atoll.LexiconFetcherTest do
     assert result.document == record()["value"]
     assert result.cid == record()["cid"]
     assert result.did == @did
+    assert {:ok, _} = Atoll.CID.from_base32(result.commit)
+    assert Atoll.TID.valid?(result.rev)
   end
 
   test "rejects substituted records, malformed schemas and mismatched content" do
@@ -133,6 +163,42 @@ defmodule Atoll.LexiconFetcherTest do
 
     assert {:error, :lexicon_not_found} =
              Fetcher.fetch(@nsid, options(&Plug.Conn.send_resp(&1, 404, "")))
+  end
+
+  test "requires a matching proof signed by the resolved account key" do
+    for handler <- [
+          fn conn, _ -> Plug.Conn.send_resp(conn, 200, proof(Atoll.SigningKey.generate())) end,
+          fn conn, key ->
+            Plug.Conn.send_resp(
+              conn,
+              200,
+              proof(key, Map.put(record()["value"], "description", "different"))
+            )
+          end,
+          fn conn, _ -> Plug.Conn.send_resp(conn, 200, "not a CAR") end
+        ] do
+      assert {:error, :invalid_record_proof} =
+               Fetcher.fetch(
+                 @nsid,
+                 options(&Req.Test.json(&1, record()), "https://pds.example.com", handler)
+               )
+    end
+  end
+
+  test "proof fetch bounds bytes and cannot fall back to unsigned JSON" do
+    for {status, bytes, reason} <- [
+          {404, "", :lexicon_not_found},
+          {503, "", :resolution_failed},
+          {200, String.duplicate("x", 2_097_153), :lexicon_too_large}
+        ] do
+      handler = fn conn, _ -> Plug.Conn.send_resp(conn, status, bytes) end
+
+      assert {:error, ^reason} =
+               Fetcher.fetch(
+                 @nsid,
+                 options(&Req.Test.json(&1, record()), "https://pds.example.com", handler)
+               )
+    end
   end
 
   test "rejects private PDS destinations before contacting them" do

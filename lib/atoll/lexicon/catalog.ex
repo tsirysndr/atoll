@@ -82,7 +82,8 @@ defmodule Atoll.Lexicon.Catalog do
             Enum.reject(queue, &(Map.has_key?(documents, &1) or Map.has_key?(state.builtins, &1)))
 
           if bytes <= @max_bytes and map_size(documents) + length(pending) <= @max_documents do
-            provenance = Map.put(state.provenance, nsid, Map.take(result, [:did, :uri, :cid]))
+            provenance =
+              Map.put(state.provenance, nsid, Map.take(result, [:did, :uri, :cid, :commit, :rev]))
 
             walk(
               queue,

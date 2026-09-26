@@ -1,7 +1,8 @@
 defmodule Atoll.Lexicon.Fetcher do
   @moduledoc """
   Retrieves a schema from the HTTPS PDS identified by fresh namespace/DID resolution.
-  Verifies record URI and content CID, but does not verify a signed repository proof.
+  Verifies record URI, content CID, and inclusion under the freshly resolved signing key.
+  Signed inclusion does not prove the commit is the latest.
   Does not install schemas or resolve their dependencies.
   """
   alias Atoll.{CBOR, CID, DataModel}
@@ -12,15 +13,39 @@ defmodule Atoll.Lexicon.Fetcher do
     with {:ok, target} <- Authority.resolve(nsid, opts),
          {:ok, body} <- Resolver.fetch_lexicon(target.identity.pds, target.did, target.nsid, opts),
          {:ok, record} <- decode(body),
-         :ok <- verify(record, target) do
+         :ok <- verify(record, target),
+         {:ok, proof} <- inclusion(record, target, opts) do
       {:ok,
        %{
          nsid: target.nsid,
          did: target.did,
          uri: target.uri,
          cid: record["cid"],
-         document: record["value"]
+         document: record["value"],
+         commit: CID.to_base32(proof.commit),
+         rev: proof.rev
        }}
+    end
+  end
+
+  defp inclusion(record, target, opts) do
+    key = target.identity.signing_key
+
+    with {:ok, archive} <-
+           Resolver.fetch_lexicon_proof(target.identity.pds, target.did, target.nsid, opts),
+         {:ok, proof} <-
+           Atoll.Repositories.RecordProof.verify(
+             archive,
+             target.did,
+             "com.atproto.lexicon.schema/" <> target.nsid,
+             key.curve,
+             key.public
+           ),
+         true <- CID.to_base32(proof.cid) == record["cid"] do
+      {:ok, proof}
+    else
+      {:error, reason} -> {:error, reason}
+      _ -> {:error, :invalid_record_proof}
     end
   end
 
