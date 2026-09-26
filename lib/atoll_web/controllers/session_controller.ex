@@ -26,6 +26,13 @@ defmodule AtollWeb.SessionController do
     end
   end
 
+  def service_auth(conn, params) do
+    with {:ok, token} <- bearer(conn),
+         {:ok, result} <- Atoll.Accounts.ServiceAuth.issue(token, params) do
+      json(conn, result)
+    end
+  end
+
   def refresh(conn, _params) do
     with {:ok, token} <- bearer(conn),
          {:ok, pair} <- Sessions.refresh(token) do

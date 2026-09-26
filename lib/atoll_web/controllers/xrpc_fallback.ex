@@ -7,6 +7,15 @@ defmodule AtollWeb.XRPCFallback do
   def call(conn, {:error, :request_timeout}),
     do: error(conn, 408, "RequestTimeout", "Request body timed out.")
 
+  def call(conn, {:error, :bad_expiration}),
+    do:
+      error(
+        conn,
+        400,
+        "BadExpiration",
+        "Service token expiration is outside the permitted interval."
+      )
+
   def call(conn, {:error, :import_rate_limited}),
     do: error(conn, 429, "RateLimitExceeded", "Too many repository imports.")
 

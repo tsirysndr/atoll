@@ -10,6 +10,7 @@ defmodule AtollWeb.SessionRequestPlug do
   @queries [
     @prefix <> "getSession",
     @prefix <> "checkAccountStatus",
+    @prefix <> "getServiceAuth",
     "/xrpc/com.atproto.repo.listMissingBlobs"
   ]
   @parser Plug.Parsers.init(

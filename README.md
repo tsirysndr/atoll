@@ -397,7 +397,8 @@ locking protects shared objects when collectors overlap.
 - [x] Opt-in supervised identity refresh scheduling, with one task at a time, timeouts, sweep retries, and outcome telemetry.
 - [ ] Authenticated identity-management endpoints and distributed refresh coordination.
 - [ ] Relay discovery / crawl requests and federation interoperability tests.
-- [ ] Service authentication and request proxying to AppViews and other services.
+- [x] `com.atproto.server.getServiceAuth` issues short-lived account-signed service JWTs.
+- [ ] Incoming service JWT verification and request proxying to AppViews and other services.
 
 Historical `getBlocks` reads are limited to active repositories and return only
 requested blocks in a rootless CAR. Deleted record bytes remain publicly retrievable
@@ -407,6 +408,22 @@ granting access; shared storage or index membership alone is insufficient. A
 missing or foreign CID rejects the whole request. Historical verification can
 load multiple complete retained trees, so its cost grows with repository history;
 scalable membership indexes and history compaction remain pending.
+
+`GET /xrpc/com.atproto.server.getServiceAuth` requires an active account's access
+token and a stored repository signing key. Supply `aud` as a DID or DID with a
+service fragment, optionally `lxm` as an XRPC method NSID and `exp` as Unix epoch
+seconds. Tokens default to 60 seconds; method-less tokens cannot exceed 60 seconds,
+and method-bound tokens cannot exceed one hour. Expired or excessive timestamps
+return `BadExpiration`. Protected account-management methods are rejected
+case-insensitively. The endpoint shares session request limits and disables caching.
+
+Issued JWTs use ES256K or ES256 according to the account key and include `iss`,
+`aud`, `iat`, `exp`, a random `jti`, and optional `lxm`. Authorization and key access
+occur in one transaction. Tokens already issued remain cryptographically valid
+until expiration even if the originating session is revoked; receiving services
+must enforce audience, method, expiration, and their own authorization policy.
+Atoll does not yet accept service JWTs as local access tokens or proxy requests.
+Restricted sessions for inactive accounts and app-password delegation remain pending.
 
 For local development, connect to
 `ws://localhost:4000/xrpc/com.atproto.sync.subscribeRepos?cursor=0`.
