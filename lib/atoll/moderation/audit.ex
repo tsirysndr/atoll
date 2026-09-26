@@ -57,6 +57,28 @@ defmodule Atoll.Moderation.Audit do
     )
   end
 
+  @doc "Records explicit erasure of superseded signup custody, without secret material."
+  def signup_key_retirement!(registration, installed) do
+    {:ok, old} =
+      Atoll.Multikey.to_did_key(registration.rotation_curve, registration.rotation_public_key)
+
+    {:ok, current} = Atoll.Multikey.to_did_key(installed.curve, installed.public_key)
+
+    insert!(
+      "atoll.plc.retireSignupKey",
+      registration.did,
+      %{kind: "plcSignupKey", did: registration.did},
+      %{
+        genesisCid: registration.cid,
+        installedKey: current,
+        installedOperationCid: installed.verified_cid
+      },
+      %{key: old, retained: true},
+      %{key: old, retained: false},
+      "operator"
+    )
+  end
+
   @doc "Records an ordinary PLC authority-key replacement without private material."
   def authority_rotation!(did, cid, expected, replacement) do
     insert!(

@@ -4,7 +4,8 @@ defmodule Atoll.Identity.PLC.Registrations do
 
   Stage within the account provisioning transaction, after creating a deactivated
   repository, profile, and encrypted repository key. Submit only after committing.
-  The signed operation and rotation key are insert-only. Directory confirmation
+  The signed operation and public key are insert-only. Private custody can be
+  explicitly retired after completed key reconciliation. Directory confirmation
   is historical evidence of acceptance, not authorization to activate an account.
   """
   import Ecto.Query
@@ -192,6 +193,9 @@ defmodule Atoll.Identity.PLC.Registrations do
   def rewrap!(did, master) do
     case Repo.one(from(r in Registration, where: r.did == ^did, lock: "FOR UPDATE"), log: false) do
       nil ->
+        :absent
+
+      %{rotation_retired_at: retired} when not is_nil(retired) ->
         :absent
 
       row ->

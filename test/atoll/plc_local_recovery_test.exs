@@ -371,6 +371,136 @@ defmodule Atoll.PLCLocalRecoveryTest do
     assert Agent.get(c.directory, & &1.posts) == 1
   end
 
+  test "explicit signup retirement unblocks rewrap after lost-master recovery", c do
+    repository = SigningKey.generate(:p256)
+    authority = SigningKey.generate()
+
+    {op, cid, expected_repository, expected_authority} =
+      combined_recovery(c, repository, authority)
+
+    original = Repo.get!(Atoll.Identity.PLC.Registration, c.did)
+    Application.put_env(:atoll, :key_encryption_key, :crypto.strong_rand_bytes(32))
+
+    assert {:ok, _} =
+             LocalRecovery.stage_keys(
+               c.did,
+               op,
+               {expected_repository, repository},
+               {expected_authority, authority},
+               c.opts
+             )
+
+    assert {:ok, _} = LocalRecovery.resume(c.did, cid, c.opts)
+    assert {:error, :key_decryption_failed} = Atoll.KeyRewrap.batch()
+    {:ok, public} = Multikey.to_did_key(authority.curve, authority.public)
+    seq = Events.latest_seq()
+
+    output =
+      ExUnit.CaptureIO.capture_io(fn ->
+        Mix.Tasks.Atoll.Plc.RetireSignupKey.run([c.did, original.cid, public])
+      end)
+
+    assert Jason.decode!(output)["result"] == "retired"
+    retired = Repo.get!(Atoll.Identity.PLC.Registration, c.did)
+    assert retired.rotation_retired_at
+    refute retired.rotation_envelope
+    assert retired.operation == original.operation
+    assert retired.rotation_public_key == original.rotation_public_key
+    assert {:ok, %{unchanged: 2}} = Atoll.KeyRewrap.batch()
+    assert {:ok, ^authority} = Registrations.rotation_key(c.did)
+    assert Events.latest_seq() == seq
+
+    assert {:ok, %{result: :already_retired}} =
+             Atoll.Identity.PLC.SignupKeyRetirement.retire(c.did, original.cid, public)
+
+    assert Repo.get!(Atoll.Identity.PLC.Registration, c.did).rotation_retired_at ==
+             retired.rotation_retired_at
+
+    audits = Repo.all(Atoll.Moderation.AuditEntry)
+    assert length(audits) == 2
+    audit = Enum.find(audits, &(&1.operation == "atoll.plc.retireSignupKey"))
+    assert audit.before_state["retained"]
+    refute audit.after_state["retained"]
+  end
+
+  test "signup retirement refuses missing installed custody, pending work, and stale expectations",
+       c do
+    registration = Repo.get!(Atoll.Identity.PLC.Registration, c.did)
+    {:ok, public} = Multikey.to_did_key(c.high.curve, c.high.public)
+
+    retire = fn genesis, key ->
+      Atoll.Identity.PLC.SignupKeyRetirement.retire(c.did, genesis, key)
+    end
+
+    assert {:error, :key_not_found} = retire.(registration.cid, public)
+    assert {:ok, _} = LocalRecovery.stage_authority(c.did, c.recovery, public, c.high, c.opts)
+    assert {:error, :plc_update_pending} = retire.(registration.cid, public)
+    assert {:ok, _} = LocalRecovery.resume(c.did, c.cid, c.opts)
+    assert {:error, :signup_retirement_conflict} = retire.("wrong", public)
+    assert {:error, :stale_rotation_key} = retire.(registration.cid, "wrong")
+
+    assert Repo.get!(Atoll.Identity.PLC.Registration, c.did).rotation_envelope ==
+             registration.rotation_envelope
+
+    installed = Repo.get!(Atoll.Identity.PLC.RotationKey, c.did)
+
+    installed
+    |> Ecto.Changeset.change(envelope: :binary.copy(<<0>>, 61))
+    |> Repo.update!(log: false)
+
+    assert {:error, :key_decryption_failed} = retire.(registration.cid, public)
+    refute Repo.get!(Atoll.Identity.PLC.Registration, c.did).rotation_retired_at
+  end
+
+  test "signup retirement requires completed signup and readable repository custody", c do
+    registration = Repo.get!(Atoll.Identity.PLC.Registration, c.did)
+    {:ok, public} = Multikey.to_did_key(c.high.curve, c.high.public)
+    registration |> Ecto.Changeset.change(completed_at: nil) |> Repo.update!()
+
+    assert {:error, :signup_retirement_conflict} =
+             Atoll.Identity.PLC.SignupKeyRetirement.retire(c.did, registration.cid, public)
+
+    Repo.get!(Atoll.Identity.PLC.Registration, c.did)
+    |> Ecto.Changeset.change(completed_at: registration.completed_at)
+    |> Repo.update!()
+
+    assert {:ok, _} = LocalRecovery.stage_authority(c.did, c.recovery, public, c.high, c.opts)
+    assert {:ok, _} = LocalRecovery.resume(c.did, c.cid, c.opts)
+
+    Repo.get!(Atoll.Repositories.EncryptedKey, c.did)
+    |> Ecto.Changeset.change(envelope: :binary.copy(<<0>>, 61))
+    |> Repo.update!(log: false)
+
+    assert {:error, :key_decryption_failed} =
+             Atoll.Identity.PLC.SignupKeyRetirement.retire(c.did, registration.cid, public)
+
+    refute Repo.get!(Atoll.Identity.PLC.Registration, c.did).rotation_retired_at
+  end
+
+  test "signup retirement and audit roll back with the surrounding transaction", c do
+    registration = Repo.get!(Atoll.Identity.PLC.Registration, c.did)
+    {:ok, public} = Multikey.to_did_key(c.high.curve, c.high.public)
+    assert {:ok, _} = LocalRecovery.stage_authority(c.did, c.recovery, public, c.high, c.opts)
+    assert {:ok, _} = LocalRecovery.resume(c.did, c.cid, c.opts)
+
+    assert {:error, :abort} =
+             Repo.transaction(fn ->
+               assert {:ok, _} =
+                        Atoll.Identity.PLC.SignupKeyRetirement.retire(
+                          c.did,
+                          registration.cid,
+                          public
+                        )
+
+               Repo.rollback(:abort)
+             end)
+
+    assert Repo.get!(Atoll.Identity.PLC.Registration, c.did).rotation_envelope ==
+             registration.rotation_envelope
+
+    assert length(Repo.all(Atoll.Moderation.AuditEntry)) == 1
+  end
+
   test "combined recovery rollback restores old authority and keeps both pending keys", c do
     repository = SigningKey.generate(:p256)
     authority = SigningKey.generate()

@@ -8,6 +8,7 @@ defmodule Atoll.Identity.PLC.Registration do
     field :rotation_curve, Ecto.Enum, values: [:k256, :p256]
     field :rotation_public_key, :binary
     field :rotation_envelope, :binary, redact: true
+    field :rotation_retired_at, :utc_datetime_usec
     field :confirmed_at, :utc_datetime_usec
     field :completed_at, :utc_datetime_usec
     timestamps(type: :utc_datetime_usec)

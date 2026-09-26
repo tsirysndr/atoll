@@ -150,6 +150,7 @@ record Lexicons or grant access to account data.
 - [x] Operator recovery with supplied repository private keys, including unreadable-vault repair and atomic commit publication.
 - [x] Internal recovery custody and atomic restoration of PLC authority keys without decrypting old custody.
 - [x] Operator authority-only and combined repository/authority key recovery, including old-master-key loss.
+- [x] Explicit audited retirement of historical signup key envelopes after completed key reconciliation.
 - [ ] Recovery conflict resolution for existing pending operations and missing authority metadata.
 - [x] Per-revision signing-key provenance for historical record and block verification.
 - [x] Internal atomic repository signing-key replacement with unchanged-tree commits and vault rollback.
@@ -3736,8 +3737,42 @@ valid signed recovery remain available. Existing public authority metadata is
 required; missing metadata and conflicting pending operations still need an
 operator reconciliation workflow. The old signup envelope remains retained as
 historical custody and may remain unreadable; recovery does not restore lost
-master keys or make those old envelopes rewrappable.
+master keys or make those old envelopes rewrappable. The explicit retirement
+command below can remove superseded signup custody so future rewraps can proceed.
 
 The migration permits both key purposes only for recovery journals. Ordinary
 rotation retains the one-purpose constraint. Rolling back this migration refuses
 existing combined-key journal rows rather than discarding their metadata.
+
+
+### Retiring superseded signup key custody
+
+After a completed PLC authority rotation or recovery, an operator can erase the
+historical signup private-key envelope:
+
+```sh
+mix atoll.plc.retire_signup_key did:plc:ACCOUNT EXPECTED_GENESIS_CID EXPECTED_INSTALLED_DID_KEY
+```
+
+This is an explicit, irreversible local custody operation. Keep an offline backup
+first if the original key is still useful for recovery. It does not remove that
+key from directory history or the current rotation-key list, change the installed
+key, erase database backups/WAL, or claim that the directory has not changed since
+local reconciliation. It performs no network request. Signed genesis, its CID,
+public key metadata, and signup confirmation/completion timestamps remain intact.
+
+The command locks the account, requires active/deactivated status and completed
+signup, checks both expected public identifiers, rejects pending PLC updates, and
+verifies readable repository and separately installed authority custody. The
+installed authority must reference a confirmed, locally completed update whose
+rotation-key list authorizes it. Directly imported custody without that completed
+journal is insufficient. An unreadable historical signup envelope can be retired;
+an unreadable installed authority or repository key cannot.
+
+Envelope erasure, retirement timestamp, and public-metadata audit commit together.
+Retries recheck the prerequisites without rewriting the timestamp or duplicating
+the audit. No repository commit or stream event is emitted. Master-key rewrapping
+skips explicitly retired signup envelopes while continuing to check installed and
+pending custody. Other unreadable envelopes still fail the entire rewrap page.
+Rolling back the retirement migration refuses rows with erased envelopes, since
+those private keys cannot be reconstructed.
