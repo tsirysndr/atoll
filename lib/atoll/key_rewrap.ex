@@ -31,10 +31,17 @@ defmodule Atoll.KeyRewrap do
                 counts =
                   count(counts, :plc, Atoll.Identity.PLC.RotationKeys.rewrap!(head.did, master))
 
+                counts =
+                  count(
+                    counts,
+                    :plc,
+                    Atoll.Identity.PLC.PendingSigningKeys.rewrap!(head.did, master)
+                  )
+
                 count(
                   counts,
                   :plc,
-                  Atoll.Identity.PLC.PendingSigningKeys.rewrap!(head.did, master)
+                  Atoll.Identity.PLC.PendingAuthorityKeys.rewrap!(head.did, master)
                 )
               end
             )

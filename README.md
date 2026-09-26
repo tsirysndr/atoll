@@ -140,7 +140,8 @@ record Lexicons or grant access to account data.
 - [x] Operator did:web signing-key rotation after external DID-document updates.
 - [x] Encrypted pending signing-key custody bound to durable PLC updates, with master-key rewrapping.
 - [x] Operator PLC repository signing-key rotation with durable staging and resumable publication.
-- [ ] PLC recovery workflows and rotation of directory authority keys.
+- [x] Internal encrypted pending custody and atomic installation for PLC directory-authority replacement keys.
+- [ ] Operator directory-authority rotation orchestration and PLC recovery workflows.
 - [x] Per-revision signing-key provenance for historical record and block verification.
 - [x] Internal atomic repository signing-key replacement with unchanged-tree commits and vault rollback.
 - [x] PostgreSQL repository heads and atomic record, tree, and commit updates with optional head compare-and-swap.
@@ -3388,3 +3389,30 @@ interrupts completion, retry `resume` with the same CID; do not restage or delet
 the pending journal. Matching directory acceptance avoids a second POST. A later
 conflicting directory update leaves custody intact and fails closed, requiring
 operator reconciliation; automatic recovery/rebasing is not implemented.
+
+### Pending PLC directory-authority key custody
+
+The internal `Atoll.Identity.PLC.PendingAuthorityKeys` API stages an encrypted
+replacement for the retained PLC rotation key alongside its immutable signed
+update. It requires an ordinary authority-only successor: the expected retained
+key is replaced in its existing priority position, with all other rotation keys,
+verification methods, aliases, and services unchanged. It does not perform
+fresh network authorization or submit an operation; its caller must do so.
+
+Custody uses a separate authenticated encryption domain from repository signing
+keys, binding the DID, operation CID, expected authority key, curve, and new
+public key. Exact retries preserve custody, and ambiguous delivery never removes
+it. One retained authority envelope per account and separate purposes for
+repository/authority transitions are enforced in PostgreSQL. The master-key
+rewrap command includes pending authority envelopes in its `plc` count and aborts
+the whole page if an envelope cannot be verified.
+
+After fresh directory confirmation, callers can atomically adopt the key with
+`RotationKeys.adopt_pending!/2`, complete the journal, and release pending custody.
+Adoption verifies confirmation, account state, and the current retained key,
+then installs encrypted custody in the retained-authority vault without changing
+the repository signing key. The original signup envelope remains retained; the
+installed replacement takes precedence for future PLC signing. This primitive
+is not a fresh-authority check or an operator command. Generic account
+`submitPlcOperation` cannot complete a journal carrying staged key custody.
+Operator-facing authority rotation and recovery orchestration remain pending.

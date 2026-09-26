@@ -1,15 +1,15 @@
-defmodule Atoll.Identity.PLC.PendingSigningKeys do
+defmodule Atoll.Identity.PLC.PendingAuthorityKeys do
   @moduledoc """
-  Internal encrypted custody of replacement repository keys bound to immutable PLC updates.
+  Internal encrypted custody of replacement PLC authority keys bound to immutable PLC updates.
 
   This is not an authorization boundary. The caller must authorize the operation,
   obtain fresh directory evidence, and atomically stage any local reservations.
-  Staging never submits to the directory or changes the active repository key.
+  Staging never submits to the directory or changes the active PLC authority key.
   """
   import Ecto.Query
-  alias Atoll.{CBOR, KeyVault, MasterKeys, Multikey, Repo, SigningKey}
+  alias Atoll.{CBOR, MasterKeys, Multikey, Repo, SigningKey}
   alias Atoll.Repositories.{Events, Head}
-  alias Atoll.Identity.PLC.{Operation, Update, Updates}
+  alias Atoll.Identity.PLC.{Operation, Registrations, Update, Updates}
 
   def stage(did, audit, operation, expected, %SigningKey{} = key) when is_map(operation) do
     with {:ok, master} <- MasterKeys.active(),
@@ -18,18 +18,19 @@ defmodule Atoll.Identity.PLC.PendingSigningKeys do
          true <- derived.public == key.public,
          {:ok, public} <- Multikey.to_did_key(key.curve, key.public),
          true <- public != expected,
-         true <- get_in(operation, ["verificationMethods", "atproto"]) == public,
+         true <- public in Operation.rotation_keys(operation),
          {:ok, cid} <- Operation.cid(operation) do
       Repo.transaction(fn ->
         head = lock!(did)
         unless head.status in [:active, :deactivated], do: Repo.rollback(:repo_inactive)
 
-        unless Multikey.to_did_key(head.curve, head.public_key) == {:ok, expected},
-          do: Repo.rollback(:stale_signing_key)
+        case Registrations.rotation_key(did) do
+          {:ok, current} ->
+            unless Multikey.to_did_key(current.curve, current.public) == {:ok, expected},
+              do: Repo.rollback(:stale_rotation_key)
 
-        case KeyVault.fetch(did) do
-          {:ok, _} -> :ok
-          {:error, reason} -> Repo.rollback(reason)
+          {:error, reason} ->
+            Repo.rollback(reason)
         end
 
         case Updates.stage(did, audit, operation) do
@@ -39,38 +40,41 @@ defmodule Atoll.Identity.PLC.PendingSigningKeys do
 
         row = Repo.get_by!(Update, did: did, cid: cid)
 
-        if row.authority_public_key, do: Repo.rollback(:pending_key_conflict)
+        unless rotation_only?(row, expected, public), do: Repo.rollback(:invalid_rotation_key)
+        if row.signing_public_key, do: Repo.rollback(:pending_key_conflict)
 
         cond do
           row.completed_at ->
             Repo.rollback(:plc_update_completed)
 
-          row.signing_envelope ->
-            unless row.expected_signing_key == expected and fetch(did, cid) == {:ok, key},
+          row.authority_envelope ->
+            unless row.expected_authority_key == expected and fetch(did, cid) == {:ok, key},
               do: Repo.rollback(:pending_key_conflict)
 
             :unchanged
 
-          row.signing_public_key ->
+          row.authority_public_key ->
             Repo.rollback(:pending_key_conflict)
 
-          Repo.exists?(from u in Update, where: u.did == ^did and not is_nil(u.signing_envelope)) ->
+          Repo.exists?(
+            from u in Update, where: u.did == ^did and not is_nil(u.authority_envelope)
+          ) ->
             Repo.rollback(:pending_key_conflict)
 
           true ->
             bound = %{
               row
-              | signing_curve: key.curve,
-                signing_public_key: key.public,
-                expected_signing_key: expected
+              | authority_curve: key.curve,
+                authority_public_key: key.public,
+                expected_authority_key: expected
             }
 
             row
             |> Ecto.Changeset.change(
-              signing_curve: key.curve,
-              signing_public_key: key.public,
-              expected_signing_key: expected,
-              signing_envelope: encrypt(bound, key.private, master)
+              authority_curve: key.curve,
+              authority_public_key: key.public,
+              expected_authority_key: expected,
+              authority_envelope: encrypt(bound, key.private, master)
             )
             |> Repo.update!(log: false)
 
@@ -88,7 +92,7 @@ defmodule Atoll.Identity.PLC.PendingSigningKeys do
   def fetch(did, cid) do
     with {:ok, master} <- MasterKeys.active() do
       case Repo.get_by(Update, [did: did, cid: cid], log: false) do
-        %Update{signing_envelope: envelope} = row when is_binary(envelope) ->
+        %Update{authority_envelope: envelope} = row when is_binary(envelope) ->
           MasterKeys.decrypt(master, &decrypt(row, &1))
 
         _ ->
@@ -102,22 +106,20 @@ defmodule Atoll.Identity.PLC.PendingSigningKeys do
     unless Repo.in_transaction?(),
       do: raise(ArgumentError, "pending-key release requires a transaction")
 
-    head = lock!(did)
+    lock!(did)
     row = Repo.get_by(Update, did: did, cid: cid) || Repo.rollback(:plc_update_not_found)
+    unless row.completed_at, do: Repo.rollback(:pending_key_not_completed)
 
-    unless not is_nil(row.completed_at) and head.curve == row.signing_curve and
-             head.public_key == row.signing_public_key,
-           do: Repo.rollback(:pending_key_not_completed)
-
-    case KeyVault.fetch(did) do
-      {:ok, key} when key.curve == row.signing_curve and key.public == row.signing_public_key ->
+    case Registrations.rotation_key(did) do
+      {:ok, key}
+      when key.curve == row.authority_curve and key.public == row.authority_public_key ->
         :ok
 
       _ ->
         Repo.rollback(:pending_key_not_completed)
     end
 
-    row |> Ecto.Changeset.change(signing_envelope: nil) |> Repo.update!(log: false)
+    row |> Ecto.Changeset.change(authority_envelope: nil) |> Repo.update!(log: false)
     :ok
   end
 
@@ -125,7 +127,7 @@ defmodule Atoll.Identity.PLC.PendingSigningKeys do
   def rewrap!(did, master) do
     case Repo.one(
            from(u in Update,
-             where: u.did == ^did and not is_nil(u.signing_envelope),
+             where: u.did == ^did and not is_nil(u.authority_envelope),
              lock: "FOR UPDATE"
            ),
            log: false
@@ -142,7 +144,7 @@ defmodule Atoll.Identity.PLC.PendingSigningKeys do
             case MasterKeys.decrypt(master, &decrypt(row, &1)) do
               {:ok, key} ->
                 row
-                |> Ecto.Changeset.change(signing_envelope: encrypt(row, key.private, master))
+                |> Ecto.Changeset.change(authority_envelope: encrypt(row, key.private, master))
                 |> Repo.update!(log: false)
 
                 :rotated
@@ -151,6 +153,22 @@ defmodule Atoll.Identity.PLC.PendingSigningKeys do
                 Repo.rollback(reason)
             end
         end
+    end
+  end
+
+  defp rotation_only?(row, expected, public) do
+    with {:ok, successor} <- Operation.successor(row.previous),
+         true <- expected in successor["rotationKeys"],
+         false <- public in successor["rotationKeys"],
+         {:ok, _} <- Operation.verify_update(row.previous, row.operation) do
+      keys =
+        Enum.map(successor["rotationKeys"], fn key ->
+          if key == expected, do: public, else: key
+        end)
+
+      Map.delete(row.operation, "sig") == Map.put(successor, "rotationKeys", keys)
+    else
+      _ -> false
     end
   end
 
@@ -163,15 +181,15 @@ defmodule Atoll.Identity.PLC.PendingSigningKeys do
 
   defp decrypt(
          %{
-           signing_envelope:
+           authority_envelope:
              <<1, nonce::binary-size(12), ciphertext::binary-size(32), tag::binary-size(16)>>
          } = row,
          master
        ) do
     with {:ok, cid} <- Operation.cid(row.operation),
          true <- cid == row.cid,
-         {:ok, public} <- Multikey.to_did_key(row.signing_curve, row.signing_public_key),
-         true <- get_in(row.operation, ["verificationMethods", "atproto"]) == public,
+         {:ok, public} <- Multikey.to_did_key(row.authority_curve, row.authority_public_key),
+         true <- rotation_only?(row, row.expected_authority_key, public),
          private when is_binary(private) <-
            :crypto.crypto_one_time_aead(
              :aes_256_gcm,
@@ -182,8 +200,8 @@ defmodule Atoll.Identity.PLC.PendingSigningKeys do
              tag,
              false
            ),
-         {:ok, key} <- SigningKey.from_private(row.signing_curve, private),
-         true <- key.public == row.signing_public_key do
+         {:ok, key} <- SigningKey.from_private(row.authority_curve, private),
+         true <- key.public == row.authority_public_key do
       {:ok, key}
     else
       _ -> {:error, :key_decryption_failed}
@@ -204,11 +222,11 @@ defmodule Atoll.Identity.PLC.PendingSigningKeys do
   defp aad(row),
     do:
       CBOR.encode!([
-        "atoll.pending-plc-signing-key.v1",
+        "atoll.pending-plc-authority-key.v1",
         row.did,
         row.cid,
-        row.expected_signing_key,
-        Atom.to_string(row.signing_curve),
-        %CBOR.Bytes{data: row.signing_public_key}
+        row.expected_authority_key,
+        Atom.to_string(row.authority_curve),
+        %CBOR.Bytes{data: row.authority_public_key}
       ])
 end

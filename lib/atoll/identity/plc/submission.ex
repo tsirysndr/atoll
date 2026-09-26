@@ -40,7 +40,9 @@ defmodule Atoll.Identity.PLC.Submission do
       check!(compatible(head, operation))
       unwrap!(KeyVault.fetch(did))
       if Repo.get_by(HandleReservation, did: did), do: Repo.rollback(:plc_update_pending)
-      unwrap!(Updates.stage(did, audit, operation))
+      journal = unwrap!(Updates.stage(did, audit, operation))
+      reject_key_workflow!(Repo.get_by!(Update, did: did, cid: journal.cid))
+      journal
     end)
   end
 
@@ -51,6 +53,7 @@ defmodule Atoll.Identity.PLC.Submission do
       unwrap!(KeyVault.fetch(did))
       if Repo.get_by(HandleReservation, did: did), do: Repo.rollback(:plc_update_pending)
       row = Repo.get_by(Update, did: did, cid: cid) || Repo.rollback(:plc_update_not_found)
+      reject_key_workflow!(row)
       unless row.confirmed_at, do: Repo.rollback(:plc_conflict)
 
       unless row.completed_at do
@@ -79,6 +82,10 @@ defmodule Atoll.Identity.PLC.Submission do
 
       :submitted
     end)
+  end
+
+  defp reject_key_workflow!(row) do
+    if row.signing_public_key || row.authority_public_key, do: Repo.rollback(:plc_update_pending)
   end
 
   defp compatible(head, operation) do

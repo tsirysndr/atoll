@@ -96,6 +96,59 @@ defmodule Atoll.Identity.PLC.RotationKeys do
 
   defp store(_, _, _, _), do: {:error, :invalid_rotation_key}
 
+  @doc "Internal atomic adoption after the caller freshly verifies the staged update is current."
+  def adopt_pending!(did, cid) do
+    unless Repo.in_transaction?(),
+      do: raise(ArgumentError, "authority-key adoption requires a transaction")
+
+    Events.lock!()
+
+    head =
+      Repo.one(from h in Head, where: h.did == ^did, lock: "FOR UPDATE") ||
+        Repo.rollback(:account_not_found)
+
+    unless head.status in [:active, :deactivated], do: Repo.rollback(:repo_inactive)
+    row = Repo.get_by(Update, did: did, cid: cid) || Repo.rollback(:plc_update_not_found)
+    unless row.confirmed_at, do: Repo.rollback(:plc_update_unconfirmed)
+
+    with {:ok, master} <- MasterKeys.active(),
+         {:ok, key} <- Atoll.Identity.PLC.PendingAuthorityKeys.fetch(did, cid),
+         {:ok, old} <- Atoll.Identity.PLC.Registrations.rotation_key(did),
+         {:ok, current} <- Multikey.to_did_key(old.curve, old.public),
+         {:ok, replacement} <- Multikey.to_did_key(key.curve, key.public) do
+      unless current in [row.expected_authority_key, replacement],
+        do: Repo.rollback(:stale_rotation_key)
+
+      updated = %RotationKey{
+        did: did,
+        curve: key.curve,
+        public_key: key.public,
+        verified_cid: cid
+      }
+
+      envelope = encrypt(updated, key.private, master)
+
+      case Repo.get(RotationKey, did, log: false) do
+        nil ->
+          Repo.insert!(%{updated | envelope: envelope}, log: false)
+
+        stored ->
+          stored
+          |> Ecto.Changeset.change(
+            curve: key.curve,
+            public_key: key.public,
+            verified_cid: cid,
+            envelope: envelope
+          )
+          |> Repo.update!(log: false)
+      end
+
+      :ok
+    else
+      {:error, reason} -> Repo.rollback(reason)
+    end
+  end
+
   def fetch(did) do
     with {:ok, master} <- MasterKeys.active() do
       case Repo.get(RotationKey, did, log: false) do
