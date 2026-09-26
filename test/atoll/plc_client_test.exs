@@ -155,6 +155,95 @@ defmodule Atoll.PLCClientTest do
     end
   end
 
+  test "updates verify the predecessor before posting and confirm the exact signed result", ctx do
+    expect_latest(ctx)
+
+    Req.Test.expect(__MODULE__, fn conn ->
+      assert conn.method == "POST"
+      assert conn.host == "directory.example.com"
+      {:ok, body, conn} = Plug.Conn.read_body(conn)
+      assert Jason.decode!(body) == ctx.later
+      Plug.Conn.send_resp(conn, 200, "")
+    end)
+
+    expect_latest(%{ctx | operation: ctx.later})
+    assert :ok = update(ctx)
+
+    # A retry of the persisted operation needs no second POST.
+    expect_latest(%{ctx | operation: ctx.later})
+    assert :ok = update(ctx)
+  end
+
+  test "update transport failures are reconciled against the exact latest operation", ctx do
+    for status <- [400, 409, 429, 503] do
+      expect_latest(ctx)
+      Req.Test.expect(__MODULE__, &Plug.Conn.send_resp(&1, status, "error"))
+      expect_latest(%{ctx | operation: ctx.later})
+      assert :ok = update(ctx)
+    end
+
+    expect_latest(ctx)
+    Req.Test.expect(__MODULE__, &Req.Test.transport_error(&1, :timeout))
+    expect_latest(%{ctx | operation: ctx.later})
+    assert :ok = update(ctx)
+  end
+
+  test "unchanged latest state is not proof of update acceptance", ctx do
+    for {status, reason} <- [
+          {200, :plc_unavailable},
+          {400, :plc_rejected},
+          {409, :plc_rejected},
+          {429, :plc_unavailable},
+          {500, :plc_unavailable}
+        ] do
+      expect_latest(ctx)
+      Req.Test.expect(__MODULE__, &Plug.Conn.send_resp(&1, status, "error"))
+      expect_latest(ctx)
+      assert {:error, ^reason} = update(ctx)
+    end
+  end
+
+  test "conflicting latest operations and malformed reads prevent update POSTs", ctx do
+    [foreign | _] =
+      File.read!(Path.join([__DIR__, "..", "fixtures", "plc", "log_bnewbold_robocracy.json"]))
+      |> Jason.decode!()
+
+    Req.Test.expect(__MODULE__, &Req.Test.json(&1, foreign["operation"]))
+    assert {:error, :plc_conflict} = update(ctx)
+
+    for body <- ["null", "{}", String.duplicate(" ", 65_537)] do
+      Req.Test.expect(__MODULE__, &Plug.Conn.send_resp(&1, 200, body))
+      assert {:error, :invalid_plc_response} = update(ctx)
+    end
+
+    Req.Test.expect(__MODULE__, fn conn ->
+      conn
+      |> Plug.Conn.put_resp_header("location", "https://other.example.com")
+      |> Plug.Conn.send_resp(302, "")
+    end)
+
+    assert {:error, :plc_unavailable} = update(ctx)
+
+    expect_latest(ctx)
+    Req.Test.expect(__MODULE__, &Plug.Conn.send_resp(&1, 200, ""))
+    Req.Test.expect(__MODULE__, &Req.Test.json(&1, foreign["operation"]))
+    assert {:error, :plc_conflict} = update(ctx)
+  end
+
+  test "invalid update signatures, predecessor links and DIDs never reach the network", ctx do
+    assert {:error, :invalid_plc_operation} =
+             update(%{ctx | later: Map.put(ctx.later, "sig", "bad")})
+
+    assert {:error, :invalid_plc_operation} =
+             update(%{ctx | later: Map.put(ctx.later, "prev", nil)})
+
+    assert {:error, :invalid_plc_operation} = update(%{ctx | did: "did:web:example.com"})
+    assert {:error, :invalid_plc_operation} = update(%{ctx | did: nil})
+  end
+
+  defp update(ctx),
+    do: Client.submit_update(ctx.did, ctx.operation, ctx.later, plug: {Req.Test, __MODULE__})
+
   defp submit(ctx),
     do: Client.submit_genesis(ctx.did, ctx.operation, plug: {Req.Test, __MODULE__})
 

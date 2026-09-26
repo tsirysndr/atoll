@@ -1,6 +1,6 @@
 defmodule Atoll.Identity.PLC.Client do
   @moduledoc """
-  Submits an already persisted genesis operation to a trusted PLC directory.
+  Submits already persisted genesis and update operations to a trusted PLC directory.
   A matching latest operation is required even after a successful POST. Callers
   must retain the exact signed operation across retries: signing again changes
   its DID. This client does not persist operations or activate accounts.
@@ -30,6 +30,68 @@ defmodule Atoll.Identity.PLC.Client do
       confirm(request(:get, url <> "/log/last", [], opts), posted, did, cid)
     end
   end
+
+  @doc """
+  Submits an exact persisted ordinary update against an already trusted predecessor.
+
+  The caller must authenticate the predecessor's chain to this DID, authorize the
+  action, and persist the signed operation before calling. This does not implement
+  recovery forks. A matching latest operation makes retries read-only; a different
+  predecessor fails closed before POST. The directory still arbitrates races.
+  """
+  def submit_update(did, previous, operation, opts \\ []) do
+    with true <- is_binary(did) and Regex.match?(~r/\Adid:plc:[a-z2-7]{24}\z/, did),
+         {:ok, _signer} <- Operation.verify_update(previous, operation),
+         {:ok, prior_cid} <- Operation.cid(previous),
+         {:ok, cid} <- Operation.cid(operation),
+         {:ok, origin} <-
+           directory(Application.get_env(:atoll, :plc_directory_url, @default_directory)) do
+      url = origin <> "/" <> URI.encode(did, &URI.char_unreserved?/1)
+
+      case latest_cid(request(:get, url <> "/log/last", [], opts)) do
+        {:ok, ^cid} ->
+          :ok
+
+        {:ok, ^prior_cid} ->
+          posted = request(:post, url, [json: operation], opts)
+
+          case latest_cid(request(:get, url <> "/log/last", [], opts)) do
+            {:ok, ^cid} -> :ok
+            {:ok, ^prior_cid} -> update_failure(posted)
+            {:ok, _} -> {:error, :plc_conflict}
+            error -> error
+          end
+
+        {:ok, _} ->
+          {:error, :plc_conflict}
+
+        error ->
+          error
+      end
+    else
+      false -> {:error, :invalid_plc_operation}
+      error -> error
+    end
+  end
+
+  defp update_failure({:ok, %{status: status}})
+       when status in 400..499 and status not in [408, 429],
+       do: {:error, :plc_rejected}
+
+  defp update_failure(_), do: {:error, :plc_unavailable}
+
+  defp latest_cid({:ok, %{status: 200, body: body} = response}) when is_binary(body) do
+    with true <- Req.Response.get_header(response, "content-encoding") in [[], ["identity"]],
+         {:ok, operation} <- Jason.decode(body),
+         {:ok, cid} <- Operation.cid(operation) do
+      {:ok, cid}
+    else
+      _ -> {:error, :invalid_plc_response}
+    end
+  end
+
+  defp latest_cid({:ok, %{status: 200}}), do: {:error, :invalid_plc_response}
+  defp latest_cid(_), do: {:error, :plc_unavailable}
 
   defp confirm({:ok, %{status: 200, body: body} = response}, _posted, did, cid)
        when is_binary(body) do

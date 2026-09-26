@@ -305,6 +305,7 @@ mutation. Deletes and empty batches need no record schema, even with `validate: 
 - [x] Email-authorized account deletion with credential/key removal, blob cleanup, and a deleted-account event.
 - [x] Internal PLC operation signing, genesis DID derivation, and predecessor signature checks.
 - [x] Internal PLC genesis submission with bounded responses and exact latest-operation confirmation.
+- [x] Internal ordinary PLC update submission with predecessor checks and exact-operation retry reconciliation.
 - [x] Durable genesis registration journal and encrypted PLC rotation-key retention.
 - [x] Opt-in fresh PLC DID signup under configured server domains, including durable retries and optional recovery keys.
 - [x] Hosted handle resolution through `/.well-known/atproto-did`.
@@ -2577,3 +2578,24 @@ and exports with a compacted `since` revision fall back to a full current snapsh
 Current exports and retained replay frames remain valid. Back up dependency rows
 alongside events and revisions. This does not reduce the full-tree rebuild cost of
 writes or eliminate complete block arrays for retained revisions.
+
+
+### PLC update submission
+
+`Atoll.Identity.PLC.Client.submit_update/4` submits an already signed and persisted
+ordinary update to the configured `ATOLL_PLC_DIRECTORY_URL`. It verifies the update
+signature and predecessor CID locally, reads the directory's latest operation, and
+posts only when that operation matches the trusted predecessor. If the update is
+already latest, retry succeeds without posting again. After POST, only an exact
+latest-operation CID match counts as success, even after a timeout or HTTP error.
+A different latest operation reports conflict; callers must not silently re-sign
+or overwrite it. Reads use the same bounded HTTPS transport as genesis submission.
+
+This is an internal transport primitive. Callers must authenticate the predecessor's
+chain to the requested DID, authorize the user action, and durably retain the exact
+signed update before submission. The initial read does not lock the remote directory;
+the directory arbitrates concurrent operations under its PLC rules. This path does
+not submit recovery forks against older predecessors. It does not itself change
+local profiles, repository signing keys, or session state. Authenticated handle,
+key rotation, and recovery workflows remain pending. Behavior follows the
+[PLC update specification](https://web.plc.directory/spec/v0.1/did-plc).
