@@ -84,7 +84,9 @@ record Lexicons or grant access to account data.
 
 - [x] P-256 and secp256k1 multikey / `did:key` encoding and decoding with curve-point validation.
 - [x] Modern DID-document parsing for expected identity, signing key, HTTPS PDS endpoint, and unverified handle claim.
-- [ ] DID document resolution and verification (`did:plc` and `did:web`).
+- [x] Internal HTTPS resolution for `did:plc` and hostname-level `did:web`, with expected-document identity checks.
+- [x] Resolver public-IPv4 address pinning, TLS hostname verification, timeouts, redirect rejection, and 256 KiB response limit.
+- [ ] DID resolution caching, IPv6 and localhost development support, and independent PLC operation-log verification (currently trusts `plc.directory` over HTTPS).
 - [ ] Handle resolution, verification, and updates.
 - [ ] Account creation, activation, deactivation, and deletion.
 - [ ] Password hashing, email verification, and account recovery.
