@@ -1,6 +1,26 @@
 defmodule AtollWeb.XRPCFallback do
   use AtollWeb, :controller
 
+  def call(conn, {:error, reason})
+      when reason in [:invalid_service_token, :service_token_replayed],
+      do: error(conn, 401, "InvalidToken", "Invalid or already used service token.")
+
+  def call(conn, {:error, :invalid_password}),
+    do: error(conn, 400, "InvalidPassword", "Password must be valid UTF-8 and 8–1024 bytes.")
+
+  def call(conn, {:error, :account_exists}),
+    do: error(conn, 400, "InvalidRequest", "Account already exists.")
+
+  def call(conn, {:error, :handle_not_available}),
+    do: error(conn, 400, "HandleNotAvailable", "Handle is already in use.")
+
+  def call(conn, {:error, :email_not_available}),
+    do: error(conn, 400, "InvalidRequest", "Email is already in use.")
+
+  def call(conn, {:error, :invalid_did_document}),
+    do:
+      error(conn, 400, "IncompatibleDidDoc", "DID document is incompatible with account import.")
+
   def call(conn, {:error, reason}) when reason in [:invalid_snapshot, :stale_revision],
     do: error(conn, 400, "InvalidRequest", "Invalid or stale repository snapshot.")
 

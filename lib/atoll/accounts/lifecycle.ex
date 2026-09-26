@@ -60,6 +60,10 @@ defmodule Atoll.Accounts.Lifecycle do
           {:ok, _} -> :ok
           {:error, reason} -> Repo.rollback(reason)
         end
+
+        Repo.update_all(from(p in Atoll.Accounts.Profile, where: p.did == ^did),
+          set: [import_curve: nil, import_public_key: nil, import_head: nil, import_rev: nil]
+        )
       end
 
       case Repositories.set_status(did, status) do

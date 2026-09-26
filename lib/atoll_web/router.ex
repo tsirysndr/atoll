@@ -25,6 +25,7 @@ defmodule AtollWeb.Router do
 
     get "/com.atproto.server.describeServer", ServerController, :describe
     post "/com.atproto.server.createSession", SessionController, :create
+    post "/com.atproto.server.createAccount", SessionController, :create_account
     get "/com.atproto.server.getSession", SessionController, :show
     get "/com.atproto.server.checkAccountStatus", SessionController, :status
     get "/com.atproto.server.getServiceAuth", SessionController, :service_auth
@@ -33,6 +34,7 @@ defmodule AtollWeb.Router do
     post "/com.atproto.server.activateAccount", SessionController, :activate
     post "/com.atproto.server.deactivateAccount", SessionController, :deactivate
     get "/com.atproto.identity.resolveHandle", IdentityController, :resolve_handle
+    get "/com.atproto.identity.getRecommendedDidCredentials", IdentityController, :recommended
     get "/com.atproto.repo.getRecord", RepoController, :get_record
     post "/com.atproto.repo.uploadBlob", BlobController, :upload
     get "/com.atproto.repo.listMissingBlobs", BlobController, :list_missing

@@ -13,8 +13,12 @@ defmodule Atoll.Accounts.Sessions do
   alias Atoll.Repositories.Head
 
   def create(did, password, opts \\ []) do
-    with {:ok, _} <- Credentials.verify(did, password),
-         {:ok, limit} <- session_limit(opts),
+    with {:ok, _} <- Credentials.verify(did, password), do: create_for_account(did, opts)
+  end
+
+  @doc "Internal session creation after credentials or provisioning have been authorized by the caller."
+  def create_for_account(did, opts \\ []) do
+    with {:ok, limit} <- session_limit(opts),
          id = Tokens.random_id(),
          {:ok, pair} <- Tokens.pair(did, id, opts) do
       Repo.transaction(fn ->

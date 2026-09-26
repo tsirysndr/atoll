@@ -10,7 +10,7 @@ defmodule Atoll.Repositories.Snapshot do
   alias Atoll.{CAR, CBOR, CID, Commit, DataModel, MST, TID}
 
   def decode(archive, did, curve, public) do
-    with {:ok, %{roots: [root | _], blocks: blocks}} <- CAR.decode(archive),
+    with {:ok, %{roots: [root], blocks: blocks}} <- CAR.decode(archive),
          {:ok, %{codec: :dag_cbor}} <- CID.decode(root),
          {:ok, bytes} <- Map.fetch(blocks, root),
          {:ok, commit} <- Commit.verify(bytes, did, curve, public),
@@ -23,6 +23,7 @@ defmodule Atoll.Repositories.Snapshot do
       {:ok,
        %{
          head: root,
+         data: tree.root,
          rev: commit["rev"],
          records: tree.records,
          blocks: Map.take(blocks, reachable)

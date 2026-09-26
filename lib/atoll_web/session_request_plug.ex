@@ -3,6 +3,7 @@ defmodule AtollWeb.SessionRequestPlug do
   import Plug.Conn
   @prefix "/xrpc/com.atproto.server."
   @procedures [
+    @prefix <> "createAccount",
     @prefix <> "createSession",
     @prefix <> "refreshSession",
     @prefix <> "deleteSession",
@@ -13,7 +14,8 @@ defmodule AtollWeb.SessionRequestPlug do
     @prefix <> "getSession",
     @prefix <> "checkAccountStatus",
     @prefix <> "getServiceAuth",
-    "/xrpc/com.atproto.repo.listMissingBlobs"
+    "/xrpc/com.atproto.repo.listMissingBlobs",
+    "/xrpc/com.atproto.identity.getRecommendedDidCredentials"
   ]
   @parser Plug.Parsers.init(
             parsers: [:json],
@@ -41,7 +43,9 @@ defmodule AtollWeb.SessionRequestPlug do
 
     if conn.method == method do
       {bucket, limit} =
-        if path == @prefix <> "createSession", do: {:login, 20}, else: {:session, 300}
+        if path in [@prefix <> "createSession", @prefix <> "createAccount"],
+          do: {:login, 20},
+          else: {:session, 300}
 
       case Atoll.Accounts.SessionLimiter.check({bucket, conn.remote_ip}, limit) do
         :ok ->
@@ -60,7 +64,11 @@ defmodule AtollWeb.SessionRequestPlug do
   end
 
   defp parse(conn, path)
-       when path in [@prefix <> "createSession", @prefix <> "deactivateAccount"] do
+       when path in [
+              @prefix <> "createSession",
+              @prefix <> "createAccount",
+              @prefix <> "deactivateAccount"
+            ] do
     case get_req_header(conn, "content-type") do
       [type] ->
         case Plug.Conn.Utils.media_type(type) do

@@ -1,5 +1,15 @@
 defmodule AtollWeb.IdentityController do
   use AtollWeb, :controller
+
+  def recommended(conn, _params) do
+    with {:ok, token} <- AtollWeb.BearerToken.get(conn),
+         {:ok, result} <- Atoll.Identity.Recommended.get(token) do
+      json(conn, result)
+    else
+      error -> AtollWeb.XRPCFallback.call(conn, error)
+    end
+  end
+
   alias Atoll.Identity.Handle
 
   def resolve_handle(conn, params) do

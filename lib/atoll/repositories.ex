@@ -56,7 +56,7 @@ defmodule Atoll.Repositories do
   @doc "Imports a complete snapshot for the token owner, rechecking authorization and the captured head under lock."
   def import_authenticated(token, archive, expected_head) do
     with {:ok, %{did: did} = prior} <- Atoll.Accounts.Sessions.authenticate_management(token),
-         {:ok, snapshot} <- Snapshot.decode(archive, did, prior.curve, prior.public_key) do
+         {:ok, snapshot} <- authenticated_snapshot(prior, archive) do
       import_snapshot(did, prior, snapshot, expected_head, token)
     end
   end
@@ -76,6 +76,8 @@ defmodule Atoll.Repositories do
       if head.head != expected_head or head.public_key != prior.public_key or
            head.curve != prior.curve,
          do: Repo.rollback(:invalid_swap)
+
+      snapshot = localize_import!(head, snapshot)
 
       cond do
         snapshot.head == head.head ->
@@ -105,6 +107,58 @@ defmodule Atoll.Repositories do
       end
     end)
   end
+
+  defp authenticated_snapshot(head, archive) do
+    case Snapshot.decode(archive, head.did, head.curve, head.public_key) do
+      {:error, :invalid_snapshot} = error when head.status == :deactivated ->
+        case Repo.get(Atoll.Accounts.Profile, head.did) do
+          %{import_curve: curve, import_public_key: public} when not is_nil(public) ->
+            with {:ok, snapshot} <- Snapshot.decode(archive, head.did, curve, public),
+                 do: {:ok, Map.put(snapshot, :source_key, {curve, public})}
+
+          _ ->
+            error
+        end
+
+      result ->
+        result
+    end
+  end
+
+  defp localize_import!(head, %{source_key: {curve, public}} = snapshot) do
+    profile = Repo.get!(Atoll.Accounts.Profile, head.did)
+
+    unless head.status == :deactivated and profile.import_curve == curve and
+             profile.import_public_key == public,
+           do: Repo.rollback(:invalid_swap)
+
+    if profile.import_head == snapshot.head do
+      {:ok, current} = Commit.verify(block!(head.head), head.did, head.curve, head.public_key)
+      if current["data"].cid != snapshot.data, do: Repo.rollback(:stale_revision)
+      %{snapshot | head: head.head, rev: head.rev}
+    else
+      if profile.import_rev && snapshot.rev <= profile.import_rev,
+        do: Repo.rollback(:stale_revision)
+
+      key =
+        case Atoll.KeyVault.fetch(head.did) do
+          {:ok, key} -> key
+          {:error, reason} -> Repo.rollback(reason)
+        end
+
+      {:ok, rev} = TID.next(max(head.rev, snapshot.rev))
+      {:ok, commit} = Commit.create(head.did, snapshot.data, rev, key)
+
+      profile
+      |> Ecto.Changeset.change(import_head: snapshot.head, import_rev: snapshot.rev)
+      |> Repo.update!()
+
+      blocks = snapshot.blocks |> Map.delete(snapshot.head) |> Map.put(commit.cid, commit.bytes)
+      %{snapshot | head: commit.cid, rev: rev, blocks: blocks}
+    end
+  end
+
+  defp localize_import!(_head, snapshot), do: snapshot
 
   def create(did, %SigningKey{} = key) do
     with true <- Syntax.did?(did),

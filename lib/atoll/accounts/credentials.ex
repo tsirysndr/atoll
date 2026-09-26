@@ -14,10 +14,24 @@ defmodule Atoll.Accounts.Credentials do
 
   @doc "Creates a salted Argon2id credential; never overwrites an existing credential."
   def create(did, password) do
-    if Syntax.did?(did) and valid_password?(password) do
-      # Hash before acquiring database locks.
-      hash = Argon2.hash_pwd_salt(password, argon2_type: 2)
+    with true <- Syntax.did?(did),
+         {:ok, hash} <- hash(password) do
+      store_hash(did, hash)
+    else
+      _ -> {:error, :invalid_credentials}
+    end
+  end
 
+  @doc "Hashes a validated password before the caller acquires provisioning locks."
+  def hash(password) do
+    if valid_password?(password),
+      do: {:ok, Argon2.hash_pwd_salt(password, argon2_type: 2)},
+      else: {:error, :invalid_credentials}
+  end
+
+  @doc "Stores a trusted, precomputed Argon2id hash for a provisioned repository. Not an authentication API."
+  def store_hash(did, "$argon2id$" <> _ = hash) when byte_size(hash) <= 512 do
+    if Syntax.did?(did) do
       Repo.transaction(fn ->
         unless Repo.one(from h in Head, where: h.did == ^did, lock: "FOR SHARE"),
           do: Repo.rollback(:not_found)
@@ -37,6 +51,8 @@ defmodule Atoll.Accounts.Credentials do
       {:error, :invalid_credentials}
     end
   end
+
+  def store_hash(_, _), do: {:error, :invalid_credentials}
 
   @doc "Verifies a password for a DID, returning no password hash or credential struct."
   def verify(did, password) do

@@ -3,6 +3,12 @@ defmodule AtollWeb.SessionController do
   alias Atoll.Accounts.Sessions
   action_fallback AtollWeb.SessionFallback
 
+  def create_account(conn, _params) do
+    with {:ok, token} <- bearer(conn),
+         {:ok, account} <- Atoll.Accounts.Provisioning.import_account(token, conn.body_params),
+         do: json(conn, account)
+  end
+
   def create(conn, _params) do
     with {:ok, identifier, password} <- credentials(conn.body_params),
          {:ok, did, handle} <- login_identity(identifier),
@@ -98,10 +104,16 @@ defmodule AtollWeb.SessionController do
 
   defp identity(%{did: did, status: status}) do
     observation = Atoll.Repo.get(Atoll.Identity.Observation, did)
+    profile = Atoll.Repo.get(Atoll.Accounts.Profile, did)
 
     result = %{
       did: did,
-      handle: if(observation, do: observation.handle, else: "handle.invalid"),
+      handle:
+        cond do
+          observation -> observation.handle
+          profile -> profile.handle
+          true -> "handle.invalid"
+        end,
       active: status == :active
     }
 

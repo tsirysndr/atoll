@@ -7,6 +7,12 @@ defmodule Atoll.Accounts.ServiceTokens do
 
   @doc "Verifies and consumes a service token once. Options are trusted resolver/clock configuration."
   def authenticate(token, audience, method, opts \\ []) do
+    with {:ok, verified} <- authenticate_identity(token, audience, method, opts),
+         do: {:ok, verified.claims}
+  end
+
+  @doc "As authenticate/4, also returning the exact resolved document and verified account key."
+  def authenticate_identity(token, audience, method, opts \\ []) do
     now = Keyword.get(opts, :now, System.system_time(:second))
 
     with true <- is_binary(audience) and Syntax.nsid?(method),
@@ -34,7 +40,7 @@ defmodule Atoll.Accounts.ServiceTokens do
              conflict_target: [:digest],
              log: false
            ) do
-        {1, _} -> {:ok, claims}
+        {1, _} -> {:ok, %{claims: claims, document: doc, signing_key: key}}
         {0, _} -> {:error, :service_token_replayed}
       end
     else

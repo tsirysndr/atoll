@@ -84,7 +84,8 @@ record Lexicons or grant access to account data.
 - [x] Consistent repository CAR export through the internal storage API.
 - [x] Internal complete CAR import for existing repositories, with pinned-key verification, expected-head checks, and atomic replacement.
 - [x] Authenticated `com.atproto.repo.importRepo` for existing repositories, with bounded uploads and atomic replacement.
-- [ ] New-account migration and streaming large transfers.
+- [x] Existing-DID migration provisioning with source-key verification and destination-key signing.
+- [ ] Streaming large transfers.
 
 `com.atproto.repo.getRecord` returns the current record unless `cid` selects a
 retained version, including versions of subsequently deleted records. Historical
@@ -150,7 +151,9 @@ The same `validate: true` restriction applies to batch requests.
 - [x] Handle-based repository reads with bidirectional verification and canonical DID record URIs.
 - [ ] Handle updates, caching, and redirect support.
 - [x] Authenticated account activation and deactivation with atomic status events.
-- [ ] Account creation and deletion.
+- [x] Service-authenticated `createAccount` for migration of an existing DID.
+- [x] Authenticated recommended DID credentials for the destination signing key and service.
+- [ ] Fresh DID signup and account deletion.
 - [x] Internal DID-scoped password credentials with salted Argon2id hashes, bounded input, redacted inspection, and duplicate protection.
 - [ ] Email verification, password changes, and account recovery.
 - [x] Internal password session creation, scoped HS256 JWT verification, single-use refresh rotation, and persistent revocation.
@@ -170,7 +173,7 @@ a password to an existing repository DID. It never replaces an existing credenti
 `verify/2` returns only the DID on success, and the same `:invalid_credentials`
 error for missing credentials and incorrect passwords. It proves password possession;
 callers must separately check account status and authorization. Public signup is
-not implemented; repositories and credentials must be provisioned internally.
+not implemented for new DIDs; existing DIDs can provision migration accounts through `createAccount`.
 
 Passwords must be valid UTF-8, 8–1024 bytes, with no trimming or normalization.
 Hashes use [argon2_elixir](https://argon2-elixir.hexdocs.pm/Argon2.html) Argon2id
@@ -423,7 +426,8 @@ locking protects shared objects when collectors overlap.
 - [ ] Relay discovery / crawl requests and federation interoperability tests.
 - [x] `com.atproto.server.getServiceAuth` issues short-lived account-signed service JWTs.
 - [x] Internal incoming account service-JWT verification with exact audience/method checks and persistent replay protection.
-- [ ] Service-authenticated account migration endpoints and request proxying to AppViews and other services.
+- [x] Service-authenticated migration account creation.
+- [ ] Request proxying to AppViews and other services.
 
 Historical `getBlocks` reads are limited to active repositories and return only
 requested blocks in a rootless CAR. Deleted record bytes remain publicly retrievable
@@ -465,7 +469,7 @@ digest row. No bearer token is persisted. Callers can include verification in th
 operation transaction so rollback also restores the ability to retry. Expired replay
 markers can be removed in bounded batches with
 `Atoll.Accounts.ServiceTokens.prune_expired/1` (default 500, maximum 1000).
-Automatic scheduling and HTTP migration consumers remain pending. The verifier
+Automatic replay-marker cleanup scheduling remains pending. Migration account creation uses this verifier, which
 uses the existing resolver's HTTPS trust model, not independent PLC log validation.
 
 For local development, connect to
@@ -612,8 +616,18 @@ additional event. Older revisions are rejected.
 
 Uploads are buffered in memory with a 64 MiB limit, a five-second per-read timeout,
 and a 30-second overall read budget. Imports allow ten attempts per direct peer IP
-per five minutes on each server process. This endpoint does not provision accounts,
-transfer blob bytes, rotate signing keys, or implement streaming migration.
+per five minutes on each server process. Blob bytes must be transferred separately;
+streaming migration remains pending.
+
+For migration, `createAccount` requires an existing DID, a bidirectionally verified
+handle, a password, and a one-use service JWT for this PDS and the createAccount
+method. Email is optional. It creates a deactivated account and a new encrypted
+signing key. `getRecommendedDidCredentials` returns that key and this PDS endpoint;
+PLC rotation keys and PLC operation submission remain pending. Before activation,
+imports may use the source key pinned during provisioning: Atoll verifies the CAR,
+re-signs its tree with the destination key, and tracks source revisions to reject
+rollback. Exact retries are idempotent. After updating the public DID document,
+activation checks the destination key and endpoint and clears source-key trust.
 
 After import, `GET /xrpc/com.atproto.repo.listMissingBlobs` with an access token
 lists referenced CIDs that lack matching account-owned blob metadata. It accepts
