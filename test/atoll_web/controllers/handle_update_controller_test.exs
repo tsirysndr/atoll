@@ -5,10 +5,13 @@ defmodule AtollWeb.HandleUpdateControllerTest do
   alias Atoll.Identity.PLC.{Operation, Registration, Registrations, Update}
   alias Atoll.Identity.HandleReservation
   import Ecto.Query
+  @admin_path "/xrpc/com.atproto.admin.updateAccountHandle"
+  @admin_secret "operator-handle-change-test-secret"
   @path "/xrpc/com.atproto.identity.updateHandle"
 
   setup do
     keys = [
+      :admin_password,
       :session_signing_key,
       :key_encryption_key,
       :pds,
@@ -27,6 +30,7 @@ defmodule AtollWeb.HandleUpdateControllerTest do
       []
     )
 
+    Application.put_env(:atoll, :admin_password, @admin_secret)
     Application.put_env(:atoll, :session_signing_key, :crypto.strong_rand_bytes(32))
     Application.put_env(:atoll, :key_encryption_key, :crypto.strong_rand_bytes(32))
 
@@ -90,6 +94,95 @@ defmodule AtollWeb.HandleUpdateControllerTest do
       )
 
     %{did: genesis.did, pair: pair, state: state}
+  end
+
+  test "operator changes an inactive PLC account with atomic audit and preserved status", ctx do
+    directory(ctx)
+    {:ok, _} = Repositories.set_status(ctx.did, :takendown)
+
+    assert admin_request(ctx, %{"did" => ctx.did, "handle" => "BOB.example.com"}) |> response(200) ==
+             ""
+
+    assert Repo.get!(Profile, ctx.did).handle == "bob.example.com"
+    assert Repo.get!(Atoll.Repositories.Head, ctx.did).status == :takendown
+    audit = Repo.one!(Atoll.Moderation.AuditEntry)
+    assert audit.operation == "com.atproto.admin.updateAccountHandle"
+    assert audit.actor == "admin"
+    assert audit.before_state == %{"handle" => "alice.example.com"}
+    assert audit.after_state == %{"handle" => "bob.example.com"}
+    assert audit.requested == %{"did" => ctx.did, "handle" => "bob.example.com"}
+
+    assert admin_request(ctx, %{"did" => ctx.did, "handle" => "bob.example.com"}) |> response(200) ==
+             ""
+
+    assert length(Agent.get(ctx.state, & &1.posts)) == 1
+    assert Repo.aggregate(Atoll.Moderation.AuditEntry, :count) == 2
+  end
+
+  test "operator ambiguous publication is retryable without premature success audit", ctx do
+    directory(ctx)
+    Agent.update(ctx.state, &%{&1 | ambiguous: true})
+    body = %{"did" => ctx.did, "handle" => "bob.example.com"}
+    assert admin_request(ctx, body) |> json_response(503)
+    assert Repo.aggregate(Atoll.Moderation.AuditEntry, :count) == 0
+    assert Repo.get!(Profile, ctx.did).handle == "alice.example.com"
+    assert admin_request(ctx, body) |> response(200) == ""
+    assert Repo.aggregate(Atoll.Moderation.AuditEntry, :count) == 1
+    assert length(Agent.get(ctx.state, & &1.posts)) == 1
+  end
+
+  test "operator web reconciliation still requires verified identity and an available handle",
+       ctx do
+    {web, doc} = web_account(ctx, "bob.example.com")
+    {:ok, _} = Repositories.set_status(web.did, :deactivated)
+    resolution(Map.put(doc, "alsoKnownAs", ["at://wrong.example.com"]), web.did)
+    body = %{"did" => web.did, "handle" => "bob.example.com"}
+    assert admin_request(web, body) |> json_response(400)
+    assert Repo.aggregate(Atoll.Moderation.AuditEntry, :count) == 0
+    resolution(Map.put(doc, "alsoKnownAs", ["at://alice.example.com"]), web.did)
+    assert admin_request(web, %{body | "handle" => "alice.example.com"}) |> json_response(400)
+    resolution(doc, web.did)
+    result = admin_request(web, body)
+    assert response(result, 200) == ""
+    assert get_resp_header(result, "cache-control") == ["no-store"]
+    assert Repo.get!(Atoll.Repositories.Head, web.did).status == :deactivated
+    assert Repo.one!(Atoll.Moderation.AuditEntry).after_state == %{"handle" => "bob.example.com"}
+  end
+
+  test "operator authentication and validation protect handle mutation and pending signup", ctx do
+    assert build_conn()
+           |> put_req_header("content-type", "application/json")
+           |> post(@admin_path, "{")
+           |> json_response(401)
+
+    assert build_conn()
+           |> put_req_header("authorization", "Bearer " <> ctx.pair.access_jwt)
+           |> post(@admin_path, %{"did" => ctx.did, "handle" => "bob.example.com"})
+           |> json_response(401)
+
+    assert build_conn() |> get(@admin_path) |> response(405)
+
+    for body <- [
+          %{"did" => "bad", "handle" => "bob.example.com"},
+          %{"did" => ctx.did, "handle" => "bad"},
+          %{"did" => ctx.did, "handle" => "bob.example.com", "extra" => true}
+        ] do
+      assert admin_request(ctx, body) |> json_response(400)
+    end
+
+    assert admin_request(ctx, %{
+             "did" => "did:web:missing.example.com",
+             "handle" => "bob.example.com"
+           })
+           |> json_response(400)
+
+    Repo.update_all(Registration, set: [completed_at: nil])
+
+    assert admin_request(ctx, %{"did" => ctx.did, "handle" => "bob.example.com"})
+           |> json_response(409)
+
+    assert Repo.aggregate(Update, :count) == 0
+    assert Repo.aggregate(Atoll.Moderation.AuditEntry, :count) == 0
   end
 
   test "HTTP update signs, publishes and completes once; repeated requests are no-ops", ctx do
@@ -323,6 +416,15 @@ defmodule AtollWeb.HandleUpdateControllerTest do
       lookup: fn _ -> {:ok, {8, 8, 8, 8}} end,
       txt_lookup: fn _ -> [["did=" <> did]] end
     )
+  end
+
+  defp admin_request(_ctx, body) do
+    id = rem(System.unique_integer([:positive]), 65_536)
+
+    %{build_conn() | remote_ip: {10, 83, div(id, 256), rem(id, 256)}}
+    |> put_req_header("authorization", "Basic " <> Base.encode64("admin:" <> @admin_secret))
+    |> put_req_header("content-type", "application/json")
+    |> post(@admin_path, Jason.encode!(body))
   end
 
   defp request(ctx, body) do

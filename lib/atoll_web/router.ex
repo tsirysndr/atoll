@@ -35,6 +35,7 @@ defmodule AtollWeb.Router do
     post "/com.atproto.admin.deleteAccount", AdminAccountController, :delete
     post "/com.atproto.admin.updateAccountPassword", AdminAccountController, :update_password
     post "/com.atproto.admin.updateAccountEmail", AdminAccountController, :update_email
+    post "/com.atproto.admin.updateAccountHandle", AdminAccountController, :update_handle
     get "/com.atproto.admin.searchAccounts", AdminAccountController, :search
     get "/com.atproto.admin.getAccountInfo", AdminAccountController, :show
     get "/com.atproto.admin.getAccountInfos", AdminAccountController, :index

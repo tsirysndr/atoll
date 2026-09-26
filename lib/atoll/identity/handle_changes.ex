@@ -2,17 +2,18 @@ defmodule Atoll.Identity.HandleChanges do
   @moduledoc "Authorized staging of handle-only PLC updates with durable name reservations."
   import Ecto.Query
   alias Atoll.{Multikey, Repo, Syntax}
-  alias Atoll.Accounts.{Profile, Sessions, Signup}
+  alias Atoll.Accounts.{Profile, Signup}
   alias Atoll.Identity.{Handle, HandleReservation, Resolver}
   alias Atoll.Identity.PLC.{AuditLog, Client, Operation, Registrations, Update, Updates}
   alias Atoll.Repositories.{Events, Head}
+  alias Atoll.Identity.HandleAuthorization
 
   def update(token, params, opts \\ [])
 
   def update(token, %{"handle" => handle} = params, opts) when map_size(params) == 1 do
     with false <- Repo.in_transaction?(),
-         {:ok, head} <- Sessions.authenticate_management(token),
-         :ok <- active(head),
+         {:ok, head} <- HandleAuthorization.authenticate(token),
+         :ok <- HandleAuthorization.allowed(token, head),
          {:ok, handle} <- normalize(handle),
          %Profile{} <- Repo.get(Profile, head.did),
          {:ok, result} <- prepare_update(token, head, handle, opts) do
@@ -21,8 +22,8 @@ defmodule Atoll.Identity.HandleChanges do
           {:ok, %{did: head.did, handle: handle}}
 
         %{cid: cid} ->
-          with {:ok, fresh} <- Sessions.authenticate_management(token),
-               :ok <- active(fresh),
+          with {:ok, fresh} <- HandleAuthorization.authenticate(token),
+               :ok <- HandleAuthorization.allowed(token, fresh),
                {:ok, _} <- Updates.submit(head.did, cid, Keyword.take(opts, [:plug])),
                do: complete(token, cid, opts)
       end
@@ -63,14 +64,15 @@ defmodule Atoll.Identity.HandleChanges do
               Repo.one(from h in Head, where: h.did == ^head.did, lock: "FOR UPDATE") ||
                 Repo.rollback(:account_not_found)
 
-            unwrap!(Sessions.authenticate_management(token))
-            check!(active(current))
+            unwrap!(HandleAuthorization.authenticate(token))
+            check!(HandleAuthorization.allowed(token, current))
             check!(handle_only(state, unsigned, handle, current))
 
             unless match?(%Profile{handle: ^handle}, Repo.get(Profile, head.did)) and
                      is_nil(Repo.get_by(HandleReservation, did: head.did)),
                    do: Repo.rollback(:plc_update_pending)
 
+            HandleAuthorization.audit!(token, Repo.get!(Profile, head.did), handle)
             :unchanged
           end)
         else
@@ -89,14 +91,15 @@ defmodule Atoll.Identity.HandleChanges do
   end
 
   @doc """
-  Stage an already signed handle-only operation for a full-session owner.
+  Stage an already signed handle-only operation for a full-session owner or an
+  internally authorized operator. Operator tuples are never accepted from HTTP input.
   Audit evidence and the operation are internal workflow inputs, not HTTP parameters.
   Keeps the current profile and hosted resolution unchanged until a later completion.
   """
   def stage(token, handle, audit, operation, opts \\ []) do
     with false <- Repo.in_transaction?(),
-         {:ok, head} <- Sessions.authenticate_management(token),
-         :ok <- active(head),
+         {:ok, head} <- HandleAuthorization.authenticate(token),
+         :ok <- HandleAuthorization.allowed(token, head),
          {:ok, handle} <- normalize(handle),
          {:ok, state} <- AuditLog.verify(head.did, audit),
          :ok <- handle_only(state, operation, handle, head),
@@ -108,8 +111,8 @@ defmodule Atoll.Identity.HandleChanges do
           Repo.one(from h in Head, where: h.did == ^head.did, lock: "FOR UPDATE") ||
             Repo.rollback(:account_not_found)
 
-        unwrap!(Sessions.authenticate_management(token))
-        check!(active(current))
+        unwrap!(HandleAuthorization.authenticate(token))
+        check!(HandleAuthorization.allowed(token, current))
         check!(handle_only(state, operation, handle, current))
         profile = Repo.get(Profile, head.did) || Repo.rollback(:account_not_found)
 
@@ -143,8 +146,8 @@ defmodule Atoll.Identity.HandleChanges do
   @doc "Complete a confirmed handle update only after a fresh verified directory-head check."
   def complete(token, cid, opts \\ []) do
     with false <- Repo.in_transaction?(),
-         {:ok, head} <- Sessions.authenticate_management(token),
-         :ok <- active(head),
+         {:ok, head} <- HandleAuthorization.authenticate(token),
+         :ok <- HandleAuthorization.allowed(token, head),
          %Update{} = row <- Repo.get_by(Update, did: head.did, cid: cid),
          true <- not is_nil(row.confirmed_at),
          ["at://" <> handle] <- row.operation["alsoKnownAs"],
@@ -158,8 +161,8 @@ defmodule Atoll.Identity.HandleChanges do
           Repo.one(from h in Head, where: h.did == ^head.did, lock: "FOR UPDATE") ||
             Repo.rollback(:account_not_found)
 
-        unwrap!(Sessions.authenticate_management(token))
-        check!(active(current))
+        unwrap!(HandleAuthorization.authenticate(token))
+        check!(HandleAuthorization.allowed(token, current))
         {:ok, prior_cid} = Operation.cid(row.previous)
 
         check!(
@@ -190,6 +193,7 @@ defmodule Atoll.Identity.HandleChanges do
             do: Repo.rollback(:handle_not_available)
 
           profile |> Ecto.Changeset.change(handle: handle) |> Repo.update!()
+          HandleAuthorization.audit!(token, profile, handle)
 
           fingerprint =
             :crypto.hash(
@@ -264,8 +268,6 @@ defmodule Atoll.Identity.HandleChanges do
   end
 
   defp handle_only(_, _, _, _), do: {:error, :invalid_handle_update}
-  defp active(%{status: :active}), do: :ok
-  defp active(%{status: status}), do: {:error, {:repo_inactive, status}}
   defp check!(:ok), do: :ok
   defp check!({:error, reason}), do: Repo.rollback(reason)
   defp unwrap!({:ok, result}), do: result

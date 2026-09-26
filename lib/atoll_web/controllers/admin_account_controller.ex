@@ -4,6 +4,15 @@ defmodule AtollWeb.AdminAccountController do
   plug AtollWeb.AdminAuth
   action_fallback AtollWeb.XRPCFallback
 
+  def update_handle(conn, _) do
+    opts =
+      Application.get_env(:atoll, :identity_resolution_options, [])
+      |> Keyword.merge(Application.get_env(:atoll, :plc_submission_options, []))
+
+    with {:ok, _} <- Atoll.Accounts.AdminHandle.update(conn.body_params, opts),
+         do: send_resp(conn, 200, "")
+  end
+
   def search(conn, params) do
     with {:ok, result} <- Atoll.Accounts.AdminSearch.search(params), do: json(conn, result)
   end

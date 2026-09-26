@@ -2,16 +2,17 @@ defmodule Atoll.Identity.WebHandleChanges do
   @moduledoc "Reconciles an owner-updated did:web document with the local account handle."
   import Ecto.Query
   alias Atoll.{CBOR, Repo, Syntax}
-  alias Atoll.Accounts.{Profile, Sessions, Signup}
+  alias Atoll.Accounts.{Profile, Signup}
   alias Atoll.Identity.{Handle, HandleChanges, HandleReservation, Observation, Resolver}
   alias Atoll.Repositories.{Events, Head}
+  alias Atoll.Identity.HandleAuthorization
 
   def update(token, handle, opts \\ []) do
     with false <- Repo.in_transaction?(),
          true <- Syntax.handle?(handle) and handle == String.downcase(handle),
          {:ok, _} <- Resolver.resolution_url("did:web:" <> handle),
-         {:ok, %{did: "did:web:" <> _} = head} <- Sessions.authenticate_management(token),
-         :ok <- active(head),
+         {:ok, %{did: "did:web:" <> _} = head} <- HandleAuthorization.authenticate(token),
+         :ok <- HandleAuthorization.allowed(token, head),
          %Profile{} = prior <- Repo.get(Profile, head.did),
          prior_observation = Repo.get(Observation, head.did),
          {:ok, identity} <- Resolver.resolve(head.did, Keyword.put(opts, :force_refresh, true)),
@@ -24,14 +25,15 @@ defmodule Atoll.Identity.WebHandleChanges do
           Repo.one(from h in Head, where: h.did == ^head.did, lock: "FOR UPDATE") ||
             Repo.rollback(:account_not_found)
 
-        unwrap!(Sessions.authenticate_management(token))
-        check!(active(current))
+        unwrap!(HandleAuthorization.authenticate(token))
+        check!(HandleAuthorization.allowed(token, current))
         check!(matches(identity, current, handle))
         profile = Repo.get(Profile, head.did) || Repo.rollback(:account_not_found)
         if Repo.get_by(HandleReservation, did: head.did), do: Repo.rollback(:plc_update_pending)
 
         cond do
           profile.handle == handle ->
+            HandleAuthorization.audit!(token, profile, handle)
             :unchanged
 
           profile.handle != prior.handle ->
@@ -45,6 +47,7 @@ defmodule Atoll.Identity.WebHandleChanges do
 
           true ->
             profile |> Ecto.Changeset.change(handle: handle) |> Repo.update!()
+            HandleAuthorization.audit!(token, profile, handle)
 
             fingerprint =
               :crypto.hash(
@@ -91,8 +94,6 @@ defmodule Atoll.Identity.WebHandleChanges do
        else: {:error, :unverified_handle}
   end
 
-  defp active(%{status: :active}), do: :ok
-  defp active(%{status: status}), do: {:error, {:repo_inactive, status}}
   defp check!(:ok), do: :ok
   defp check!({:error, reason}), do: Repo.rollback(reason)
   defp unwrap!({:ok, result}), do: result

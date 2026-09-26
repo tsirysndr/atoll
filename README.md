@@ -761,6 +761,7 @@ observations do not produce duplicate events. The
 - [x] Transactional history of successful account/record/blob subject-status decisions, with bounded operator export.
 - [x] Operator account inspection, singly and in bounded batches, with private metadata and invite histories.
 - [x] Operator account search with bounded DID pagination and exact email filtering.
+- [x] Audited operator handle updates using verified PLC publication or did:web reconciliation, including inactive accounts.
 - [x] Audited operator email correction with invalidation of old email challenges.
 - [x] Audited operator password replacement with session, app-password, and pending-code revocation.
 - [x] Transactional audit history for account invite enable/disable decisions and private reason changes.
@@ -1863,6 +1864,37 @@ Cursors are bound to the normalized email filter and continue after the last DID
 even if that account has since been deleted. They are unsigned pagination markers,
 not authorization credentials. Pages do not share a database snapshot; concurrent
 insertions or email changes can change membership between requests.
+
+### Operator handle updates
+
+`POST com.atproto.admin.updateAccountHandle` accepts JSON `did` and `handle`, with
+the separate operator Basic credential. It returns an empty 200 response. The
+route authenticates before body parsing, applies the shared admin request budget
+and 16 KiB body limit, and returns `no-store`.
+
+Handle normalization, uniqueness, durable reservations, and fresh identity checks
+use the same workflow as `com.atproto.identity.updateHandle`. For PLC identities,
+Atoll signs a handle-only successor using its retained PLC authority key, publishes
+the persisted operation, verifies the directory head, then updates the profile and
+emits an identity event. Ambiguous publication retains the old local handle and
+reservation; retry the same DID and handle to finish that operation. Different
+pending operations must be resolved separately.
+
+For `did:web`, the owner must first update the DID document. Atoll verifies the new
+handle, unchanged repository signing key, and local PDS service before reconciling
+the profile. Custom handles require a fresh forward claim to the same DID; operator
+credentials do not bypass identity proof or let an account take an occupied name.
+
+Operators can update active, deactivated, suspended, or taken-down accounts without
+changing their availability or issuing sessions. Pending signup registrations are
+rejected to preserve their reserved genesis identity. Owner requests continue to
+require a live full session and an active account.
+
+Successful local operator changes atomically record old/new handles in the private
+audit history alongside the profile, observation, identity event, and PLC journal
+completion. Verified unchanged requests are also audited without a duplicate
+identity event. Failed or ambiguous publication has no success audit entry; its
+signed operation remains in the durable PLC journal for reconciliation.
 
 ### Operator email correction
 

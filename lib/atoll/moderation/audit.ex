@@ -4,6 +4,18 @@ defmodule Atoll.Moderation.Audit do
   alias Atoll.{Repo, Syntax}
   alias Atoll.Moderation.AuditEntry
 
+  @doc "Records an operator handle reconciliation atomically with the local profile change."
+  def handle_change!(profile, handle) do
+    insert!(
+      "com.atproto.admin.updateAccountHandle",
+      profile.did,
+      %{"$type" => "com.atproto.admin.defs#repoRef", "did" => profile.did},
+      %{did: profile.did, handle: handle},
+      %{handle: profile.handle},
+      %{handle: handle}
+    )
+  end
+
   @doc "Records an operator repository-key transition with public metadata only."
   def repository_key!(
         before_head,
