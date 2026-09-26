@@ -1,6 +1,15 @@
 defmodule AtollWeb.XRPCFallback do
   use AtollWeb, :controller
 
+  def call(conn, {:error, reason}) when reason in [:invalid_snapshot, :stale_revision],
+    do: error(conn, 400, "InvalidRequest", "Invalid or stale repository snapshot.")
+
+  def call(conn, {:error, :request_timeout}),
+    do: error(conn, 408, "RequestTimeout", "Request body timed out.")
+
+  def call(conn, {:error, :import_rate_limited}),
+    do: error(conn, 429, "RateLimitExceeded", "Too many repository imports.")
+
   def call(conn, {:error, :forbidden}),
     do: error(conn, 403, "Forbidden", "Token does not authorize this repository.")
 

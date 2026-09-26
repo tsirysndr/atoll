@@ -82,7 +82,8 @@ record Lexicons or grant access to account data.
 - [x] In-memory CARv1 encoding and decoding with block verification and resource limits.
 - [x] Consistent repository CAR export through the internal storage API.
 - [x] Internal complete CAR import for existing repositories, with pinned-key verification, expected-head checks, and atomic replacement.
-- [ ] Authenticated `com.atproto.repo.importRepo`, new-account migration, and streaming large transfers.
+- [x] Authenticated `com.atproto.repo.importRepo` for existing repositories, with bounded uploads and atomic replacement.
+- [ ] New-account migration and streaming large transfers.
 
 `com.atproto.repo.getRecord` returns the current record unless `cid` selects a
 retained version, including versions of subsequently deleted records. Historical
@@ -455,8 +456,8 @@ Atoll.Repositories.apply_managed_writes(did, operations, swap_commit: head.head)
 
 For an existing repository whose private key is still available,
 `Atoll.KeyVault.store(did, key)` persists it only if it matches the pinned public
-key. Existing encrypted keys cannot be overwritten. These functions do not
-authorize accounts; authenticated HTTP writes remain pending.
+key. Existing encrypted keys cannot be overwritten. These internal functions do
+not authorize accounts; HTTP record writes authorize the repository owner's session.
 
 ## Checks
 
@@ -477,6 +478,25 @@ records; referenced blobs and external records are not required. Unreferenced
 blocks are discarded. Local limits are 64 MiB per archive, 1 MB per record, and
 five minutes of future revision tolerance. This API does not authorize users,
 resolve identities, rotate keys, or validate record Lexicons.
+
+### Authenticated repository import
+
+`POST /xrpc/com.atproto.repo.importRepo` accepts a complete CAR for the access
+token owner's existing, active repository. Send `Authorization: Bearer <accessJwt>`,
+`Content-Type: application/vnd.ipld.car`, and a matching `Content-Length`.
+Compressed requests are not supported. Success returns an empty HTTP 200 response.
+
+The endpoint verifies the snapshot's DID and signature against the repository's
+pinned public key. It captures the current head before reading the body and
+rejects replacement if another write changes it during ingestion or verification.
+Authorization is checked again under the write lock. Records, blob references,
+the head, and the sync event change atomically; identical-head retries emit no
+additional event. Older revisions are rejected.
+
+Uploads are buffered in memory with a 64 MiB limit, a five-second per-read timeout,
+and a 30-second overall read budget. Imports allow ten attempts per direct peer IP
+per five minutes on each server process. This endpoint does not provision accounts,
+transfer blob bytes, rotate signing keys, or implement streaming migration.
 
 ### Validation
 

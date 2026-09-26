@@ -47,45 +47,65 @@ defmodule Atoll.Repositories do
       when is_binary(did) and is_binary(expected_head) do
     with {:ok, prior} <- get_head(did),
          {:ok, snapshot} <- Snapshot.decode(archive, did, prior.curve, prior.public_key) do
-      Repo.transaction(fn ->
-        Events.lock!()
-        head = locked_head!(did, "FOR UPDATE")
-
-        if head.head != expected_head or head.public_key != prior.public_key or
-             head.curve != prior.curve,
-           do: Repo.rollback(:invalid_swap)
-
-        cond do
-          snapshot.head == head.head ->
-            head
-
-          snapshot.rev <= head.rev ->
-            Repo.rollback(:stale_revision)
-
-          true ->
-            Atoll.Blobs.References.import!(did, snapshot.records, snapshot.blocks, snapshot.rev)
-            Enum.each(snapshot.blocks, fn {cid, bytes} -> :ok = Storage.put_block(cid, bytes) end)
-            Repo.delete_all(from r in Record, where: r.did == ^did)
-
-            snapshot.records
-            |> Enum.map(fn {path, cid} -> %{did: did, path: path, cid: cid} end)
-            |> Enum.chunk_every(1000)
-            |> Enum.each(&Repo.insert_all(Record, &1))
-
-            updated =
-              head
-              |> Ecto.Changeset.change(head: snapshot.head, rev: snapshot.rev)
-              |> Repo.update!()
-
-            remember_revision!(updated, Map.keys(snapshot.blocks))
-            Events.append!(:sync, updated, event_head(updated, head))
-            updated
-        end
-      end)
+      import_snapshot(did, prior, snapshot, expected_head, nil)
     end
   end
 
   def import_archive(_, _, _), do: {:error, :invalid_snapshot}
+
+  @doc "Imports a complete snapshot for the token owner, rechecking authorization and the captured head under lock."
+  def import_authenticated(token, archive, expected_head) do
+    with {:ok, %{did: did}} <- Atoll.Accounts.Sessions.authenticate(token),
+         {:ok, prior} <- get_active_head(did),
+         {:ok, snapshot} <- Snapshot.decode(archive, did, prior.curve, prior.public_key) do
+      import_snapshot(did, prior, snapshot, expected_head, token)
+    end
+  end
+
+  defp import_snapshot(did, prior, snapshot, expected_head, token) do
+    Repo.transaction(fn ->
+      Events.lock!()
+      head = locked_head!(did, "FOR UPDATE")
+
+      if token do
+        case Atoll.Accounts.Sessions.authenticate(token) do
+          {:ok, _} -> :ok
+          {:error, reason} -> Repo.rollback(reason)
+        end
+      end
+
+      if head.head != expected_head or head.public_key != prior.public_key or
+           head.curve != prior.curve,
+         do: Repo.rollback(:invalid_swap)
+
+      cond do
+        snapshot.head == head.head ->
+          head
+
+        snapshot.rev <= head.rev ->
+          Repo.rollback(:stale_revision)
+
+        true ->
+          Atoll.Blobs.References.import!(did, snapshot.records, snapshot.blocks, snapshot.rev)
+          Enum.each(snapshot.blocks, fn {cid, bytes} -> :ok = Storage.put_block(cid, bytes) end)
+          Repo.delete_all(from r in Record, where: r.did == ^did)
+
+          snapshot.records
+          |> Enum.map(fn {path, cid} -> %{did: did, path: path, cid: cid} end)
+          |> Enum.chunk_every(1000)
+          |> Enum.each(&Repo.insert_all(Record, &1))
+
+          updated =
+            head
+            |> Ecto.Changeset.change(head: snapshot.head, rev: snapshot.rev)
+            |> Repo.update!()
+
+          remember_revision!(updated, Map.keys(snapshot.blocks))
+          Events.append!(:sync, updated, event_head(updated, head))
+          updated
+      end
+    end)
+  end
 
   def create(did, %SigningKey{} = key) do
     with true <- Syntax.did?(did),
