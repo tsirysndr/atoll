@@ -2,7 +2,7 @@ defmodule Atoll.OAuth.PAR do
   @moduledoc """
   Internal pushed authorization admission. Persists validated parameters and
   client/DPoP bindings, not consent or a grant. Input is a decoded parameter map;
-  the future HTTP adapter must reject duplicate form fields before constructing it.
+  the HTTP adapter rejects duplicate form fields before constructing it.
   Issuer, transport and nonce-secret options are trusted server configuration.
   """
   import Ecto.Query

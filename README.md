@@ -390,9 +390,10 @@ mutation. Deletes and empty batches need no record schema, even with `validate: 
 - [x] Fresh inline/remote confidential-client JWKS retrieval and ES256 public-key validation.
 - [x] Internal ES256 JWT client assertions, supplied session-key binding checks, and PostgreSQL-shared assertion replay rejection.
 - [x] Internal S256 PKCE verification and pushed authorization admission with bound client/DPoP keys, short-lived references, and 24-hour challenge reuse prevention.
-- [ ] PAR HTTP adapter, authorization/consent flow, and one-use conversion of pushed requests into authorization codes.
+- [x] `POST /oauth/par` with strict form parsing, pre-parser rate limits, DPoP nonce challenges, and browser CORS.
+- [ ] Authorization/consent flow and one-use conversion of pushed requests into authorization codes.
 - [ ] OAuth session binding persistence/revocation and localhost virtual client metadata.
-- [ ] OAuth nonce challenges and proof admission integrated into authorization/resource server routes.
+- [ ] OAuth nonce challenges and proof admission integrated into remaining authorization/resource server routes.
 - [ ] ATProto OAuth authorization and resource server support.
 - [x] Live-session and repository ownership checks for blob uploads and single/batch record writes.
 - [x] Operator Basic authentication for repository/blob exports, including inactive accounts.
@@ -4368,8 +4369,8 @@ with the local database transaction; the audit records the head actually observe
 `Atoll.OAuth.DPoP.verify/4` verifies a single DPoP header using ES256/P-256 and
 returns its JWK thumbprint, proof ID, issue time, and nonce. It uses the existing
 JOSE library for signature verification and RFC JWK thumbprints. This is an
-internal cryptographic component, not an OAuth authorization endpoint. OAuth
-requests are not enabled by this change.
+internal cryptographic component used by the PAR adapter; it is not an OAuth
+authorization endpoint. Browser authorization and token routes remain unfinished.
 
 The caller supplies the externally visible method/URL, current time, and a recent
 server-issued nonce. For protected-resource requests it must supply both the
@@ -4377,8 +4378,8 @@ validated access token and its bound `jkt`; the verifier checks both the SHA-256
 `ath` and key binding. Token validity, account state, consent and scopes remain the
 caller's responsibility. Successful proof verification must be followed by atomic
 replay rejection before executing a request. The internal `Atoll.OAuth.Proofs`
-guard below provides nonce validation and replay admission. OAuth route integration
-remains unfinished.
+guard below provides nonce validation and replay admission. PAR uses it;
+integration with the remaining OAuth routes remains unfinished.
 
 Proofs are bounded to 8 KiB. The verifier rejects duplicate HTTP headers, duplicate
 JSON members (including nested JWK members), excessive JSON nesting, noncanonical
@@ -4408,7 +4409,7 @@ serving the same issuer must share this secret and PostgreSQL database. The defa
 issuer is `AtollWeb.Endpoint.url()`. Nonces expire five minutes after issuance,
 with five seconds of tolerance for clocks ahead at issuance. Changing the secret
 invalidates outstanding nonces. Missing configuration fails closed when used;
-it does not prevent startup while OAuth endpoints remain unimplemented.
+it does not prevent startup. The PAR HTTP adapter returns 503 until configured.
 
 `Atoll.OAuth.Proofs.verify/5` validates the nonce and signed proof, then atomically
 admits its issuer/role/key-thumbprint/proof-ID digest into PostgreSQL. It uses the
@@ -4431,8 +4432,8 @@ reclaim them.
 
 Tests cover nonce expiry and issuer/role separation, token binding, concurrent
 admission through independent database transactions, rollback behavior, replay
-with a fresh nonce, and capacity exhaustion/reclamation. HTTP nonce challenges,
-OAuth authorization flows, and resource-route integration remain pending.
+with a fresh nonce, and capacity exhaustion/reclamation. PAR nonce challenges
+are implemented; OAuth authorization flows and resource-route integration remain pending.
 
 ### OAuth client metadata foundation
 
@@ -4564,7 +4565,7 @@ three transitional scopes; `transition:chat.bsky` requires `transition:generic`.
 Other permissions await scope enforcement. Unknown fields, client secrets,
 verifiers, Request Objects, and supplied request URIs are rejected. Input is capped
 at 16 KiB of decoded names/values; state and login hints are capped at 2 KiB.
-The future form adapter must also reject duplicate fields before producing a map.
+The HTTP form adapter rejects duplicate fields before producing a map.
 
 Successful admission atomically reserves the challenge for 24 hours and stores
 validated parameters, issuer/client ID, DPoP thumbprint, and any confidential
@@ -4594,8 +4595,44 @@ proofs. Calls inside a caller transaction are rejected.
 
 Tests cover both client types, key binding, client/issuer isolation, expiry,
 challenge reuse across clients, concurrent reservations, storage capacity, and
-bounded reclamation. This is an internal component: PAR HTTP responses/nonce
-challenges, browser authorization and consent, one-use code issuance, and token
-exchange remain unfinished. Protocol references:
+bounded reclamation. The HTTP adapter below exposes PAR admission. Browser
+authorization and consent, one-use code issuance, and token exchange remain
+unfinished. Protocol references:
 [PKCE (RFC 7636)](https://www.rfc-editor.org/rfc/rfc7636.html) and
 [PAR (RFC 9126)](https://datatracker.ietf.org/doc/html/rfc9126).
+
+### PAR HTTP adapter
+
+`POST /oauth/par` accepts `application/x-www-form-urlencoded` with UTF-8 encoding
+and returns HTTP 201 with `request_uri` and `expires_in` after successful admission.
+Configure `ATOLL_OAUTH_NONCE_SECRET` as described above; without it this route
+returns HTTP 503 `temporarily_unavailable`. No complete OAuth server is advertised:
+discovery, browser authorization/consent, code issuance, and token routes still
+need implementation, so the returned reference cannot yet complete a login.
+
+The boundary runs before general body parsing, method rewriting, and Phoenix
+controller parameter logging. Forms are flat, limited to 11 fields and 48 KiB of
+encoded bytes, with a five-second body read timeout and the internal 16 KiB
+decoded-parameter cap. Duplicate names after percent decoding, invalid percent
+escapes/UTF-8, nested fields, query parameters, compressed bodies, and header-based
+client authentication are rejected. Only the canonical `/oauth/par` path is
+accepted. Request methods other than POST and CORS OPTIONS receive 405.
+
+All configured responses carry a fresh `DPoP-Nonce`, `Cache-Control: no-store`,
+and public-origin CORS headers without cookie credentials. A missing, expired, or
+invalid server nonce in a supplied proof returns HTTP 400 `use_dpop_nonce` before
+fetching metadata or consuming a confidential assertion. Missing/duplicate DPoP
+headers, invalid signatures, and replay return `invalid_dpop_proof`. Retry nonce
+challenges with a newly signed proof using the response nonce. The full admission
+guard still verifies signature and replay; the preliminary nonce check alone
+does not authenticate the request.
+
+The existing configured request limiter applies 20 attempts per peer IP per five
+minutes before reading the form, including malformed requests and preflights.
+Trusted proxy settings govern the peer address. Exhaustion returns 429 with
+`Retry-After`; storage failures return 503. Proof URLs use the configured public
+endpoint, never incoming Host or forwarding headers. CORS preflights allow POST
+with `content-type` and `dpop`, and expose `dpop-nonce`/`retry-after`. OAuth errors
+use the `error` field without reflecting assertion data or internal error details.
+Phoenix parameter filtering also covers assertions, verifiers, request references,
+state, and login hints for subsequent OAuth routes.

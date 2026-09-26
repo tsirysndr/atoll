@@ -31,6 +31,11 @@ config :logger, :default_formatter,
 config :phoenix, :json_library, Jason
 
 config :phoenix, :filter_parameters, [
+  "client_assertion",
+  "code_verifier",
+  "request_uri",
+  "state",
+  "login_hint",
   "inviteCode",
   "note",
   "ref",
