@@ -55,8 +55,7 @@ defmodule Atoll.Repositories do
 
   @doc "Imports a complete snapshot for the token owner, rechecking authorization and the captured head under lock."
   def import_authenticated(token, archive, expected_head) do
-    with {:ok, %{did: did}} <- Atoll.Accounts.Sessions.authenticate(token),
-         {:ok, prior} <- get_active_head(did),
+    with {:ok, %{did: did} = prior} <- Atoll.Accounts.Sessions.authenticate_management(token),
          {:ok, snapshot} <- Snapshot.decode(archive, did, prior.curve, prior.public_key) do
       import_snapshot(did, prior, snapshot, expected_head, token)
     end
@@ -65,10 +64,10 @@ defmodule Atoll.Repositories do
   defp import_snapshot(did, prior, snapshot, expected_head, token) do
     Repo.transaction(fn ->
       Events.lock!()
-      head = locked_head!(did, "FOR UPDATE")
+      head = locked_head!(did, "FOR UPDATE", is_nil(token))
 
       if token do
-        case Atoll.Accounts.Sessions.authenticate(token) do
+        case Atoll.Accounts.Sessions.authenticate_management(token) do
           {:ok, _} -> :ok
           {:error, reason} -> Repo.rollback(reason)
         end

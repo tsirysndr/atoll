@@ -44,6 +44,79 @@ defmodule AtollWeb.RepoImportControllerTest do
     assert Atoll.Repositories.Events.latest_seq() == event.seq
   end
 
+  test "imports and uploads into a deactivated account without exposing data or allowing record writes",
+       c do
+    bytes = "migration blob"
+    cid = CID.create(bytes, :raw)
+
+    value = %{
+      "$type" => "com.example.record",
+      "blob" => %{
+        "$type" => "blob",
+        "ref" => %CBOR.Link{cid: cid},
+        "mimeType" => "text/plain",
+        "size" => byte_size(bytes)
+      }
+    }
+
+    {:ok, _} = Repositories.set_status(@did, :deactivated)
+    seq = Atoll.Repositories.Events.latest_seq()
+    assert response(post_upload(c, archive(c, record: value)), 200) == ""
+    assert {:ok, %{status: :deactivated}} = Repositories.get_head(@did)
+    assert {:ok, {:skip, _}} = Atoll.Repositories.Events.next_frame(seq)
+    assert {:error, {:repo_inactive, :deactivated}} = Repositories.export(@did)
+    assert {:error, {:repo_inactive, :deactivated}} = Sessions.authenticate(c.pair.access_jwt)
+    auth = put_req_header(c.conn, "authorization", "Bearer " <> c.pair.access_jwt)
+
+    assert %{"blobs" => [_]} =
+             auth |> get("/xrpc/com.atproto.repo.listMissingBlobs") |> json_response(200)
+
+    assert %{"blob" => _} =
+             auth
+             |> put_req_header("content-type", "text/plain")
+             |> post("/xrpc/com.atproto.repo.uploadBlob", bytes)
+             |> json_response(200)
+
+    assert %{"blobs" => []} =
+             auth |> get("/xrpc/com.atproto.repo.listMissingBlobs") |> json_response(200)
+
+    assert {:error, {:repo_inactive, :deactivated}} = Atoll.Blobs.get_public(@did, cid)
+
+    assert %{"error" => "RepoDeactivated"} =
+             auth
+             |> put_req_header("content-type", "application/json")
+             |> post("/xrpc/com.atproto.repo.createRecord", %{
+               repo: @did,
+               collection: "com.example.record",
+               record: %{"$type" => "com.example.record"}
+             })
+             |> json_response(400)
+
+    {:ok, _} = Repositories.set_status(@did, :active)
+    assert {:ok, %{bytes: ^bytes}} = Atoll.Blobs.get_public(@did, cid)
+    assert {:ok, _} = Repositories.get_record(@did, @path)
+  end
+
+  test "rejects administrative restrictions before ingestion and rechecks after reading", c do
+    bytes = archive(c)
+
+    for status <- [:suspended, :takendown] do
+      {:ok, _} = Repositories.set_status(@did, status)
+      assert post_upload(c, bytes) |> json_response(400)
+    end
+
+    {:ok, _} = Repositories.set_status(@did, :deactivated)
+    ingested = upload_conn(c, bytes) |> AtollWeb.RepoImportPlug.call([])
+    refute ingested.halted
+    {:ok, _} = Repositories.set_status(@did, :takendown)
+
+    assert AtollWeb.RepoImportController.create(ingested, %{}) ==
+             {:error, {:repo_inactive, :takendown}}
+
+    assert {:ok, %{head: head}} = Repositories.get_head(@did)
+    assert head == c.head.head
+  end
+
   test "rejects malformed, foreign and wrong-key archives without mutations", c do
     count = Repo.aggregate(Atoll.Storage.Block, :count)
     seq = Atoll.Repositories.Events.latest_seq()
@@ -148,7 +221,11 @@ defmodule AtollWeb.RepoImportControllerTest do
   end
 
   defp archive(c, opts \\ []) do
-    bytes = CBOR.encode!(%{"$type" => "com.example.record", "text" => "imported"})
+    bytes =
+      CBOR.encode!(
+        Keyword.get(opts, :record, %{"$type" => "com.example.record", "text" => "imported"})
+      )
+
     cid = CID.create(bytes, :dag_cbor)
     {:ok, tree} = MST.new(%{@path => cid})
     {:ok, rev} = TID.next(c.head.rev)

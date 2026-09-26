@@ -156,7 +156,7 @@ The same `validate: true` restriction applies to batch requests.
 - [x] Internal password session creation, scoped HS256 JWT verification, single-use refresh rotation, and persistent revocation.
 - [x] Public DID/password session creation, refresh, inspection, and revocation endpoints, with bounded requests and per-node rate limits.
 - [x] Bidirectionally verified handle/password login with normalized handles and DID-bound sessions.
-- [x] Deactivated-account login, refresh, session inspection, missing-blob inventory, and migration-scoped service tokens.
+- [x] Deactivated-account login, refresh, session inspection, repository import, blob upload, missing-blob inventory, and migration-scoped service tokens.
 - [ ] Email login, authentication factors, and taken-down account session scopes.
 - [ ] App passwords.
 - [ ] ATProto OAuth authorization and resource server support.
@@ -408,7 +408,7 @@ locking protects shared objects when collectors overlap.
 - [x] `com.atproto.sync.getRecord` compact signed existence and absence proofs.
 - [x] `com.atproto.sync.getBlocks` for current and retained historical repository blocks (1–100 CIDs; repeated `cids` query parameters).
 - [x] Export consistency checks against the signed commit, tree root, and revision.
-- [x] Internal deactivation, suspension, takedown, and reactivation; inactive repositories reject public reads, exports, writes, and imports.
+- [x] Internal deactivation, suspension, takedown, and reactivation; inactive repositories reject public reads, exports, and ordinary record writes. Authenticated migration imports/uploads allow deactivated accounts only.
 - [x] Historical block retrieval with signed-commit and canonical-tree membership checks, including deleted records and prior MST nodes.
 - [x] Internal durable event sequencing and cursor replay, recorded atomically with repository creation, writes, imports, and status changes.
 - [ ] Event retention / compaction and higher-throughput sequencing (writes currently share a PostgreSQL transaction advisory lock to preserve commit order).
@@ -581,7 +581,7 @@ resolve identities, rotate keys, or validate record Lexicons.
 ### Authenticated repository import
 
 `POST /xrpc/com.atproto.repo.importRepo` accepts a complete CAR for the access
-token owner's existing, active repository. Send `Authorization: Bearer <accessJwt>`,
+token owner's existing active or deactivated repository. Send `Authorization: Bearer <accessJwt>`,
 `Content-Type: application/vnd.ipld.car`, and a matching `Content-Length`.
 Compressed requests are not supported. Success returns an empty HTTP 200 response.
 
@@ -619,9 +619,11 @@ the DID's PDS endpoint against Phoenix's configured public endpoint URL. Resolut
 failure returns `validDid: false`. PLC operation-log/rotation-key authority and
 private-key availability are not checked. Remote resolution runs before inventory
 locks; the session is checked again before returning account data. This endpoint
-shares the session query rate limit and does not grant write, import, or upload
-access to inactive accounts. Deactivated accounts may separately log in and refresh;
-taken-down and suspended accounts may not.
+shares the session query rate limit and does not itself grant write access.
+Deactivated accounts may separately log in, refresh, import a repository, and
+upload blobs. Taken-down and suspended accounts may not. Migration writes preserve
+deactivation: public reads and public sync data remain blocked until activation.
+Ordinary create/put/delete/applyWrites calls remain blocked while deactivated.
 
 ### Validation
 

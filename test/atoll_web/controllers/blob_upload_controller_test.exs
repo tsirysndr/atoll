@@ -94,7 +94,7 @@ defmodule AtollWeb.BlobUploadControllerTest do
     assert Repo.aggregate(Blob, :count) == 0
   end
 
-  test "authenticates before reading and refuses refresh, revoked, and inactive sessions", c do
+  test "authenticates before reading and refuses refresh, revoked, and suspended sessions", c do
     anonymous =
       c.conn
       |> put_req_header("content-type", "application/octet-stream")
@@ -105,9 +105,9 @@ defmodule AtollWeb.BlobUploadControllerTest do
     assert %{"error" => "InvalidToken"} =
              upload(c.conn, c.pair.refresh_jwt, "x") |> json_response(401)
 
-    {:ok, _} = Repositories.set_status(@did, :deactivated)
+    {:ok, _} = Repositories.set_status(@did, :suspended)
 
-    assert %{"error" => "RepoDeactivated"} =
+    assert %{"error" => "RepoSuspended"} =
              upload(c.conn, c.pair.access_jwt, "x") |> json_response(400)
 
     {:ok, _} = Repositories.set_status(@did, :active)
@@ -230,12 +230,18 @@ defmodule AtollWeb.BlobUploadControllerTest do
       s3: credentials ++ [endpoint: endpoint, bucket: bucket]
     )
 
+    {:ok, _} = Repositories.set_status(@did, :deactivated)
     bytes = :crypto.strong_rand_bytes(4096)
     blob = upload(c.conn, c.pair.access_jwt, bytes) |> json_response(200) |> Map.fetch!("blob")
     cid = CID.create(bytes, :raw)
     assert Repo.get_by!(Blob, did: @did, cid: cid).backend == :s3
     assert Storage.get_block(cid) == {:error, :not_found}
     params = %{did: @did, cid: blob["ref"]["$link"]}
+
+    assert %{"error" => "RepoDeactivated"} =
+             c.conn |> get("/xrpc/com.atproto.sync.getBlob", params) |> json_response(400)
+
+    {:ok, _} = Repositories.set_status(@did, :active)
 
     assert %{"error" => "BlobNotFound"} =
              c.conn |> get("/xrpc/com.atproto.sync.getBlob", params) |> json_response(400)

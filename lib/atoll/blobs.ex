@@ -26,10 +26,10 @@ defmodule Atoll.Blobs do
         Events.lock!()
         # Acquire the write lock before the session lock to avoid a lock upgrade
         # deadlock with refresh, which takes a head share lock before its session lock.
-        active_head!(claims["sub"], "FOR UPDATE")
+        active_head!(claims["sub"], "FOR UPDATE", true)
 
-        with {:ok, %{did: did}} <- Atoll.Accounts.Sessions.authenticate(token),
-             {:ok, blob} <- stage(did, bytes, content_type, opts) do
+        with {:ok, %{did: did}} <- Atoll.Accounts.Sessions.authenticate_management(token),
+             {:ok, blob} <- stage_for_status(did, bytes, content_type, opts, true) do
           blob
         else
           {:error, reason} -> Repo.rollback(reason)
@@ -41,14 +41,18 @@ defmodule Atoll.Blobs do
   @doc "Stage bytes for an active hosted repository and return ATProto JSON blob metadata."
   def stage(did, bytes, content_type, opts \\ [])
 
-  def stage(did, bytes, content_type, opts) when is_binary(did) and is_binary(bytes) do
+  def stage(did, bytes, content_type, opts),
+    do: stage_for_status(did, bytes, content_type, opts, false)
+
+  defp stage_for_status(did, bytes, content_type, opts, allow_deactivated?)
+       when is_binary(did) and is_binary(bytes) do
     with :ok <- size(bytes, Keyword.get(opts, :content_length)),
          {:ok, mime} <- normalize_mime(content_type),
-         {:ok, _} <- Repositories.get_active_head(did),
+         {:ok, _} <- Repositories.get_head(did),
          cid = CID.create(bytes, :raw) do
       Repo.transaction(fn ->
         Events.lock!()
-        active_head!(did, "FOR UPDATE")
+        active_head!(did, "FOR UPDATE", allow_deactivated?)
         check_quota!(did, cid, byte_size(bytes), opts)
 
         backend =
@@ -81,7 +85,7 @@ defmodule Atoll.Blobs do
     end
   end
 
-  def stage(_, _, _, _), do: {:error, :invalid_blob}
+  defp stage_for_status(_, _, _, _, _), do: {:error, :invalid_blob}
 
   @doc "Internal staged-byte read. Never expose directly as getBlob or listBlobs."
   def get_staged(did, cid, opts \\ [])
@@ -235,7 +239,7 @@ defmodule Atoll.Blobs do
 
   def normalize_mime(_), do: {:error, :invalid_mime_type}
 
-  defp active_head!(did, lock) do
+  defp active_head!(did, lock, allow_deactivated? \\ false) do
     query = from h in Head, where: h.did == ^did
 
     query =
@@ -248,6 +252,7 @@ defmodule Atoll.Blobs do
 
     case Repositories.availability(head) do
       :ok -> head
+      {:error, {:repo_inactive, :deactivated}} when allow_deactivated? -> head
       {:error, reason} -> Repo.rollback(reason)
     end
   end

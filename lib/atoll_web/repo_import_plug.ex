@@ -15,8 +15,7 @@ defmodule AtollWeb.RepoImportPlug do
   defp import_repo(%{method: "POST"} = conn) do
     with :ok <- limit(conn),
          {:ok, token} <- AtollWeb.BearerToken.get(conn),
-         {:ok, %{did: did}} <- Sessions.authenticate(token),
-         {:ok, head} <- Atoll.Repositories.get_active_head(did),
+         {:ok, head} <- Sessions.authenticate_management(token),
          :ok <- media_type(conn),
          {:ok, length} <- content_length(conn),
          {:ok, bytes, conn} <- AtollWeb.BoundedBody.read(conn, @max_bytes) do
