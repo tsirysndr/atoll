@@ -61,6 +61,8 @@ config :atoll,
        :previous_key_encryption_keys,
        Atoll.MasterKeys.previous_from_env!(System.get_env("ATOLL_PREVIOUS_KEY_ENCRYPTION_KEYS"))
 
+config :atoll, :relay_urls, Atoll.Relays.from_env!(System.get_env("ATOLL_RELAY_URLS"))
+
 config :atoll, :email_worker, Atoll.Email.Config.parse!(System.get_env())
 
 server = Atoll.ServerConfig.parse!(System.get_env(), config_env() == :prod)

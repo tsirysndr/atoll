@@ -610,7 +610,8 @@ locking protects shared objects when collectors overlap.
 - [x] Opt-in supervised identity refresh scheduling, with one task at a time, timeouts, sweep retries, and outcome telemetry.
 - [x] Owner-authenticated identity refresh with fresh DID resolution and atomic observation events.
 - [ ] Remaining authenticated identity-management endpoints and distributed refresh coordination.
-- [ ] Relay discovery / crawl requests and federation interoperability tests.
+- [x] Configurable operator crawl announcements to relay `com.atproto.sync.requestCrawl` endpoints.
+- [ ] Automatic relay discovery/announcement scheduling and federation interoperability tests.
 - [x] `com.atproto.server.getServiceAuth` issues short-lived account-signed service JWTs.
 - [x] Internal incoming account service-JWT verification with exact audience/method checks and persistent replay protection.
 - [x] Service-authenticated migration account creation.
@@ -2124,3 +2125,38 @@ key does not restore a revoked session. Trusted internal callers with an explici
 `:secret` do not inherit runtime fallbacks unless they explicitly provide
 `:previous_secrets`. This key ring is separate from repository encryption master
 keys, repository signing keys, PLC rotation keys, and service identity keys.
+
+### Requesting relay crawls
+
+Set `ATOLL_RELAY_URLS` to a comma-separated list of up to ten relay HTTPS origins,
+then run `mix atoll.relays.request_crawl` in the intended environment. For example,
+use the relay origins agreed with your relay operators. Merely configuring this
+setting does not send anything; the command explicitly makes network requests.
+Application configuration uses `config :atoll, :relay_urls, ["https://relay.example.com"]`.
+
+The command derives the advertised hostname from Atoll's configured public endpoint
+URL (`PHX_HOST` in production). That URL must use HTTPS on port 443 with a
+non-reserved DNS hostname. Relay origins have the same HTTPS/port requirement and
+cannot include credentials, query strings, fragments, or non-root paths. Duplicate
+normalized origins are contacted once. No relays are configured by default.
+
+Each relay receives an unauthenticated POST to
+[`com.atproto.sync.requestCrawl`](https://github.com/bluesky-social/atproto/blob/main/lexicons/com/atproto/sync/requestCrawl.json)
+with only `{ "hostname": "your.pds.host" }`. No account token, admin credential, or
+email secret is sent. Relay destinations are trusted operator configuration, never
+user-provided request URLs. These are outbound announcements; Atoll does not expose
+an incoming relay crawl endpoint.
+
+Requests run sequentially with three-second connection and five-second request
+timeouts, a 4 KiB response-body limit, and no redirects or automatic retries. One
+relay's rejection does not prevent the remaining configured relays from receiving
+a request. JSON output reports `accepted`, `host_banned`, `unavailable`, or
+`rejected` per relay without copying upstream messages. The command exits with an
+error if any relay does not accept the request. Outcome telemetry uses
+`[:atoll, :relay, :crawl]` with a count and outcome only.
+
+Acceptance means the relay accepted the request; it does not prove that it has
+connected, indexed repositories, or satisfied its hosting policies. Crawling requires
+the public PDS routes and subscription stream to be reachable. Automatic periodic
+announcements, relay discovery, and live federation interoperability checks remain
+pending. Tests use mocked relay responses and never announce the development PDS.
