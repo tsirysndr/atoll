@@ -146,7 +146,8 @@ The same `validate: true` restriction applies to batch requests.
 - [x] Internal HTTPS resolution for `did:plc` and hostname-level `did:web`, with expected-document identity checks.
 - [x] Resolver public IPv4/IPv6 address pinning, TLS hostname verification, timeouts, redirect rejection, and 256 KiB response limit.
 - [x] Bounded node-local positive DID resolution caching with forced refresh for authorization and identity changes.
-- [ ] Localhost development resolution support and independent PLC operation-log verification (currently trusts `plc.directory` over HTTPS).
+- [x] Explicit development/test localhost DID resolution and local server DID publication.
+- [ ] Independent PLC operation-log verification (currently trusts `plc.directory` over HTTPS).
 - [x] DNS TXT handle resolution with HTTPS fallback, normalization, ambiguity checks, and reserved-domain rejection.
 - [x] Internal bidirectional handle verification against the resolved DID document.
 - [x] Public `com.atproto.identity.resolveHandle` forward lookup (does not assert bidirectional verification).
@@ -963,7 +964,8 @@ key, the configured DID, and the `#atproto_pds` service URL. It uses
 minutes. No request header can override the configured endpoint or key.
 
 Missing key configuration returns an uncached 503. A hostname mismatch, non-HTTPS
-endpoint, path-based DID, localhost DID, or non-web DID returns 404 here. Those
+endpoint, path-based DID, localhost DID, or non-web DID returns 404 here, except
+for the explicitly enabled localhost development mode described below. Other
 identities are not automatically provisioned by this endpoint; externally managed
 DIDs still need their own publication mechanism. DNS, TLS certificates, deployment,
 and service-key rotation coordination remain operator responsibilities.
@@ -1118,3 +1120,33 @@ conservative: it excludes some globally reachable special-purpose assignments.
 The policy follows the ranges in the [IANA IPv6 special-purpose registry](https://www.iana.org/assignments/iana-ipv6-special-registry/).
 Tests cover address boundaries, DNS fallback, pinned URLs and transport options;
 they do not depend on the test machine having public IPv6 connectivity.
+
+
+### Localhost DID development mode
+
+`ATOLL_LOCALHOST_DIDS_ENABLED=true` enables a narrow exception in development and
+test builds only. The default is false; enabling it through runtime configuration
+in production fails startup, and production-compiled code cannot enable the
+exception by changing application environment values.
+
+The resolver accepts `did:web:localhost` (HTTP port 80), or an encoded port such as
+`did:web:localhost%3A4000`. Ports must be canonical decimal integers from 1 to
+65535; `%3a` is also accepted. Paths, credentials, query/fragment suffixes, raw
+colons, numeric IP DIDs and subdomains of `.localhost` are rejected. HTTP requests
+are pinned directly to `127.0.0.1`, without DNS, and retain `localhost:port` as Host.
+Existing timeouts, response limits, expected-document ID checks and redirect
+rejection apply. This mode does not let public domains resolve to private addresses
+or permit arbitrary HTTP service endpoints.
+
+For a development PDS running on port 4000, set
+`ATOLL_PDS_DID='did:web:localhost%3A4000'`, enable the flag, and supply a stable
+`ATOLL_PDS_SIGNING_KEY`. Keep the endpoint URL configured as
+`http://localhost:4000`; the DID port must match it. The existing
+`/.well-known/did.json` route then publishes the public service key on requests
+whose host is exactly `localhost`. DID document parsing accepts a plain-HTTP PDS
+origin only for literal localhost while this mode is enabled. Localhost handles
+and fresh PLC signup over HTTP are not enabled by this exception.
+
+Tests include an actual HTTP round trip to an ephemeral loopback Atoll endpoint,
+plus disabled-mode, port, host, redirect and private-address rejection checks.
+No running server configuration is changed by this feature's default settings.

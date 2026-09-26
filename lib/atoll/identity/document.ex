@@ -72,6 +72,12 @@ defmodule Atoll.Identity.Document do
   defp pds_service?(_, _), do: false
 
   defp endpoint(value) when is_binary(value) do
+    if Atoll.Identity.Localhost.endpoint?(value), do: {:ok, value}, else: https_endpoint(value)
+  end
+
+  defp endpoint(_), do: {:error, :invalid_endpoint}
+
+  defp https_endpoint(value) do
     case URI.new(value) do
       {:ok,
        %URI{
@@ -90,8 +96,6 @@ defmodule Atoll.Identity.Document do
         {:error, :invalid_endpoint}
     end
   end
-
-  defp endpoint(_), do: {:error, :invalid_endpoint}
 
   defp handle("at://" <> name) do
     if Syntax.handle?(name), do: String.downcase(name)

@@ -1,5 +1,7 @@
 import Config
 
+config :atoll, :development_identity, true
+
 # Configure your database
 config :atoll, Atoll.Repo,
   username: "postgres",

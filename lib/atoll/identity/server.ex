@@ -19,9 +19,7 @@ defmodule Atoll.Identity.Server do
     endpoint = AtollWeb.Endpoint.url()
     uri = URI.parse(endpoint)
 
-    with "did:web:" <> host <- did,
-         true <- Syntax.handle?(host) and host == String.downcase(host),
-         true <- uri.scheme == "https" and uri.host == host and request_host == host,
+    with true <- origin?(did, request_host, uri),
          true <-
            is_nil(uri.userinfo) and is_nil(uri.query) and is_nil(uri.fragment) and
              uri.path in [nil, "", "/"] do
@@ -61,4 +59,26 @@ defmodule Atoll.Identity.Server do
       _ -> {:error, :not_found}
     end
   end
+
+  defp origin?("did:web:" <> host = did, request_host, uri) do
+    public? =
+      Syntax.handle?(host) and host == String.downcase(host) and
+        uri.scheme == "https" and uri.host == host and request_host == host
+
+    local? =
+      case Atoll.Identity.Localhost.url(did) do
+        {:ok, url} ->
+          local = URI.parse(url)
+
+          uri.scheme == "http" and uri.host == "localhost" and request_host == "localhost" and
+            uri.port == local.port
+
+        _ ->
+          false
+      end
+
+    public? or local?
+  end
+
+  defp origin?(_, _, _), do: false
 end

@@ -5,7 +5,7 @@ defmodule Atoll.Identity.Handle do
   DNS takes precedence. Conflicting valid DNS DIDs fail without HTTPS fallback.
   `resolve/2` returns a forward claim; `verify/2` additionally resolves the DID and
   checks its first claimed handle. DNS uses the system recursive resolver.
-  HTTPS inherits public IPv4 pinning and redirect rejection from the DID resolver.
+  HTTPS inherits public IPv4/IPv6 pinning and redirect rejection from the DID resolver.
   Options are trusted test dependencies, never untrusted request parameters.
   """
   alias Atoll.Syntax

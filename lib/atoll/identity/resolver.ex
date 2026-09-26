@@ -3,8 +3,8 @@ defmodule Atoll.Identity.Resolver do
   HTTPS DID resolution through plc.directory or hostname-level did:web.
 
   Uses public IPv4/IPv6 destinations, pins the checked address, rejects redirects,
-  and limits response bytes. PLC resolution trusts the directory's HTTPS response;
-  operation-log validation and development localhost are pending. Routine
+  and limits response bytes. PLC resolution trusts the directory's HTTPS response.
+  Independent PLC operation-log validation is pending. Routine
   lookups use a bounded positive cache; force_refresh bypasses and replaces it.
   Options provide trusted transport/DNS injection for tests, never request input.
   """
@@ -67,11 +67,17 @@ defmodule Atoll.Identity.Resolver do
   end
 
   def resolution_url("did:web:" <> host) do
-    if Syntax.handle?(host) and host == String.downcase(host) and
-         List.last(String.split(host, ".")) not in ~w(alt arpa example internal invalid local localhost onion test) do
-      {:ok, "https://" <> host <> "/.well-known/did.json"}
-    else
-      {:error, :invalid_did}
+    case Atoll.Identity.Localhost.url("did:web:" <> host) do
+      {:ok, _} = local ->
+        local
+
+      _ ->
+        if Syntax.handle?(host) and host == String.downcase(host) and
+             List.last(String.split(host, ".")) not in ~w(alt arpa example internal invalid local localhost onion test) do
+          {:ok, "https://" <> host <> "/.well-known/did.json"}
+        else
+          {:error, :invalid_did}
+        end
     end
   end
 
@@ -81,8 +87,11 @@ defmodule Atoll.Identity.Resolver do
 
   @doc false
   def fetch_handle(host, opts) do
-    with {:ok, _} <- resolution_url("did:web:" <> host) do
+    with true <- Syntax.handle?(host),
+         {:ok, _} <- resolution_url("did:web:" <> host) do
       fetch("https://" <> host <> "/.well-known/atproto-did", opts, 4096)
+    else
+      _ -> {:error, :invalid_handle}
     end
   end
 
@@ -90,8 +99,14 @@ defmodule Atoll.Identity.Resolver do
     uri = URI.parse(url)
     lookup = Keyword.get(opts, :lookup, &lookup/1)
 
-    with {:ok, address} <- lookup.(uri.host),
-         true <- public_address?(address) do
+    local? =
+      uri.scheme == "http" and uri.host == "localhost" and Atoll.Identity.Localhost.enabled?()
+
+    destination = if local?, do: {:ok, {127, 0, 0, 1}}, else: lookup.(uri.host)
+    authority = if local? and uri.port != 80, do: "localhost:#{uri.port}", else: uri.host
+
+    with {:ok, address} <- destination,
+         true <- public_address?(address) or (local? and address == {127, 0, 0, 1}) do
       pinned = %{uri | host: address |> :inet.ntoa() |> to_string()} |> URI.to_string()
       request = Keyword.get_lazy(opts, :request, &Req.new/0)
 
@@ -103,7 +118,7 @@ defmodule Atoll.Identity.Resolver do
           raw: true,
           compressed: false,
           headers: [
-            {"host", uri.host},
+            {"host", authority},
             {"accept", "application/did+ld+json, application/json"},
             {"accept-encoding", "identity"}
           ],

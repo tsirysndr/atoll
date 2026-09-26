@@ -1,5 +1,12 @@
 import Config
 
+config :atoll,
+       :localhost_dids_enabled,
+       Atoll.Identity.Localhost.parse_enabled!(
+         System.get_env("ATOLL_LOCALHOST_DIDS_ENABLED"),
+         config_env()
+       )
+
 case Integer.parse(System.get_env("ATOLL_DID_CACHE_TTL_SECONDS", "60")) do
   {ttl, ""} when ttl in 0..300 -> config :atoll, :did_cache_ttl_seconds, ttl
   _ -> raise "ATOLL_DID_CACHE_TTL_SECONDS must be an integer from 0 to 300"

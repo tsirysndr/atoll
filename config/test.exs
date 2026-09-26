@@ -1,5 +1,7 @@
 import Config
 
+config :atoll, :development_identity, true
+
 # Configure your database
 #
 # The MIX_TEST_PARTITION environment variable can be used
