@@ -236,9 +236,19 @@ Creation, access verification, and refresh currently require an active repositor
 revocation and read-only `checkAccountStatus` are also allowed for inactive repositories.
 Other authenticated operations still require an active repository. Sessions survive process
 restarts. Changing the signing key invalidates existing tokens. Key rotation with
-overlap, expired-session cleanup, session-count limits, and restricted sessions for
+overlap, session-count limits, and restricted sessions for
 inactive accounts remain pending. Write handlers recheck authorization inside the
 write transaction; token verification alone is not write permission.
+
+Expired session rows can be removed with `mix atoll.sessions.prune --limit 500`
+(use `MIX_ENV=prod` with production configuration). Each invocation deletes one
+batch of at most 1–1000 rows, oldest expiry first, and reports only the deleted
+count. Rows with expiration after the batch starts are retained, and rows locked
+by another transaction are skipped. Repeat or schedule the command to clear a
+backlog; zero deleted rows can mean remaining expired rows are locked. Cleanup
+does not revoke live sessions or alter refresh-token rotation. The internal
+`Atoll.Accounts.SessionCleanup.prune_expired/1` API supports release maintenance.
+Automatic in-application scheduling is not enabled.
 
 ### Blobs
 
