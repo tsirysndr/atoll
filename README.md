@@ -601,7 +601,8 @@ locking protects shared objects when collectors overlap.
 - [x] Internal deactivation, suspension, takedown, and reactivation; inactive repositories reject public reads, exports, and ordinary record writes. Authenticated migration imports/uploads allow deactivated accounts only.
 - [x] Historical block retrieval with signed-commit and canonical-tree membership checks, including deleted records and prior MST nodes.
 - [x] Internal durable event sequencing and cursor replay, recorded atomically with repository creation, writes, imports, and status changes.
-- [ ] Event retention / compaction and higher-throughput sequencing (writes currently share a PostgreSQL transaction advisory lock to preserve commit order).
+- [x] Bounded operator event retention with a durable replay floor and `OutdatedCursor` stream notices.
+- [ ] Higher-throughput sequencing (writes currently share a PostgreSQL transaction advisory lock to preserve commit order).
 - [x] `com.atproto.sync.subscribeRepos` binary WebSocket stream with exclusive resume cursors, live delivery, and account status events.
 - [x] Invalid/future cursor errors, bounded replay backlog, idle pings, and current-availability filtering for repository data.
 - [x] Wire-format commit, sync, account, and identity event encoding, plus CBOR stream/error framing.
@@ -674,7 +675,7 @@ Idle connections poll PostgreSQL every 500 ms and send a ping every 15 seconds.
 Connections more than 10,000 persisted events behind receive `ConsumerTooSlow`
 and close; sequence gaps do not count toward this limit. Replay skips commit and
 sync data for currently inactive repositories, but still emits account and identity events.
-Internet deployment requires WSS termination; connection quotas, event retention,
+Internet deployment requires WSS termination; connection quotas, automatic retention scheduling,
 and federation interoperability testing remain pending.
 
 Identity refreshes announce changes in the resolved handle, signing key, or PDS
@@ -2431,3 +2432,44 @@ independent witness service is implemented. Oversized histories fail closed in
 audit mode rather than being partially verified. Tests mock network traffic and
 exercise pinned upstream logs, invalid recovery, tombstones, response/address
 bounds, and cache isolation; they do not mutate any external DID.
+
+
+### Event retention and expired replay cursors
+
+Event history remains retained by default. To explicitly prune one bounded batch:
+
+```sh
+mix atoll.events.prune --limit 1000 --retention-seconds 604800
+```
+
+The default retention is seven days; supported values range from one hour to one
+year. Batch limits are 1–1000. The command deletes only an expired prefix in sequence
+order and stops at the first newer event, even if later events have older timestamps.
+It uses the database clock. Repeat the command to clear an expired backlog; there
+is no automatic retention scheduler in this increment. JSON output includes
+`deleted` and a string `cursorFloor`, preserving the full integer value.
+
+Deletion and the replay boundary commit in one transaction under the existing event
+sequencing lock, with one-second lock and five-second statement deadlines. Migration
+`20260926152208` stores the highest pruned sequence independently of remaining event
+rows. Pruning every event therefore preserves the stream's last committed position.
+Rollback preserves both events and the prior boundary. Retention does not delete
+repository revisions, blocks, account records, or operator audit history.
+
+An explicit positive cursor below that boundary receives the protocol's
+`#info` / `OutdatedCursor` message before replay resumes above the boundary.
+Consumers must treat the notice as evidence that requested history is missing and
+resynchronize as their application requires. `cursor=0` explicitly requests the
+oldest retained history without a stale-cursor notice; omitting the cursor starts
+at the current position. Exact-boundary cursors remain valid, and future cursors
+still fail. Subscribers overtaken by pruning while connected receive the same
+notice before continuing. The existing 10000-event backlog limit still applies.
+
+Replay holds a shared boundary-row lock through event selection, so pruning cannot
+slip between the boundary check and selection and silently omit events. Retention
+waits for those short read transactions. Sequence gaps alone do not establish an
+expired cursor: the boundary moves only when the retention command deletes a prefix.
+Preserve this table alongside events when backing up or restoring the database.
+Tests cover bounded/non-monotonic timestamp pruning, atomic rollback, empty streams,
+and real loopback WebSocket notice ordering. No existing development event history
+was pruned while implementing this feature.

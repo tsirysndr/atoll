@@ -46,6 +46,30 @@ defmodule AtollWeb.RepoStreamTransportTest do
     end
   end
 
+  test "expired cursor sends a real info frame before retained replay", %{port: port} do
+    did = "did:plc:transportretention"
+    {:ok, _} = Repositories.create(did, SigningKey.generate())
+    first = Events.latest_seq()
+    {:ok, _} = Repositories.set_status(did, :deactivated)
+    old_time = DateTime.add(DateTime.utc_now(), -7200, :second)
+    Repo.update_all(Atoll.Repositories.Event, set: [time: old_time])
+    {:ok, _} = Repositories.set_status(did, :active)
+    {:ok, %{floor: floor}} = Atoll.Repositories.EventRetention.prune(1000, 3600)
+    {:ok, [retained]} = Events.list_after(floor)
+    {:ok, expected} = EventEncoder.encode(retained)
+    socket = connect(port, Integer.to_string(first))
+    assert {2, notice} = receive_frame(socket)
+    header = CBOR.encode!(%{"op" => 1, "t" => "#info"})
+    size = byte_size(header)
+    assert <<^header::binary-size(size), body::binary>> = notice
+    assert {:ok, %{"name" => "OutdatedCursor"}} = CBOR.decode(body)
+    assert {2, ^expected} = receive_frame(socket)
+    :gen_tcp.close(socket)
+    oldest = connect(port, "0")
+    assert {2, ^expected} = receive_frame(oldest)
+    :gen_tcp.close(oldest)
+  end
+
   defp connect(port, cursor) do
     {:ok, socket} =
       :gen_tcp.connect({127, 0, 0, 1}, port, [:binary, active: false, packet: :http_bin], 2000)

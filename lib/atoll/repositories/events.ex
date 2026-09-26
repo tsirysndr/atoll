@@ -6,11 +6,11 @@ defmodule Atoll.Repositories.Events do
   touching heads or blocks. This serializes writes so sequence allocation and
   transaction visibility have the same order. Sequence gaps after rollback are
   expected. Callers composing transactions must acquire this lock first too.
-  Events and their referenced blocks are retained indefinitely for now.
+  Event retention is operator-controlled; referenced repository blocks remain retained.
   """
   import Ecto.Query
   alias Atoll.{CBOR, Repo}
-  alias Atoll.Repositories.{Event, EventEncoder, Head}
+  alias Atoll.Repositories.{Event, EventEncoder, EventRetention, Head}
 
   @doc "Acquire before any repository mutation, inside its transaction."
   def lock! do
@@ -31,7 +31,7 @@ defmodule Atoll.Repositories.Events do
     })
   end
 
-  def latest_seq, do: Repo.one(from e in Event, select: max(e.seq)) || 0
+  def latest_seq, do: EventRetention.bounds().latest
 
   @doc "Counts only enough pending rows to detect a slow consumer; sequence gaps do not count."
   def backlog_exceeded?(cursor, limit \\ 10_000) do
@@ -43,6 +43,9 @@ defmodule Atoll.Repositories.Events do
   def next_frame(cursor) do
     Repo.transaction(fn ->
       case list_after(cursor, 1) do
+        {:error, reason} ->
+          Repo.rollback(reason)
+
         {:ok, []} ->
           :idle
 
@@ -67,13 +70,15 @@ defmodule Atoll.Repositories.Events do
   def list_after(cursor, limit)
       when is_integer(cursor) and cursor >= 0 and cursor <= 9_223_372_036_854_775_807 and
              is_integer(limit) and limit in 1..1000 do
-    events = Repo.all(from e in Event, where: e.seq > ^cursor, order_by: e.seq, limit: ^limit)
+    Repo.transaction(fn ->
+      if cursor < EventRetention.lock_floor!(), do: Repo.rollback(:outdated_cursor)
+      events = Repo.all(from e in Event, where: e.seq > ^cursor, order_by: e.seq, limit: ^limit)
 
-    {:ok,
-     Enum.map(events, fn event ->
-       {:ok, payload} = CBOR.decode(event.payload)
-       %{seq: event.seq, did: event.did, kind: event.kind, time: event.time, payload: payload}
-     end)}
+      Enum.map(events, fn event ->
+        {:ok, payload} = CBOR.decode(event.payload)
+        %{seq: event.seq, did: event.did, kind: event.kind, time: event.time, payload: payload}
+      end)
+    end)
   end
 
   def list_after(_, _), do: {:error, :invalid_cursor_or_limit}

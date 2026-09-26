@@ -20,6 +20,11 @@ defmodule Atoll.Repositories.EventEncoder do
     end
   end
 
+  def info(name, message) when is_binary(name) and is_binary(message) do
+    CBOR.encode!(%{"op" => 1, "t" => "#info"}) <>
+      CBOR.encode!(%{"name" => name, "message" => message})
+  end
+
   def error(name, message) when is_binary(name) and is_binary(message) do
     CBOR.encode!(%{"op" => -1}) <>
       CBOR.encode!(%{"error" => name, "message" => message})
