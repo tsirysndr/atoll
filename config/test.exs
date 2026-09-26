@@ -23,6 +23,9 @@ config :atoll, AtollWeb.Endpoint,
 # Print only warnings and errors during test
 config :logger, level: :warning
 
+# Reduced hashing work is confined to tests. Production uses the library defaults.
+config :argon2_elixir, t_cost: 1, m_cost: 8
+
 # Initialize plugs at runtime for faster test compilation
 config :phoenix, :plug_init_mode, :runtime
 

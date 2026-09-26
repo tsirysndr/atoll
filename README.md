@@ -101,12 +101,28 @@ and history retention policy remain pending.
 - [x] Handle-based repository reads with bidirectional verification and canonical DID record URIs.
 - [ ] Handle updates, caching, and redirect support.
 - [ ] Account creation, activation, deactivation, and deletion.
-- [ ] Password hashing, email verification, and account recovery.
+- [x] Internal DID-scoped password credentials with salted Argon2id hashes, bounded input, redacted inspection, and duplicate protection.
+- [ ] Email verification, password changes, and account recovery.
 - [ ] Session creation, refresh, inspection, and revocation.
 - [ ] App passwords.
 - [ ] ATProto OAuth authorization and resource server support.
 - [ ] Authorization checks for account and repository operations.
 - [ ] Account migration, identity updates, and signing-key lifecycle.
+
+`Atoll.Accounts.Credentials.create/2` is a trusted internal operation that attaches
+a password to an existing repository DID. It never replaces an existing credential.
+`verify/2` returns only the DID on success, and the same `:invalid_credentials`
+error for missing credentials and incorrect passwords. It proves password possession;
+callers must separately check account status and authorization. No public signup or
+login route is exposed yet.
+
+Passwords must be valid UTF-8, 8–1024 bytes, with no trimming or normalization.
+Hashes use [argon2_elixir](https://argon2-elixir.hexdocs.pm/Argon2.html) Argon2id
+with random salts and the library's default work factors (64 MiB memory, three
+iterations, four lanes). Only test configuration reduces the work factors.
+Building this dependency requires a C compiler and `make`. Hashes are redacted
+from schema inspection, and credential insertion disables query logging. Rate
+limits, email/handle login, sessions, password changes, and recovery remain pending.
 
 ### Blobs
 
