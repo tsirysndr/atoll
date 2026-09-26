@@ -32,5 +32,7 @@ defmodule AtollWeb.Router do
 
   scope "/xrpc", AtollWeb do
     get "/com.atproto.sync.getRepo", RepoController, :get_repo
+    get "/com.atproto.sync.getRecord", SyncController, :get_record
+    get "/com.atproto.sync.getBlocks", SyncController, :get_blocks
   end
 end

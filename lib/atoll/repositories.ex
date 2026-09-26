@@ -173,23 +173,85 @@ defmodule Atoll.Repositories do
   @doc "Exports a consistent snapshot, holding a shared head lock until the CAR is assembled."
   def export(did) do
     Repo.transaction(fn ->
-      head = locked_head!(did, "FOR SHARE")
-      records = record_map(did)
-      {:ok, tree} = MST.new(records)
+      {head, tree, commit} = snapshot!(did)
 
       blocks =
-        Enum.reduce([head.head | Map.values(records)], tree.blocks, fn cid, acc ->
-          case Storage.get_block(cid) do
-            {:ok, data} -> Map.put(acc, cid, data)
-            {:error, reason} -> Repo.rollback(reason)
-          end
+        Enum.reduce(Map.values(tree.records), tree.blocks, fn cid, acc ->
+          Map.put(acc, cid, block!(cid))
         end)
 
-      case CAR.encode([head.head], blocks) do
-        {:ok, archive} -> archive
-        {:error, reason} -> Repo.rollback(reason)
+      archive!([head.head], Map.put(blocks, head.head, commit))
+    end)
+  end
+
+  @doc "Exports a compact existence or absence proof anchored to the current signed commit."
+  def export_record(did, path) do
+    Repo.transaction(fn ->
+      {head, tree, commit} = snapshot!(did)
+
+      case MST.proof(tree, path) do
+        {:ok, proof} ->
+          blocks = Map.put(proof.blocks, head.head, commit)
+          blocks = if proof.cid, do: Map.put(blocks, proof.cid, block!(proof.cid)), else: blocks
+          archive!([head.head], blocks)
+
+        {:error, reason} ->
+          Repo.rollback(reason)
       end
     end)
+  end
+
+  @doc "Exports requested blocks reachable from the current repository, excluding retained history."
+  def export_blocks(did, cids) when is_list(cids) and length(cids) in 1..100 do
+    Repo.transaction(fn ->
+      {head, tree, commit} = snapshot!(did)
+      available = MapSet.new([head.head | Map.keys(tree.blocks) ++ Map.values(tree.records)])
+      unless Enum.all?(cids, &MapSet.member?(available, &1)), do: Repo.rollback(:block_not_found)
+
+      blocks =
+        Enum.reduce(Enum.uniq(cids), %{}, fn cid, acc ->
+          bytes =
+            cond do
+              cid == head.head -> commit
+              Map.has_key?(tree.blocks, cid) -> Map.fetch!(tree.blocks, cid)
+              true -> block!(cid)
+            end
+
+          Map.put(acc, cid, bytes)
+        end)
+
+      archive!([], blocks)
+    end)
+  end
+
+  def export_blocks(_, _), do: {:error, :invalid_request}
+
+  defp snapshot!(did) do
+    head = locked_head!(did, "FOR SHARE")
+    bytes = block!(head.head)
+
+    with {:ok, tree} <- MST.new(record_map(did)),
+         {:ok, commit} <- Commit.verify(bytes, did, head.curve, head.public_key),
+         true <- commit["data"].cid == tree.root and commit["rev"] == head.rev do
+      {head, tree, bytes}
+    else
+      _ -> Repo.rollback(:invalid_repository)
+    end
+  end
+
+  defp block!(cid) do
+    with {:ok, bytes} <- Storage.get_block(cid), :ok <- CID.verify(cid, bytes) do
+      bytes
+    else
+      _ -> Repo.rollback(:invalid_repository)
+    end
+  end
+
+  defp archive!(roots, blocks) do
+    case CAR.encode(roots, blocks) do
+      {:ok, archive} -> archive
+      {:error, reason} -> Repo.rollback(reason)
+    end
   end
 
   defp locked_head!(did, lock) do

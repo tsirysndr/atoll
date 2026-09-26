@@ -32,6 +32,41 @@ defmodule Atoll.MST do
   def put(%__MODULE__{records: records}, key, cid), do: new(Map.put(records, key, cid))
   def delete(%__MODULE__{records: records}, key), do: new(Map.delete(records, key))
 
+  @doc "Returns the search-path blocks and optional record CID from a constructed or fully validated tree."
+  def proof(%__MODULE__{} = tree, key) do
+    if Syntax.repo_path?(key) do
+      {:ok, search(tree.root, key, tree.blocks, %{})}
+    else
+      {:error, :invalid_mst}
+    end
+  end
+
+  defp search(nil, _, _, proof), do: %{cid: nil, blocks: proof}
+
+  defp search(cid, key, blocks, proof) do
+    bytes = Map.fetch!(blocks, cid)
+    {:ok, %{"l" => left, "e" => entries}} = CBOR.decode(bytes)
+    proof = Map.put(proof, cid, bytes)
+
+    case search_entries(entries, key, "", left) do
+      {:found, value} -> %{cid: value, blocks: proof}
+      {:child, nil} -> search(nil, key, blocks, proof)
+      {:child, %Link{cid: child}} -> search(child, key, blocks, proof)
+    end
+  end
+
+  defp search_entries([], _, _, child), do: {:child, child}
+
+  defp search_entries([entry | rest], key, previous, left) do
+    current = binary_part(previous, 0, entry["p"]) <> entry["k"].data
+
+    cond do
+      key == current -> {:found, entry["v"].cid}
+      key < current -> {:child, left}
+      true -> search_entries(rest, key, current, entry["t"])
+    end
+  end
+
   @doc "Loads verified blocks and requires the reconstructed canonical root to match."
   def load(root, blocks) when is_binary(root) and is_map(blocks) do
     try do

@@ -3,6 +3,50 @@ defmodule AtollWeb.SyncController do
   alias Atoll.{CID, Repositories, Syntax}
   action_fallback AtollWeb.XRPCFallback
 
+  def get_record(conn, params) do
+    with true <- Syntax.did?(params["did"]),
+         collection when is_binary(collection) <- params["collection"],
+         rkey when is_binary(rkey) <- params["rkey"],
+         path = collection <> "/" <> rkey,
+         true <- Syntax.repo_path?(path),
+         {:ok, archive} <- Repositories.export_record(params["did"], path) do
+      car(conn, archive)
+    else
+      {:error, _} = error -> error
+      _ -> {:error, :invalid_request}
+    end
+  end
+
+  def get_blocks(conn, params) do
+    # XRPC arrays use repeated query keys; Plug's map retains only the last one.
+    cids =
+      conn.query_string
+      |> URI.query_decoder()
+      |> Enum.filter(fn {key, _} -> key in ["cids", "cids[]"] end)
+      |> Enum.map(&elem(&1, 1))
+
+    with true <- Syntax.did?(params["did"]) and length(cids) in 1..100,
+         {:ok, decoded} <- decode_cids(cids),
+         {:ok, archive} <- Repositories.export_blocks(params["did"], decoded) do
+      car(conn, archive)
+    else
+      false -> {:error, :invalid_request}
+      error -> error
+    end
+  end
+
+  defp decode_cids(cids) do
+    Enum.reduce_while(cids, {:ok, []}, fn value, {:ok, acc} ->
+      case CID.from_base32(value) do
+        {:ok, cid} -> {:cont, {:ok, [cid | acc]}}
+        _ -> {:halt, {:error, :invalid_request}}
+      end
+    end)
+  end
+
+  defp car(conn, bytes),
+    do: conn |> put_resp_content_type("application/vnd.ipld.car", nil) |> send_resp(200, bytes)
+
   def latest_commit(conn, params) do
     with {:ok, head} <- head(params) do
       json(conn, %{cid: CID.to_base32(head.head), rev: head.rev})

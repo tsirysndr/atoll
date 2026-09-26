@@ -8,6 +8,9 @@ defmodule AtollWeb.XRPCFallback do
   def call(conn, {:error, :record_not_found}),
     do: error(conn, 400, "RecordNotFound", "Record not found.")
 
+  def call(conn, {:error, :block_not_found}),
+    do: error(conn, 400, "BlockNotFound", "Block not found in the current repository.")
+
   def call(conn, {:error, :not_found}),
     do: error(conn, 400, "RepoNotFound", "Repository not found.")
 
