@@ -60,7 +60,7 @@ defmodule Atoll.Moderation.Audit do
   end
 
   @doc "Records why an unsubmitted signup reservation was selected for operator deletion."
-  def signup_cleanup!(row, cutoff) do
+  def signup_cleanup!(row, cutoff, actor) do
     insert!(
       "atoll.accounts.cleanupSignups",
       row.did,
@@ -68,7 +68,7 @@ defmodule Atoll.Moderation.Audit do
       %{genesisCid: row.cid, cutoff: DateTime.to_iso8601(cutoff)},
       %{reserved: true, submissionStarted: false},
       %{reserved: false},
-      "operator"
+      actor
     )
   end
 
@@ -256,14 +256,15 @@ defmodule Atoll.Moderation.Audit do
   end
 
   @doc "Records operator deletion without retaining account credentials or private profile data."
-  def account_deletion!(head) do
+  def account_deletion!(head, actor \\ "admin") do
     insert!(
       "com.atproto.admin.deleteAccount",
       head.did,
       %{"$type" => "com.atproto.admin.defs#repoRef", "did" => head.did},
       %{"did" => head.did},
       %{availability: Atom.to_string(head.status)},
-      %{availability: "deleted"}
+      %{availability: "deleted"},
+      actor
     )
   end
 

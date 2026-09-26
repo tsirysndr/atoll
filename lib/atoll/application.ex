@@ -101,7 +101,11 @@ defmodule Atoll.Application do
       Atoll.Redis.children() ++
         children ++
         refresh_children ++
-        cleanup_children ++ account_cleanup_children ++ relay_children ++ retention_children,
+        cleanup_children ++
+        account_cleanup_children ++
+        relay_children ++
+        retention_children ++
+        Atoll.Accounts.SignupCleanupWorker.children(),
       opts
     )
   end

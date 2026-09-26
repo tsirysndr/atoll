@@ -355,7 +355,8 @@ mutation. Deletes and empty batches need no record schema, even with `validate: 
 - [x] Operator enable/disable controls for future account invite allocation, separate from existing-code revocation.
 - [x] Opt-in custom-domain signup through operator DID reservation and verified `createAccount` completion.
 - [x] Bounded operator cleanup of expired signup reservations with no recorded PLC submission.
-- [ ] Self-service custom-domain DID reservation, phone verification, and automated signup cleanup/reconciliation.
+- [x] Opt-in supervised scheduling of bounded unsubmitted-signup cleanup with telemetry.
+- [ ] Self-service custom-domain DID reservation, phone verification, and attempted-signup reconciliation/background retries.
 - [x] Internal DID-scoped password credentials with salted Argon2id hashes, bounded input, redacted inspection, and duplicate protection.
 - [x] Shared configurable Cloudflare Worker email delivery client.
 - [x] `requestPlcOperationSignature` email authorization with atomic single-use challenge consumption.
@@ -1328,7 +1329,8 @@ create requests return an account-exists error; use login if the success respons
 was lost. Failed session creation leaves the confirmed reservation deactivated and
 resumable. Attempted registrations remain retained for reconciliation. The
 operator cleanup command below can remove old reservations never submitted by
-Atoll; automated cleanup and background retries remain pending. No configuration in this change enables signup
+Atoll. Optional scheduled cleanup is described below; background registration
+retries remain pending. No configuration in this change enables signup
 on the running deployment or submits live registrations.
 
 
@@ -3898,8 +3900,8 @@ stays deactivated with no session until a valid retry. Normalized profile detail
 password proof, invite and recovery key must still match; publication/session
 failures retain the exact journal for retry. No configuration is enabled on the
 running deployment by adding this feature. Self-service custom-domain reservation,
-phone verification, and automated reservation cleanup remain unfinished. Bounded
-operator cleanup of unsubmitted reservations is described below.
+phone verification, and attempted-signup reconciliation remain unfinished. Bounded
+operator and scheduled cleanup of unsubmitted reservations are described below.
 
 
 ### Cleaning up unsubmitted signup reservations
@@ -3940,5 +3942,46 @@ registration and other account-owned rows are removed, old stream events are
 withdrawn, a deleted-account event is emitted, and owned blob bytes are queued for
 physical cleanup. Audit history remains. Invite uses are not refunded. Database
 lock/statement timeouts roll back the page for retry. No PLC request or email is
-sent. Scheduled cleanup and reconciliation of attempted/ambiguous reservations
-remain unfinished.
+sent. Optional scheduling is described below. Reconciliation of attempted or
+ambiguous registrations remains unfinished.
+
+
+### Scheduled signup cleanup
+
+After reviewing the dry-run output and upgrading every writer to the submission
+marker implementation, enable automatic cleanup explicitly:
+
+```sh
+export ATOLL_SIGNUP_CLEANUP_ENABLED=true
+export ATOLL_SIGNUP_CLEANUP_AGE_DAYS=7
+export ATOLL_SIGNUP_CLEANUP_BATCH_SIZE=100
+export ATOLL_SIGNUP_CLEANUP_INTERVAL_SECONDS=3600
+```
+
+Cleanup is disabled by default, independently of signup admission. Configuration
+is validated at startup: age is 1–3650 days, batch size 1–100, and interval
+60–86400 seconds. Defaults are seven days, 100 reservations and one hour. These
+settings schedule actual deletion, not dry-run; all eligibility, legacy protection,
+audit, invite-use, and publication-locking rules of the operator command apply.
+
+The supervised worker first runs after 60 seconds, then processes one page per
+configured interval after the preceding run finishes. It does not immediately
+drain a backlog when `more` is true. There is at most one task per worker; duplicate
+manual triggers do not overlap a running task. A 15-second task deadline cancels
+stalled work, and later ticks retry after failures. Shutdown terminates any running
+task. Database transactions provide atomic deletion; losing the task's response
+can leave a committed page, so telemetry is operational feedback rather than an
+exactly-once deletion ledger. Durable audit history records committed cleanup.
+
+Each instance has its own worker and budget. The shared database event lock
+serializes pages with pre-publication marking across instances, preventing two
+workers from deleting the same reservation. Scheduled cleanup and its associated
+account-deletion audit entries use actor `system`; manual cleanup uses `operator`.
+No network or email operation is initiated by the worker.
+
+Telemetry event `[:atoll, :accounts, :signup_cleanup]` reports `runs`, and on
+success `selected` and `deleted` counts. Metadata contains `result` (`ok`, `failed`,
+or `timeout`) and `more`. DIDs, handles, credentials and cutoff strings are excluded.
+Automatic startup is suppressed in tests; worker tests use supervised isolated
+instances, explicit timer delivery and mocked failures. Attempted/ambiguous signup
+reconciliation and automatic registration retries remain separate unfinished work.

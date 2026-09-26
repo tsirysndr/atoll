@@ -93,7 +93,10 @@ defmodule Atoll.Accounts.Deletion do
   def delete(_), do: {:error, :invalid_request}
 
   @doc "Trusted operator deletion. HTTP callers must enforce operator authentication."
-  def admin_delete(%{"did" => did} = params) when map_size(params) == 1 do
+  def admin_delete(params, actor \\ "admin")
+
+  def admin_delete(%{"did" => did} = params, actor)
+      when map_size(params) == 1 and actor in ["admin", "operator", "system"] do
     if Atoll.Syntax.did?(did) do
       Repo.transaction(fn ->
         Repo.query!("SET LOCAL lock_timeout = '1s'")
@@ -104,7 +107,7 @@ defmodule Atoll.Accounts.Deletion do
           Repo.one(from h in Head, where: h.did == ^did, lock: "FOR UPDATE") ||
             Repo.rollback(:admin_account_not_found)
 
-        Atoll.Moderation.Audit.account_deletion!(head)
+        Atoll.Moderation.Audit.account_deletion!(head, actor)
         remove!(head)
       end)
     else
@@ -117,7 +120,7 @@ defmodule Atoll.Accounts.Deletion do
         else: reraise(e, __STACKTRACE__)
   end
 
-  def admin_delete(_), do: {:error, :invalid_request}
+  def admin_delete(_, _), do: {:error, :invalid_request}
 
   # Both authorization paths hold the event lock and an exclusive head lock.
   defp remove!(head) do
