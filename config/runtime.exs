@@ -26,6 +26,10 @@ nonnegative_integer = fn name, default ->
   end
 end
 
+config :atoll, :repository_quota,
+  max_bytes: nonnegative_integer.("ATOLL_REPO_MAX_ACCOUNT_BYTES", "1073741824"),
+  max_count: nonnegative_integer.("ATOLL_REPO_MAX_ACCOUNT_BLOCKS", "1000000")
+
 config :atoll, :blob_quota,
   max_bytes: nonnegative_integer.("ATOLL_BLOB_MAX_ACCOUNT_BYTES", "1073741824"),
   max_count: nonnegative_integer.("ATOLL_BLOB_MAX_ACCOUNT_COUNT", "10000")

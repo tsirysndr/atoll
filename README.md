@@ -56,7 +56,7 @@ Checked items are implemented in this repository. Unchecked items are remaining 
 - [x] Structured CBOR node storage and retrieval with CID verification and decoding validation.
 - [x] Per-repository block ownership inventories for every retained revision, with indexed membership checks.
 - [x] Bounded unreferenced repository-block cleanup with age grace and write serialization.
-- [ ] Repository block storage quotas.
+- [x] Configurable per-account byte and block quotas over retained repository history.
 
 Block storage is currently an internal API. `put_block/2` verifies digests;
 `put_node/1` also validates CBOR and decoding limits. `get_node/1` verifies stored
@@ -911,3 +911,27 @@ Raw blob bytes are deliberately handled by the separate blob cleanup queue.
 Standalone internal `Storage.put_node` writes have no ownership until attached to
 a repository; callers must not rely on unowned blocks surviving beyond the grace
 period. Revision compaction and normalized reference indexing remain pending.
+
+
+### Repository storage quotas
+
+Set `ATOLL_REPO_MAX_ACCOUNT_BYTES` (default 1073741824, 1 GiB) and
+`ATOLL_REPO_MAX_ACCOUNT_BLOCKS` (default 1000000) before startup. Both require
+nonnegative integers. These are separate from blob quotas. Each account is charged
+once for each distinct stored CID referenced by any of its retained revisions,
+including commit, MST, and record blocks. A block shared by accounts counts toward
+each account's limit, even though its physical bytes are deduplicated.
+
+Repository creation, record mutations, and CAR imports enforce both limits inside
+their transaction. Failures return `RepoQuotaExceeded` and roll back all changes,
+including new blocks, reference withdrawals, cleanup jobs, and events. Identical
+CAR retries and empty HTTP write batches create no revision and remain allowed
+after limits are lowered. Limits do not retroactively remove existing data.
+
+Retained history consumes quota: deleting or replacing records does not release
+its old blocks and creates a new commit. At the limit, even record deletions can
+be rejected; raise the limit or delete the account until history compaction is
+available. Unowned blocks and raw blob bytes do not count toward repository quota.
+Usage currently scans and deduplicates retained revision inventories; incremental
+accounting is future performance work. Internal inventory is available through
+`Atoll.Repositories.Quota.usage/1`.

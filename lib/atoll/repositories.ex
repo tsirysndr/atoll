@@ -5,11 +5,11 @@ defmodule Atoll.Repositories do
   Callers provide a signing key or use the encrypted key vault. Mutations
   lock the head, enforce optional compare-and-swap, and atomically persist
   records, MST blocks, commit, and revision. Trees rebuild on each mutation.
-  Old blocks are retained until reference tracking and GC exist.
+  Retained revisions own their blocks; unowned blocks can be garbage-collected.
 
   Records use ATProto JSON values and must match their collection's `$type`.
-  This checks the data model, not record Lexicons. Account authorization and blob
-  ownership must be added before exposing writes over HTTP.
+  This checks the data model, not record Lexicons. Public write handlers separately
+  enforce account authorization, and mutations check blob ownership and quotas.
   """
   import Ecto.Query
   alias Atoll.{CAR, CBOR, CID, Commit, DataModel, MST, Repo, SigningKey, Storage, Syntax, TID}
@@ -612,6 +612,8 @@ defmodule Atoll.Repositories do
       head: head.head,
       blocks: Enum.uniq([head.head | cids])
     })
+
+    Atoll.Repositories.Quota.check!(head.did)
   end
 
   defp locked_head!(did, lock, require_active \\ true) do

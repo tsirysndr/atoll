@@ -30,6 +30,31 @@ defmodule AtollWeb.RecordWriteControllerTest do
     %{conn: conn, pair: pair, head: head}
   end
 
+  test "repository quota failures return a protocol error without publishing a write", c do
+    previous = Application.fetch_env(:atoll, :repository_quota)
+
+    on_exit(fn ->
+      case previous do
+        {:ok, value} -> Application.put_env(:atoll, :repository_quota, value)
+        :error -> Application.delete_env(:atoll, :repository_quota)
+      end
+    end)
+
+    Application.put_env(:atoll, :repository_quota, max_count: 2)
+    seq = Atoll.Repositories.Events.latest_seq()
+
+    result =
+      request(c, "createRecord", %{
+        "repo" => @did,
+        "collection" => @collection,
+        "record" => @record
+      })
+
+    assert json_response(result, 400)["error"] == "RepoQuotaExceeded"
+    assert Repositories.get_head(@did) == {:ok, c.head}
+    assert Atoll.Repositories.Events.latest_seq() == seq
+  end
+
   test "creates an automatic TID record, updates it, reads it and deletes it", c do
     created =
       request(c, "createRecord", %{

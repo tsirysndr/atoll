@@ -1,6 +1,12 @@
 defmodule AtollWeb.XRPCFallback do
   use AtollWeb, :controller
 
+  def call(conn, {:error, :repository_quota_exceeded}),
+    do: error(conn, 400, "RepoQuotaExceeded", "Repository storage quota exceeded.")
+
+  def call(conn, {:error, :invalid_repository_quota}),
+    do: error(conn, 503, "ServiceUnavailable", "Repository storage quota is misconfigured.")
+
   def call(conn, {:error, :auth_factor_required}),
     do: error(conn, 400, "AuthFactorTokenRequired", "Check your email for a login code.")
 
