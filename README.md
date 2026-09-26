@@ -148,7 +148,8 @@ record Lexicons or grant access to account data.
 - [x] Internal atomic repository key restoration with missing, corrupt, or lost-master-key custody.
 - [x] Durable encrypted repository-key custody for signed recovery forks, including same-key repair.
 - [x] Operator recovery with supplied repository private keys, including unreadable-vault repair and atomic commit publication.
-- [ ] Recovery with replacement PLC authority keys, pending-operation conflict resolution, and lost-authority-key recovery.
+- [x] Internal recovery custody and atomic restoration of PLC authority keys without decrypting old custody.
+- [ ] Operator recovery with replacement PLC authority keys, combined key restoration, and pending-operation conflict resolution.
 - [x] Per-revision signing-key provenance for historical record and block verification.
 - [x] Internal atomic repository signing-key replacement with unchanged-tree commits and vault rollback.
 - [x] PostgreSQL repository heads and atomic record, tree, and commit updates with optional head compare-and-swap.
@@ -3667,3 +3668,37 @@ must still be readable and authorized by the recovery operation. Replacing or
 restoring lost PLC authority custody and handling conflicting pending operations
 remain unfinished. Recovery still requires an authorized signing key; private
 keys cannot be reconstructed from public keys.
+
+### Internal recovery of PLC authority custody
+
+`PendingAuthorityKeys.stage_recovery/6` stages a supplied PLC authority private
+key alongside a verified recovery fork. It checks the expected retained public
+key from local metadata without requiring the old private envelope to decrypt.
+The signed recovery must authorize the supplied key in its rotation-key list.
+Same-key repair is supported; recovery may also replace the authority entirely.
+Ordinary authority staging still requires readable old custody and a different
+key in the same priority position.
+
+Recovery authority envelopes use a distinct authenticated-encryption domain,
+binding the DID, signed operation CID, expected old public key, curve and new
+public key. Exact retries preserve custody, and master-key rewrapping includes
+it. Caller authorization and fresh recovery evidence are still required.
+`RotationKeys.public_key/1` reads preferred retained public metadata without
+opening either the installed or signup private envelope.
+
+After fresh verified directory acceptance, `RotationKeys.restore_pending!/2`
+can install the supplied key under the active master key in the same transaction
+as journal completion and pending-custody release. It checks confirmation,
+account status and expected retained public metadata, while permitting an
+unreadable old envelope. Ordinary `adopt_pending!/2` rejects recovery journals
+and retains its old-key readability requirement. Failed transactions preserve
+prior custody and the pending key. Neither path changes the repository signing
+key or emits repository events itself.
+
+This supports loss of the old authority's encryption master key when the
+replacement private key and an authorized signed recovery are available. It
+does not recover private material from public metadata or repair other vault
+envelopes encrypted under a lost master key. The original signup envelope remains
+retained, with the installed authority taking precedence. Operator integration,
+simultaneous repository/authority recovery, and conflicting pending-operation
+handling remain unfinished.

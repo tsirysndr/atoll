@@ -97,7 +97,33 @@ defmodule Atoll.Identity.PLC.RotationKeys do
   defp store(_, _, _, _), do: {:error, :invalid_rotation_key}
 
   @doc "Internal atomic adoption after the caller freshly verifies the staged update is current."
-  def adopt_pending!(did, cid) do
+  def adopt_pending!(did, cid), do: install_pending!(did, cid, :ordinary)
+
+  @doc "Internal recovery installation; caller must freshly verify accepted recovery authority."
+  def restore_pending!(did, cid), do: install_pending!(did, cid, :recovery)
+
+  @doc "Read retained public authority metadata without decrypting private custody."
+  def public_key(did) do
+    case Repo.get(RotationKey, did, log: false) do
+      nil ->
+        case Repo.get(Atoll.Identity.PLC.Registration, did, log: false) do
+          nil -> {:error, :key_not_found}
+          row -> Multikey.to_did_key(row.rotation_curve, row.rotation_public_key)
+        end
+
+      row ->
+        Multikey.to_did_key(row.curve, row.public_key)
+    end
+  end
+
+  defp retained_public(did, :recovery), do: public_key(did)
+
+  defp retained_public(did, :ordinary) do
+    with {:ok, old} <- Atoll.Identity.PLC.Registrations.rotation_key(did),
+         do: Multikey.to_did_key(old.curve, old.public)
+  end
+
+  defp install_pending!(did, cid, mode) do
     unless Repo.in_transaction?(),
       do: raise(ArgumentError, "authority-key adoption requires a transaction")
 
@@ -111,10 +137,12 @@ defmodule Atoll.Identity.PLC.RotationKeys do
     row = Repo.get_by(Update, did: did, cid: cid) || Repo.rollback(:plc_update_not_found)
     unless row.confirmed_at, do: Repo.rollback(:plc_update_unconfirmed)
 
+    unless mode == :recovery == is_binary(row.recovery_expected_head),
+      do: Repo.rollback(:invalid_key_workflow)
+
     with {:ok, master} <- MasterKeys.active(),
          {:ok, key} <- Atoll.Identity.PLC.PendingAuthorityKeys.fetch(did, cid),
-         {:ok, old} <- Atoll.Identity.PLC.Registrations.rotation_key(did),
-         {:ok, current} <- Multikey.to_did_key(old.curve, old.public),
+         {:ok, current} <- retained_public(did, mode),
          {:ok, replacement} <- Multikey.to_did_key(key.curve, key.public) do
       unless current in [row.expected_authority_key, replacement],
         do: Repo.rollback(:stale_rotation_key)

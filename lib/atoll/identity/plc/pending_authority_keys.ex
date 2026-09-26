@@ -9,38 +9,57 @@ defmodule Atoll.Identity.PLC.PendingAuthorityKeys do
   import Ecto.Query
   alias Atoll.{CBOR, MasterKeys, Multikey, Repo, SigningKey}
   alias Atoll.Repositories.{Events, Head}
-  alias Atoll.Identity.PLC.{Operation, Registrations, Update, Updates}
+  alias Atoll.Identity.PLC.{Operation, Recoveries, Registrations, RotationKeys, Update, Updates}
 
-  def stage(did, audit, operation, expected, %SigningKey{} = key) when is_map(operation) do
+  def stage(did, audit, operation, expected, key),
+    do: stage_key(did, audit, operation, expected, key, :ordinary)
+
+  @doc "Stage supplied authority custody for a recovery, without decrypting the old envelope."
+  def stage_recovery(did, audit, operation, expected, key, now \\ DateTime.utc_now()),
+    do: stage_key(did, audit, operation, expected, key, {:recovery, now})
+
+  defp stage_key(did, audit, operation, expected, %SigningKey{} = key, mode)
+       when is_map(operation) do
     with {:ok, master} <- MasterKeys.active(),
          {:ok, _} <- Multikey.from_did_key(expected),
          {:ok, derived} <- SigningKey.from_private(key.curve, key.private),
          true <- derived.public == key.public,
          {:ok, public} <- Multikey.to_did_key(key.curve, key.public),
-         true <- public != expected,
+         true <- mode != :ordinary or public != expected,
          true <- public in Operation.rotation_keys(operation),
          {:ok, cid} <- Operation.cid(operation) do
       Repo.transaction(fn ->
         head = lock!(did)
         unless head.status in [:active, :deactivated], do: Repo.rollback(:repo_inactive)
 
-        case Registrations.rotation_key(did) do
-          {:ok, current} ->
-            unless Multikey.to_did_key(current.curve, current.public) == {:ok, expected},
-              do: Repo.rollback(:stale_rotation_key)
+        current_public =
+          if mode == :ordinary do
+            with {:ok, current} <- Registrations.rotation_key(did),
+                 do: Multikey.to_did_key(current.curve, current.public)
+          else
+            RotationKeys.public_key(did)
+          end
 
-          {:error, reason} ->
-            Repo.rollback(reason)
+        case current_public do
+          {:ok, ^expected} -> :ok
+          {:ok, _} -> Repo.rollback(:stale_rotation_key)
+          {:error, reason} -> Repo.rollback(reason)
         end
 
-        case Updates.stage(did, audit, operation) do
+        journal =
+          case mode do
+            :ordinary -> Updates.stage(did, audit, operation)
+            {:recovery, now} -> Recoveries.stage(did, audit, operation, now)
+          end
+
+        case journal do
           {:ok, _} -> :ok
           {:error, reason} -> Repo.rollback(reason)
         end
 
         row = Repo.get_by!(Update, did: did, cid: cid)
 
-        unless rotation_only?(row, expected, public), do: Repo.rollback(:invalid_rotation_key)
+        unless permitted_key?(row, expected, public), do: Repo.rollback(:invalid_rotation_key)
         if row.signing_public_key, do: Repo.rollback(:pending_key_conflict)
 
         cond do
@@ -87,7 +106,7 @@ defmodule Atoll.Identity.PLC.PendingAuthorityKeys do
     end
   end
 
-  def stage(_, _, _, _, _), do: {:error, :invalid_key}
+  defp stage_key(_, _, _, _, _, _), do: {:error, :invalid_key}
 
   def fetch(did, cid) do
     with {:ok, master} <- MasterKeys.active() do
@@ -156,7 +175,12 @@ defmodule Atoll.Identity.PLC.PendingAuthorityKeys do
     end
   end
 
-  defp rotation_only?(row, expected, public) do
+  defp permitted_key?(%{recovery_expected_head: head} = row, _, public) when is_binary(head) do
+    public in Operation.rotation_keys(row.operation) and
+      match?({:ok, _}, Operation.verify_update(row.previous, row.operation))
+  end
+
+  defp permitted_key?(row, expected, public) do
     with {:ok, successor} <- Operation.successor(row.previous),
          true <- expected in successor["rotationKeys"],
          false <- public in successor["rotationKeys"],
@@ -189,7 +213,7 @@ defmodule Atoll.Identity.PLC.PendingAuthorityKeys do
     with {:ok, cid} <- Operation.cid(row.operation),
          true <- cid == row.cid,
          {:ok, public} <- Multikey.to_did_key(row.authority_curve, row.authority_public_key),
-         true <- rotation_only?(row, row.expected_authority_key, public),
+         true <- permitted_key?(row, row.expected_authority_key, public),
          private when is_binary(private) <-
            :crypto.crypto_one_time_aead(
              :aes_256_gcm,
@@ -222,7 +246,10 @@ defmodule Atoll.Identity.PLC.PendingAuthorityKeys do
   defp aad(row),
     do:
       CBOR.encode!([
-        "atoll.pending-plc-authority-key.v1",
+        if(row.recovery_expected_head,
+          do: "atoll.pending-plc-authority-recovery-key.v1",
+          else: "atoll.pending-plc-authority-key.v1"
+        ),
         row.did,
         row.cid,
         row.expected_authority_key,
