@@ -76,7 +76,9 @@ retention =
 config :atoll, :event_retention_enabled, retention.enabled
 config :atoll, :event_retention_seconds, retention.seconds
 
-config :atoll, :email_worker, Atoll.Email.Config.parse!(System.get_env())
+config :atoll,
+       :email_worker,
+       Atoll.Email.Config.parse!(System.get_env(), Application.get_env(:atoll, :email_worker, []))
 
 server = Atoll.ServerConfig.parse!(System.get_env(), config_env() == :prod)
 config :atoll, :pds, server.pds

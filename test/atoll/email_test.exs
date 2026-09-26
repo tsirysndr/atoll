@@ -109,4 +109,29 @@ defmodule Atoll.EmailTest do
       Email.Config.parse!(%{"ATOLL_EMAIL_WORKER_URL" => "https://mail.example.com"})
     end
   end
+
+  test "preserves config settings and replaces environment overrides as a complete pair" do
+    settings = [url: "https://configured.example.com/send", token: "config-secret"]
+    assert Email.Config.parse!(%{}, settings) == settings
+
+    assert Email.Config.parse!(
+             %{
+               "ATOLL_EMAIL_WORKER_URL" => "https://override.example.com/send",
+               "ATOLL_EMAIL_WORKER_TOKEN" => "override-secret"
+             },
+             settings
+           ) == [url: "https://override.example.com/send", token: "override-secret"]
+
+    for env <- [
+          %{"ATOLL_EMAIL_WORKER_URL" => "https://override.example.com/send"},
+          %{"ATOLL_EMAIL_WORKER_TOKEN" => "override-secret"},
+          %{"ATOLL_EMAIL_WORKER_URL" => ""}
+        ] do
+      assert_raise RuntimeError, fn -> Email.Config.parse!(env, settings) end
+    end
+
+    assert_raise RuntimeError, fn ->
+      Email.Config.parse!(%{}, url: "http://configured.example.com", token: "config-secret")
+    end
+  end
 end

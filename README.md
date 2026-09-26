@@ -942,7 +942,8 @@ export ATOLL_EMAIL_WORKER_TOKEN='<shared bearer secret>'
 ```
 
 Alternatively set `config :atoll, :email_worker, url: "https://...", token: "..."`
-in runtime configuration using your secret source. Neither setting configured
+in configuration using your secret source. Environment overrides must supply both
+variables and replace the configured pair together. Neither setting configured
 means delivery is disabled; partial or malformed environment configuration fails
 startup. The endpoint must use HTTPS without embedded credentials, query, or fragment.
 There is no SMTP or direct-provider fallback.

@@ -1,9 +1,16 @@
 defmodule Atoll.Email.Config do
   @moduledoc "Validates the external email Worker configuration without exposing secrets."
 
-  def parse!(env) do
-    url = env["ATOLL_EMAIL_WORKER_URL"]
-    token = env["ATOLL_EMAIL_WORKER_TOKEN"]
+  def parse!(env, settings \\ []) do
+    # Environment configuration replaces the pair atomically; never combine a
+    # new endpoint with a credential belonging to a different configured Worker.
+    {url, token} =
+      if Map.has_key?(env, "ATOLL_EMAIL_WORKER_URL") or
+           Map.has_key?(env, "ATOLL_EMAIL_WORKER_TOKEN") do
+        {env["ATOLL_EMAIL_WORKER_URL"], env["ATOLL_EMAIL_WORKER_TOKEN"]}
+      else
+        {settings[:url], settings[:token]}
+      end
 
     case validate(url, token) do
       :disabled ->
@@ -13,7 +20,7 @@ defmodule Atoll.Email.Config do
         [url: url, token: token]
 
       :error ->
-        raise "ATOLL_EMAIL_WORKER_URL and ATOLL_EMAIL_WORKER_TOKEN must configure an HTTPS endpoint and a nonempty bearer token"
+        raise "Email Worker settings must configure an HTTPS endpoint and a nonempty bearer token; environment overrides require both ATOLL_EMAIL_WORKER_URL and ATOLL_EMAIL_WORKER_TOKEN"
     end
   end
 
