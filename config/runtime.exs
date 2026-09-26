@@ -1,5 +1,7 @@
 import Config
 
+config :atoll, :email_worker, Atoll.Email.Config.parse!(System.get_env())
+
 server = Atoll.ServerConfig.parse!(System.get_env(), config_env() == :prod)
 config :atoll, :pds, server.pds
 

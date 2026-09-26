@@ -155,7 +155,8 @@ The same `validate: true` restriction applies to batch requests.
 - [x] Authenticated recommended DID credentials for the destination signing key and service.
 - [ ] Fresh DID signup and account deletion.
 - [x] Internal DID-scoped password credentials with salted Argon2id hashes, bounded input, redacted inspection, and duplicate protection.
-- [ ] Email verification, password changes, and account recovery.
+- [x] Shared configurable Cloudflare Worker email delivery client.
+- [ ] Email verification, password changes, and account recovery through the Worker.
 - [x] Internal password session creation, scoped HS256 JWT verification, single-use refresh rotation, and persistent revocation.
 - [x] Public DID/password session creation, refresh, inspection, and revocation endpoints, with bounded requests and per-node rate limits.
 - [x] Bidirectionally verified handle/password login with normalized handles and DID-bound sessions.
@@ -702,3 +703,37 @@ cached layers automatically.
 ## License
 
 [MIT](LICENSE)
+
+### Email delivery
+
+All email features must use `Atoll.Email.deliver/3`, which submits messages to an
+external Cloudflare Worker. Configure both settings before starting Atoll:
+
+```sh
+export ATOLL_EMAIL_WORKER_URL=https://your-worker.example.com/send
+export ATOLL_EMAIL_WORKER_TOKEN='<shared bearer secret>'
+```
+
+Alternatively set `config :atoll, :email_worker, url: "https://...", token: "..."`
+in runtime configuration using your secret source. Neither setting configured
+means delivery is disabled; partial or malformed environment configuration fails
+startup. The endpoint must use HTTPS without embedded credentials, query, or fragment.
+There is no SMTP or direct-provider fallback.
+
+The Worker API contract is an authenticated POST with `Authorization: Bearer ...`,
+`Idempotency-Key: <opaque message ID>`, and JSON:
+
+```json
+{"to":"owner@example.com","subject":"Confirm your email","text":"Your code is ..."}
+```
+
+The Worker owns the sender address and provider credentials, validates the shared
+secret, and deduplicates requests by idempotency key. Return 200, 202, or 204 only
+when accepting responsibility for delivery. Atoll treats 408, 429, transport errors,
+and 5xx responses as unavailable; other responses are rejected. Response bodies
+are discarded. Redirects and automatic retries are disabled. Callers must retain
+the same key for retries of a logical message, including ambiguous timeouts.
+
+This increment provides the delivery boundary, configuration, and mocked HTTP
+tests. Verification/recovery endpoints, durable retry scheduling, and the external
+Worker deployment remain pending. No real email is sent by the tests.
