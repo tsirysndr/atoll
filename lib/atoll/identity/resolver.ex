@@ -2,8 +2,9 @@ defmodule Atoll.Identity.Resolver do
   @moduledoc """
   HTTPS DID resolution through plc.directory or hostname-level did:web.
 
-  Uses public IPv4/IPv6 destinations, pins the checked address, rejects redirects,
-  and limits response bytes. PLC resolution trusts the directory's HTTPS response.
+  Uses public IPv4/IPv6 destinations and pins the checked address. DID redirects are rejected;
+  HTTPS handle lookups permit three validated redirect hops. Response bytes are bounded.
+  PLC resolution trusts the directory's HTTPS response.
   Independent PLC operation-log validation is pending. Routine
   lookups use a bounded positive cache; force_refresh bypasses and replaces it.
   Options provide trusted transport/DNS injection for tests, never request input.
@@ -89,13 +90,13 @@ defmodule Atoll.Identity.Resolver do
   def fetch_handle(host, opts) do
     with true <- Syntax.handle?(host),
          {:ok, _} <- resolution_url("did:web:" <> host) do
-      fetch("https://" <> host <> "/.well-known/atproto-did", opts, 4096)
+      fetch("https://" <> host <> "/.well-known/atproto-did", opts, 4096, 3)
     else
       _ -> {:error, :invalid_handle}
     end
   end
 
-  defp fetch(url, opts, max_bytes \\ @max_bytes) do
+  defp fetch(url, opts, max_bytes \\ @max_bytes, redirects \\ 0) do
     uri = URI.parse(url)
     lookup = Keyword.get(opts, :lookup, &lookup/1)
 
@@ -119,7 +120,11 @@ defmodule Atoll.Identity.Resolver do
           compressed: false,
           headers: [
             {"host", authority},
-            {"accept", "application/did+ld+json, application/json"},
+            {"accept",
+             if(max_bytes == 4096,
+               do: "text/plain",
+               else: "application/did+ld+json, application/json"
+             )},
             {"accept-encoding", "identity"}
           ],
           connect_options: [
@@ -142,6 +147,12 @@ defmodule Atoll.Identity.Resolver do
             do: {:ok, body},
             else: {:error, :resolution_failed}
 
+        {:ok, %{status: status, headers: headers}}
+        when status in [301, 302, 303, 307, 308] and redirects > 0 ->
+          with {:ok, target} <- redirect_target(url, headers) do
+            fetch(target, opts, max_bytes, redirects - 1)
+          end
+
         {:ok, %{status: 404}} ->
           {:error, :did_not_found}
 
@@ -152,6 +163,23 @@ defmodule Atoll.Identity.Resolver do
       false -> {:error, :unsafe_destination}
       _ -> {:error, :resolution_failed}
     end
+  end
+
+  defp redirect_target(base, headers) do
+    with [location] when is_binary(location) and byte_size(location) in 1..2048 <-
+           Map.get(headers, "location", []),
+         true <- String.valid?(location) and not Regex.match?(~r/[\x00-\x20\x7f]/, location),
+         {:ok, relative} <- URI.new(location),
+         %URI{scheme: "https", host: host, port: 443, userinfo: nil, fragment: nil} = target <-
+           URI.merge(base, relative),
+         true <- is_binary(host),
+         {:ok, _} <- resolution_url("did:web:" <> String.downcase(host)) do
+      {:ok, URI.to_string(%{target | host: String.downcase(host)})}
+    else
+      _ -> {:error, :resolution_failed}
+    end
+  rescue
+    ArgumentError -> {:error, :resolution_failed}
   end
 
   defp collect({:data, chunk}, {req, resp}, max_bytes) do

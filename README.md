@@ -294,7 +294,8 @@ mutation. Deletes and empty batches need no record schema, even with `validate: 
 - [x] Public `com.atproto.identity.resolveHandle` forward lookup (does not assert bidirectional verification).
 - [x] Public `resolveDid` and `resolveIdentity` queries for remote DID documents and verified identity information.
 - [x] Handle-based repository reads with bidirectional verification and canonical DID record URIs.
-- [ ] Handle updates, caching, and redirect support.
+- [x] HTTPS handle-resolution redirects with per-hop address validation and bounded hops.
+- [ ] Handle updates and caching.
 - [x] Authenticated account activation and deactivation with atomic status events.
 - [x] Service-authenticated `createAccount` for migration of an existing DID.
 - [x] Authenticated recommended DID credentials for the destination signing key and service.
@@ -1290,8 +1291,8 @@ DID and HTTPS handle resolution accept public IPv6 destinations as well as IPv4.
 DNS selection prefers the first permitted A answer, then checks AAAA if there is no
 permitted IPv4 result. Both lookups share a three-second DNS budget. The selected
 address is pinned into the HTTPS URL; IPv6 uses a bracketed literal and an IPv6
-socket. HTTP Host and TLS verification/SNI retain the original domain. Redirects
-remain disabled. This does not add connection racing or retry another address
+socket. HTTP Host and TLS verification/SNI retain each requested domain. DID
+redirects remain disabled; HTTPS handle redirects repeat these checks at every hop. This does not add connection racing or retry another address
 when the selected address cannot connect.
 
 The IPv6 policy permits `2000::/3` global unicast, excluding `2001::/23` IETF
@@ -1837,7 +1838,8 @@ supported. Refreshing another DID returns `Forbidden`.
 The response contains `did`, the bidirectionally verified `handle` (or
 `handle.invalid`), and the complete `didDoc`. DID lookup bypasses and refreshes the
 node-local cache. DNS/HTTPS resolution retains the existing public-address checks,
-timeouts, response limits, and redirect rejection. Missing identities return
+timeouts and response limits. DID redirects are rejected; handle redirects follow
+the bounded HTTPS policy described below. Missing identities return
 `DidNotFound` or `HandleNotFound`; other resolution failures preserve the previous
 observation and return an error. Independent PLC-log verification remains pending.
 
@@ -1864,8 +1866,9 @@ an absent or unverified claim is returned as `handle.invalid`. Handle input is
 case-insensitive. Neither endpoint requires a local account or authentication.
 
 Queries use the existing bounded positive DID cache, public-address-pinned HTTPS
-resolver, DNS handle resolution, and response/time limits. They reject redirects
-and cannot override resolver options through query parameters. Resolution performs
+resolver, DNS handle resolution, and response/time limits. DID lookups reject
+redirects; HTTPS handle lookups follow the bounded policy below. Query parameters
+cannot override resolver options. Resolution performs
 no account mutation and emits no identity event. Owner `refreshIdentity` remains
 the explicit fresh-resolution and observation-update path.
 
@@ -1997,3 +2000,25 @@ budget check requires a database transaction and shares the admission lock. Load
 test it for the expected request volume. It does not provide sliding windows,
 per-account abuse policy, or a Redis backend. HTTP guards consume budgets before
 handler transactions, so a failed handler does not restore its request allowance.
+
+### HTTPS handle redirects
+
+The HTTPS fallback for handle resolution follows up to three redirects (four
+requests total), as allowed by the [handle specification](https://atproto.com/specs/handle#https-well-known-method).
+Supported statuses are 301, 302, 303, 307, and 308. Relative and cross-host locations
+are accepted, provided every destination uses HTTPS on port 443 with a valid,
+non-reserved DNS hostname. IP-literal destinations, embedded credentials, fragments,
+and control/space characters are rejected. A response must provide exactly one
+`Location` value of at most 2048 bytes.
+
+Every hop performs fresh address resolution, checks the public-address policy,
+and pins the chosen IP while preserving that hop's Host and TLS hostname. This
+also applies to redirects back to the same hostname. Automatic client redirects
+and retries stay disabled. Each response, including redirect bodies, retains the
+4 KiB handle-response limit; each hop retains the three-second DNS and five-second
+HTTP budgets. A loop fails when the hop allowance runs out. The periodic identity
+worker's existing overall task deadline still applies.
+
+DID-document resolution and PLC-directory submission continue to reject redirects.
+DNS TXT still takes precedence over HTTPS, and a successful redirect only proves
+the forward handle claim; bidirectional verification still checks the DID document.
