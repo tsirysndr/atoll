@@ -155,6 +155,7 @@ record Lexicons or grant access to account data.
 - [x] Existing-DID migration provisioning with source-key verification and destination-key signing.
 - [x] Chunked repository exports with lazy record-body reads.
 - [ ] Streaming imports and bounded-memory repository metadata traversal.
+- [x] Incremental CARv1 decoding with bounded framing buffers and verified block callbacks.
 - [x] Lazy CARv1 encoding with per-block validation and upstream cancellation cleanup.
 
 `com.atproto.repo.getRecord` returns the current record unless `cid` selects a
@@ -3137,3 +3138,27 @@ ATOLL_TEST_REDIS_URL=redis://127.0.0.1:6379/0 \
 
 Tests use unique namespaces and delete their own keys on completion. Normal
 `mix precommit` requires neither Redis nor Docker.
+
+### Incremental CAR decoding
+
+`Atoll.CAR.Decoder` accepts arbitrary binary chunks through `feed/4`, emitting a
+validated header followed by hash-verified blocks to a synchronous callback. The
+callback returns `{:cont, accumulator}` to continue or `{:halt, accumulator}` to
+cancel. A partial varint or section is retained between calls. `finish/1` must
+succeed at end of input; otherwise the archive is truncated. Duplicate blocks are
+emitted and counted, leaving deduplication to the consumer.
+
+The decoder buffers one section in 4 KiB segments: headers are limited to 64 KiB
+and block sections to 2 MiB. Fragmented input never requires rebuilding the full
+section on each feed. Default archive limits are 1 GiB and 1,000,000 block sections;
+`new/1` accepts explicit `max_bytes` and `max_blocks` limits. Input validation and
+consumer cancellation stop processing immediately. Tests cover every split point
+in a sample CAR, byte-at-a-time input, malformed/truncated framing, hash failures,
+limits, cancellation, and decoding over 64 MiB without accumulating output.
+
+Callbacks can observe valid blocks before a later archive error. Import consumers
+must stage those blocks and publish nothing until final framing, repository
+signature, MST completeness, ownership, and quota validation all succeed. This
+codec performs no database writes and does not authenticate repositories. Public
+HTTP imports still use the buffered importer; staging and request-body integration
+remain pending.
