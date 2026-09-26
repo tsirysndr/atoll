@@ -397,7 +397,7 @@ mutation. Deletes and empty batches need no record schema, even with `validate: 
 - [ ] Browser authorization/consent flow.
 - [x] Persisted OAuth client/DPoP/session bindings and source password-session deletion cascades.
 - [x] OAuth refresh rotation with persistent reuse revocation, per-access scope narrowing, and observed confidential-key removal revocation.
-- [ ] Periodic confidential-client key checks independent of refresh requests.
+- [x] Configurable periodic confidential-client key checks, including idle sessions, with bounded revocation and sweep progress after failures.
 - [x] OAuth resource read guard and DPoP `getSession`, with per-access-token email scope enforcement.
 - [ ] OAuth authorization for repository/blob writes, service auth, exports, and remaining resource routes.
 - [ ] Localhost virtual client metadata.
@@ -4506,7 +4506,7 @@ a key is visible on the next fetch, including replacement under an unchanged
 The assertion guard below verifies signatures, rejects replay, and can check an
 original `kid`/`alg`/`jkt` binding. Code exchange persists that binding, and refresh
 revokes its session when a freshly validated key set no longer contains that
-key. Periodic checks independent of refresh requests remain pending.
+key. The periodic worker below checks idle sessions as well.
 
 ### Confidential-client JWT assertions
 
@@ -4734,8 +4734,8 @@ Tests cover digest-only storage, binding failures, source-session revocation,
 expiry, client metadata/key changes, access-only clients, capacity rollback,
 marker retention, and concurrent redemption. The HTTP adapter below exposes this
 service. Refresh rotation and DPoP `getSession` are described below. Browser
-consent, discovery, periodic key-removal checks, and remaining resource scope
-enforcement remain unchecked above.
+consent, discovery, and remaining resource scope enforcement remain unchecked
+above; the periodic key checker is described below.
 
 
 ### Token HTTP adapter
@@ -4810,8 +4810,8 @@ non-null column. Resource authorization must enforce the access token's scope;
 On refresh, a valid current confidential key set with the bound key removed or
 replaced causes permanent session revocation, including an empty inline or
 remote JWKS. Metadata/network validation failures reject refresh without treating
-a failed lookup as evidence of removal. This checks the requesting session;
-periodic checks of idle sessions remain unfinished.
+a failed lookup as evidence of removal. Refresh checks the requesting session;
+the periodic checker below also checks idle sessions.
 
 The existing shared PAR lock serializes rotation with code exchange and reuse
 revocation. There is a global cap of 100,000 consumed refresh markers and a cap
@@ -4875,3 +4875,60 @@ read and that later reads fail after session deletion. Resource
 challenges follow [RFC 9449 sections 7 and 9](https://www.rfc-editor.org/rfc/rfc9449.html#section-7).
 Repository/blob writes, service authorization, exports, and other resource routes
 still need OAuth integration and endpoint-specific scope enforcement.
+
+
+### Periodic confidential-client key checks
+
+`Atoll.OAuth.KeyCheckWorker` starts automatically outside the test environment.
+It waits one minute after startup, then visits live confidential OAuth sessions
+in `(client_id, session_id)` order. Configure it with:
+
+```sh
+export ATOLL_OAUTH_KEY_CHECKS_ENABLED=true
+export ATOLL_OAUTH_KEY_CHECKS_INTERVAL_SECONDS=300
+```
+
+The interval accepts 30–3,600 seconds and is the delay **after a complete sweep**,
+not a deadline for every session. One supervised task processes at most 100
+sessions for one client, with one second between batches. Each task has a
+20-second deadline; a slow or unavailable client cannot block all later clients.
+The cursor is kept in memory and resets after each sweep or worker restart.
+Session insertions before the current cursor are checked on the next sweep.
+Set `ATOLL_OAUTH_KEY_CHECKS_ENABLED=false` to disable scheduling; refresh-time key
+checks still run. Tests disable the application worker and start isolated workers.
+
+`Atoll.OAuth.KeyChecks.run(cursor, options)` captures a bounded session snapshot,
+fetches fresh validated metadata and inline/remote JWKS, and revokes sessions
+whose original `kid`/`alg`/`jkt` is absent or replaced. An empty valid key set
+revokes all snapshotted sessions for that client. Invalid documents and network
+failures preserve the sessions and advance the cursor; they are retried on the
+next sweep. No client credentials or account tokens are sent to metadata URLs.
+
+Before deletion, the checker locks affected accounts and source password sessions,
+then takes the shared OAuth mutation advisory lock and locks current OAuth rows.
+Only unchanged snapshotted bindings are revoked. New grants or changed bindings
+created during the fetch are not deleted based on the older observation; refresh
+token rotation alone does not hide a removed key. Deletion cascades to access
+tokens and refresh-reuse markers. Database failures roll back the batch, with
+one-second lock and five-second statement timeouts. Metadata retrieval occurs
+outside the transaction; nested caller transactions are rejected.
+
+The worker advances past a selected batch even after a task timeout or crash,
+and retries it on the next sweep. Failure before batch selection retries from
+the same cursor after the interval. Repeated run requests do not overlap tasks;
+shutdown cancels the active task. Telemetry `[:atoll, :oauth, :key_checks]` reports
+`runs`, available `checked`/`revoked`/`failed` counts, and an outcome, without client
+IDs, account identifiers, or credentials. Timeout outcomes cannot assert how many
+rows committed before task termination.
+
+Multiple application instances may run redundant fetches; database locks make
+revocation safe, but there is no distributed scheduling lease. For one sweeper
+per deployment, disable it on other instances. Sweep duration grows with the
+number and latency of clients; this is not a five-minute revocation SLA. Changes
+at a client's metadata server cannot be atomic with Atoll's database: decisions
+use the fetched snapshot, and subsequent sweeps observe later changes.
+
+Tests cover retained/removed/replaced keys, cascades, fetch failures, pagination,
+public/expired sessions, metadata-time binding changes and deletion, refresh
+rotation during fetch, one-task scheduling, timeouts, shutdown, and cursor reset.
+This supplies the periodic retrieval required by the [ATProto confidential-client profile](https://atproto.com/specs/oauth#confidential-client-authentication).
