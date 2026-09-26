@@ -120,6 +120,8 @@ defmodule Atoll.Accounts.PasswordReset do
 
         profile
         |> Ecto.Changeset.change(
+          auth_factor_digest: nil,
+          auth_factor_expires_at: nil,
           password_reset_digest: nil,
           password_reset_expires_at: nil,
           email_update_digest: nil,

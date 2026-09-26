@@ -1,6 +1,21 @@
 defmodule AtollWeb.XRPCFallback do
   use AtollWeb, :controller
 
+  def call(conn, {:error, :auth_factor_required}),
+    do: error(conn, 400, "AuthFactorTokenRequired", "Check your email for a login code.")
+
+  def call(conn, {:error, :invalid_auth_factor}),
+    do: error(conn, 401, "AuthRequired", "Invalid or expired authentication factor.")
+
+  def call(conn, {:error, :email_factor_unconfirmed}),
+    do:
+      error(
+        conn,
+        400,
+        "InvalidRequest",
+        "Confirm the current email before enabling an authentication factor."
+      )
+
   def call(conn, {:error, :app_password_exists}),
     do: error(conn, 400, "InvalidRequest", "App password name is already in use.")
 

@@ -15,7 +15,8 @@ defmodule Atoll.Accounts.Sessions do
   def create(did, password, opts \\ []) do
     case Credentials.verified_digest(did, password) do
       {:ok, digest} ->
-        create_for_account(did, Keyword.put(opts, :credential_digest, digest))
+        with :ok <- Atoll.Accounts.EmailFactor.challenge(did, digest, opts),
+             do: create_for_account(did, Keyword.put(opts, :credential_digest, digest))
 
       {:error, :invalid_credentials} ->
         with {:ok, app} <- AppPasswords.verify(did, password),
@@ -66,6 +67,10 @@ defmodule Atoll.Accounts.Sessions do
         if app_id = opts[:app_password_id] do
           unless AppPasswords.current?(did, app_id, opts[:access_scope]),
             do: Repo.rollback(:invalid_credentials)
+        end
+
+        if digest = opts[:credential_digest] do
+          Atoll.Accounts.EmailFactor.consume!(did, digest, opts[:auth_factor_token])
         end
 
         now = Keyword.get(opts, :now, System.system_time(:second))

@@ -63,16 +63,25 @@ defmodule Atoll.Accounts.EmailUpdate do
   def update(access_token, %{"email" => email} = params) do
     with {:ok, email} <- EmailAddress.normalize(email),
          true <- Map.keys(params) -- ["email", "token", "emailAuthFactor"] == [],
-         true <- Map.get(params, "emailAuthFactor", false) == false do
+         true <- is_boolean(Map.get(params, "emailAuthFactor", false)) do
       Repo.transaction(fn ->
         profile = profile!(access_token)
         if profile.email_confirmed_at, do: verify!(profile, params["token"])
+
+        factor =
+          Map.get(params, "emailAuthFactor", profile.email_auth_factor and profile.email == email)
+
+        if factor and (is_nil(profile.email_confirmed_at) or profile.email != email),
+          do: Repo.rollback(:email_factor_unconfirmed)
 
         if profile.email != email do
           changeset =
             profile
             |> Ecto.Changeset.change(
               email: email,
+              email_auth_factor: false,
+              auth_factor_digest: nil,
+              auth_factor_expires_at: nil,
               password_reset_digest: nil,
               password_reset_expires_at: nil,
               email_confirmed_at: nil,
@@ -90,7 +99,13 @@ defmodule Atoll.Accounts.EmailUpdate do
         else
           # Consume valid authorization even if the normalized address did not change.
           profile
-          |> Ecto.Changeset.change(email_update_digest: nil, email_update_expires_at: nil)
+          |> Ecto.Changeset.change(
+            email_update_digest: nil,
+            email_update_expires_at: nil,
+            email_auth_factor: factor,
+            auth_factor_digest: nil,
+            auth_factor_expires_at: nil
+          )
           |> Repo.update!(log: false)
 
           :unchanged

@@ -164,7 +164,8 @@ The same `validate: true` restriction applies to batch requests.
 - [x] Bidirectionally verified handle/password login with normalized handles and DID-bound sessions.
 - [x] Deactivated-account login, refresh, session inspection, repository import, blob upload, missing-blob inventory, and migration-scoped service tokens.
 - [x] Email/password login with normalized addresses and locked ownership rechecks.
-- [ ] Authentication factors and taken-down account session scopes.
+- [x] Optional email authentication factors for account-password login.
+- [ ] Taken-down account session scopes.
 - [x] App password creation, metadata listing, revocation, restricted sessions, and privileged service delegation.
 - [ ] ATProto OAuth authorization and resource server support.
 - [x] Live-session and repository ownership checks for blob uploads and single/batch record writes.
@@ -185,7 +186,7 @@ with random salts and the library's default work factors (64 MiB memory, three
 iterations, four lanes). Only test configuration reduces the work factors.
 Building this dependency requires a C compiler and `make`. Hashes are redacted
 from schema inspection, and credential insertion disables query logging.
-Additional authentication factors remain pending. Password recovery
+Email authentication factors are optional. Password recovery
 uses the email reset endpoints described below.
 
 ### Sessions
@@ -768,8 +769,9 @@ provisioning. A changed address becomes unconfirmed, and outstanding confirmatio
 and change codes are cleared atomically. A duplicate address rejects the change
 without consuming its code. An unchanged normalized address preserves confirmation
 but still consumes the change code. Confirm the new address using the separate
-confirmation endpoints. `emailAuthFactor: true` is rejected until authentication
-factors are implemented. Both email update endpoints require a live session;
+confirmation endpoints. `emailAuthFactor: true` enables an email login factor only when keeping the
+current confirmed address. Disabling it requires the same current-email change
+authorization; changing addresses disables it until explicitly re-enabled. Both email update endpoints require a live session;
 service tokens cannot authorize them.
 
 
@@ -833,3 +835,25 @@ and permits `chat.bsky.*` methods only for privileged app passwords. Existing
 protected-method restrictions still apply. Already-issued service JWTs remain
 valid until their short expiry. Password recovery revokes all app credentials as
 well as sessions. OAuth and taken-down account scopes remain pending.
+
+
+### Email authentication factors
+
+Enable `emailAuthFactor` through `updateEmail` after confirming the address,
+using a code from `requestEmailUpdate`. Account-password login then returns
+`AuthFactorTokenRequired` and sends a login code through the Worker. Retry
+`createSession` with the same identifier/password and `authFactorToken`.
+Incorrect passwords do not trigger email. Challenges have 192 bits of randomness,
+expire after 15 minutes, and have a persistent one-minute per-account cooldown.
+Resending replaces the old code. Only a digest bound to the DID, email, and
+password credential is stored. Codes are consumed atomically with session creation;
+failed transactions preserve them. Code expiry or mismatch returns `AuthRequired`.
+Worker failures return 503 without issuing a session.
+
+An address change or factor-setting update clears outstanding login challenges.
+Password recovery clears them while preserving an enabled factor. Session creation
+rechecks the current factor setting under the account lock, including for password
+checks that started before it was enabled. Existing sessions continue to refresh;
+app-password logins bypass the email challenge but retain restricted scopes.
+Session responses with an email include `emailAuthFactor`. Automatic email retries
+and OAuth remain pending.

@@ -9,6 +9,10 @@ defmodule Atoll.Accounts.Profile do
     field :password_reset_digest, :binary, redact: true
     field :password_reset_expires_at, :integer
     field :password_reset_requested_at, :integer
+    field :email_auth_factor, :boolean, default: false
+    field :auth_factor_digest, :binary, redact: true
+    field :auth_factor_expires_at, :integer
+    field :auth_factor_requested_at, :integer
     field :email_update_digest, :binary, redact: true
     field :email_update_expires_at, :integer
     field :email_update_requested_at, :integer

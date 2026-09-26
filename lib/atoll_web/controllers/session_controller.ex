@@ -62,8 +62,8 @@ defmodule AtollWeb.SessionController do
   end
 
   def create(conn, _params) do
-    with {:ok, identifier, password} <- credentials(conn.body_params),
-         {:ok, pair, handle} <- login_pair(identifier, password) do
+    with {:ok, identifier, password, factor} <- credentials(conn.body_params),
+         {:ok, pair, handle} <- login_pair(identifier, password, factor) do
       result = session_response(pair)
       json(conn, if(handle, do: Map.put(result, :handle, handle), else: result))
     end
@@ -128,19 +128,24 @@ defmodule AtollWeb.SessionController do
           match?({:ok, _}, Atoll.Accounts.EmailAddress.normalize(identifier))) and
          byte_size(password) in 8..1024 and String.valid?(password) and
          Map.get(body, "allowTakendown", false) == false and
-         not Map.has_key?(body, "authFactorToken"),
-       do: {:ok, identifier, password},
+         valid_factor?(Map.get(body, "authFactorToken")),
+       do: {:ok, identifier, password, Map.get(body, "authFactorToken")},
        else: {:error, :invalid_request}
   end
 
   defp credentials(_), do: {:error, :invalid_request}
 
-  defp login_pair(identifier, password) do
+  defp valid_factor?(nil), do: true
+  defp valid_factor?(token) when is_binary(token), do: byte_size(token) == 32
+  defp valid_factor?(_), do: false
+
+  defp login_pair(identifier, password, factor) do
     if String.contains?(identifier, "@") do
-      with {:ok, pair} <- Sessions.create_email(identifier, password), do: {:ok, pair, nil}
+      with {:ok, pair} <- Sessions.create_email(identifier, password, auth_factor_token: factor),
+           do: {:ok, pair, nil}
     else
       with {:ok, did, handle} <- login_identity(identifier),
-           {:ok, pair} <- Sessions.create(did, password),
+           {:ok, pair} <- Sessions.create(did, password, auth_factor_token: factor),
            do: {:ok, pair, handle}
     end
   end
@@ -184,7 +189,8 @@ defmodule AtollWeb.SessionController do
         do:
           Map.merge(result, %{
             email: profile.email,
-            emailConfirmed: not is_nil(profile.email_confirmed_at)
+            emailConfirmed: not is_nil(profile.email_confirmed_at),
+            emailAuthFactor: profile.email_auth_factor
           }),
         else: result
 

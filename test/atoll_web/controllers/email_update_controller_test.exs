@@ -135,7 +135,7 @@ defmodule AtollWeb.EmailUpdateControllerTest do
              Atoll.Accounts.EmailConfirmation.request(c.pair.access_jwt)
   end
 
-  test "malformed input, unsupported factors, missing auth and wrong methods fail", c do
+  test "malformed input, unauthorized factors, missing auth and wrong methods fail", c do
     assert response(post(c.conn, @request), 401)
     assert response(c.conn |> auth(c) |> get(@request), 405)
     assert response(c.conn |> auth(c) |> get(@update), 405)
