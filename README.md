@@ -303,7 +303,8 @@ mutation. Deletes and empty batches need no record schema, even with `validate: 
 - [x] did:web handle reconciliation after an owner updates their hosted DID document.
 - [x] Legacy PLC predecessor conversion and signed handle-update staging/completion.
 - [x] Operator installation of directory-authorized PLC rotation keys for imported modern/legacy accounts.
-- [ ] Retained rotation-key replacement and recovery workflows.
+- [x] Explicit operator replacement of installed rotation keys with expected-key checks and fresh authority verification.
+- [ ] On-directory rotation-key recovery workflows.
 - [x] Authenticated account activation and deactivation with atomic status events.
 - [x] Service-authenticated `createAccount` for migration of an existing DID.
 - [x] Authenticated recommended DID credentials for the destination signing key and service.
@@ -2887,8 +2888,9 @@ table together with the master-key configuration. Account deletion cascades its 
 
 Imported keys take precedence over a retained signup key. Missing imported rows
 fall back to signup storage; unreadable imported envelopes fail closed. An identical
-installation is idempotent. Installing a different key over an existing imported key
-or installing during a pending journaled identity update is rejected. This is a local
+installation is idempotent. Ordinary installation of a different key over an existing imported key
+and installation during a pending journaled identity update are rejected. Explicit
+replacement requires the expected-current-key option described below. This is a local
 operator command, not an unauthenticated HTTP key-upload route or a key-rotation API.
 
 The normal bounded master-key rewrap task now includes imported envelopes in its
@@ -2896,3 +2898,27 @@ The normal bounded master-key rewrap task now includes imported envelopes in its
 the private key and directory evidence. Later signing still verifies current directory
 authority; a once-authorized key is not assumed to remain authorized forever. No real
 account key was installed during implementation; tests used generated disposable keys.
+
+
+### Replacing an installed rotation key
+
+To replace an imported/installed key, provide its expected current public `did:key`:
+
+```sh
+mix atoll.plc.install_rotation_key did:plc:YOUR_DID /secure/path/new-key.json --replace did:key:EXPECTED_CURRENT_KEY
+```
+
+The replacement private key must already be authorized by fresh verified directory
+history. Under the repository lock, Atoll compares the stored public key with the
+expected value and rejects stale callers, missing installed rows, and pending local
+identity updates. It then atomically stores a new encrypted envelope with the new
+curve, public key, and verified directory CID. Ordinary installation still cannot
+overwrite a different key. The option order shown above is required.
+
+This changes which already-authorized key Atoll retains locally; it does not publish
+a PLC key rotation, alter the repository signing key, or emit an identity event. It
+can also repair a damaged envelope when the operator supplies the correct authorized
+private key and expected public key. It does not recover a lost private key. Signup
+registration evidence and its original envelope remain intact; the installed key
+continues to take precedence. Replacement uses the active encryption master key.
+Directory recovery operations and repository signing-key transitions remain pending.

@@ -5,9 +5,17 @@ defmodule Atoll.Identity.PLC.RotationKeys do
   alias Atoll.Identity.PLC.{Client, Operation, RotationKey, Update}
   alias Atoll.Repositories.{Events, Head}
 
-  def install(did, key, opts \\ [])
+  def install(did, key, opts \\ []), do: store(did, key, :absent, opts)
 
-  def install(did, %SigningKey{} = key, opts) do
+  @doc "Replace an installed key only when its public key matches the operator's expected did:key."
+  def replace(did, expected, key, opts \\ []) do
+    case Multikey.from_did_key(expected) do
+      {:ok, _} -> store(did, key, expected, opts)
+      _ -> {:error, :invalid_rotation_key}
+    end
+  end
+
+  defp store(did, %SigningKey{} = key, expected, opts) do
     with false <- Repo.in_transaction?(),
          {:ok, derived} <- SigningKey.from_private(key.curve, key.private),
          true <- derived.public == key.public,
@@ -26,6 +34,8 @@ defmodule Atoll.Identity.PLC.RotationKeys do
 
         case Repo.get(RotationKey, did, log: false) do
           nil ->
+            if expected != :absent, do: Repo.rollback(:key_not_found)
+
             row = %RotationKey{
               did: did,
               curve: key.curve,
@@ -35,6 +45,22 @@ defmodule Atoll.Identity.PLC.RotationKeys do
 
             Repo.insert!(%{row | envelope: encrypt(row, key.private, master)}, log: false)
             :installed
+
+          row when expected != :absent ->
+            {:ok, current} = Multikey.to_did_key(row.curve, row.public_key)
+            unless current == expected, do: Repo.rollback(:stale_rotation_key)
+            updated = %{row | curve: key.curve, public_key: key.public, verified_cid: state.cid}
+
+            row
+            |> Ecto.Changeset.change(
+              curve: key.curve,
+              public_key: key.public,
+              verified_cid: state.cid,
+              envelope: encrypt(updated, key.private, master)
+            )
+            |> Repo.update!(log: false)
+
+            :replaced
 
           %{curve: curve, public_key: public} = row
           when curve == key.curve and public == key.public ->
@@ -54,7 +80,7 @@ defmodule Atoll.Identity.PLC.RotationKeys do
     end
   end
 
-  def install(_, _, _), do: {:error, :invalid_rotation_key}
+  defp store(_, _, _, _), do: {:error, :invalid_rotation_key}
 
   def fetch(did) do
     with {:ok, master} <- MasterKeys.active() do

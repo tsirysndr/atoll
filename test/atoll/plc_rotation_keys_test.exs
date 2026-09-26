@@ -95,6 +95,20 @@ defmodule Atoll.PLCRotationKeysTest do
 
     assert Jason.decode!(output) == %{"did" => ctx.did, "result" => "installed"}
     refute output =~ private
+    {:ok, expected} = Multikey.to_did_key(ctx.rotation.curve, ctx.rotation.public)
+
+    File.write!(
+      path,
+      Jason.encode!(%{curve: "k256", privateKey: Base.encode64(ctx.repository.private)})
+    )
+
+    output =
+      ExUnit.CaptureIO.capture_io(fn ->
+        Mix.Tasks.Atoll.Plc.InstallRotationKey.run([ctx.did, path, "--replace", expected])
+      end)
+
+    assert Jason.decode!(output) == %{"did" => ctx.did, "result" => "replaced"}
+    assert {:ok, ctx.repository} == Registrations.rotation_key(ctx.did)
     File.write!(path, ~s({"curve":"k256","privateKey":12345}))
 
     error =
@@ -103,6 +117,70 @@ defmodule Atoll.PLCRotationKeysTest do
       end
 
     refute error.message =~ "12345"
+  end
+
+  test "replacement compares the expected key and can change curves without changing repository state" do
+    ctx = account(:p256)
+    directory(ctx)
+    {:ok, :installed} = install(ctx, ctx.rotation)
+    {:ok, expected} = Multikey.to_did_key(ctx.rotation.curve, ctx.rotation.public)
+    head = Repo.get!(Head, ctx.did)
+    seq = Atoll.Repositories.Events.latest_seq()
+
+    assert {:ok, :replaced} =
+             RotationKeys.replace(ctx.did, expected, ctx.repository, plug: {Req.Test, __MODULE__})
+
+    assert {:ok, ctx.repository} == Registrations.rotation_key(ctx.did)
+    row = Repo.get!(RotationKey, ctx.did)
+    assert row.curve == :k256
+
+    assert {:error, :stale_rotation_key} =
+             RotationKeys.replace(ctx.did, expected, ctx.rotation, plug: {Req.Test, __MODULE__})
+
+    assert Repo.get!(RotationKey, ctx.did) == row
+    assert Repo.get!(Head, ctx.did) == head
+    assert Atoll.Repositories.Events.latest_seq() == seq
+  end
+
+  test "explicit replacement can repair a corrupt envelope with the known authorized private key" do
+    ctx = account(:k256)
+    directory(ctx)
+    {:ok, :installed} = install(ctx, ctx.rotation)
+    {:ok, expected} = Multikey.to_did_key(ctx.rotation.curve, ctx.rotation.public)
+
+    Repo.get!(RotationKey, ctx.did)
+    |> Ecto.Changeset.change(envelope: :binary.copy(<<0>>, 61))
+    |> Repo.update!(log: false)
+
+    assert {:error, :key_decryption_failed} = Registrations.rotation_key(ctx.did)
+    assert {:error, :key_decryption_failed} = install(ctx, ctx.rotation)
+
+    assert {:ok, :replaced} =
+             RotationKeys.replace(ctx.did, expected, ctx.rotation, plug: {Req.Test, __MODULE__})
+
+    assert {:ok, ctx.rotation} == Registrations.rotation_key(ctx.did)
+  end
+
+  test "replacement refuses pending identity operations and unauthorized new keys" do
+    ctx = account(:k256)
+    directory(ctx)
+    {:ok, :installed} = install(ctx, ctx.rotation)
+    {:ok, expected} = Multikey.to_did_key(ctx.rotation.curve, ctx.rotation.public)
+    row = Repo.get!(RotationKey, ctx.did)
+
+    assert {:error, :invalid_rotation_key} =
+             RotationKeys.replace(ctx.did, expected, SigningKey.generate(),
+               plug: {Req.Test, __MODULE__}
+             )
+
+    {:ok, next} = Operation.successor(ctx.operation)
+    {:ok, op} = Operation.sign(next, ctx.rotation)
+    {:ok, _} = Atoll.Identity.PLC.Updates.stage(ctx.did, ctx.audit, op)
+
+    assert {:error, :plc_update_pending} =
+             RotationKeys.replace(ctx.did, expected, ctx.repository, plug: {Req.Test, __MODULE__})
+
+    assert Repo.get!(RotationKey, ctx.did) == row
   end
 
   defp install(ctx, key), do: RotationKeys.install(ctx.did, key, plug: {Req.Test, __MODULE__})
