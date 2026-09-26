@@ -687,7 +687,8 @@ events. The `[:atoll, :identity, :refresh]` telemetry event reports a count and
 - [x] `mix precommit` checks compilation warnings, unused dependency locks, formatting, and tests.
 - [x] GitHub Actions runs checks and the Docker MinIO integration suite on every push (also available manually).
 - [x] Session, blob-upload, and record-write rate limits and bounded request bodies.
-- [ ] General API rate limits, distributed limits, and trusted-proxy client IP handling.
+- [x] Configurable general XRPC request budget before parsing, in addition to specialized rate limits.
+- [ ] Distributed limits and trusted-proxy client IP handling.
 - [x] Operator account status reads, takedowns, restoration, and deactivation.
 - [x] Account-scoped blob takedowns across PostgreSQL/S3 serving, uploads, references, and cleanup.
 - [x] Operator record takedowns for JSON record reads and listings (signed sync data remains available).
@@ -1905,3 +1906,28 @@ The `[:atoll, :accounts, :cleanup]` telemetry event reports `runs: 1` and a `res
 of `ok`, `failed`, or `timeout`. Successful runs also report `sessions` and
 `replay_markers` deletion counts. Failed runs do not claim counts for any partially
 completed work. Telemetry contains no DIDs, credentials, or nonce digests.
+
+### General XRPC request budget
+
+`ATOLL_XRPC_RATE_LIMIT` sets the maximum number of XRPC requests per direct peer IP
+per five-minute window on each node (default 3000, range 1–100000). Malformed or
+out-of-range environment values fail startup. Application configuration uses
+`config :atoll, :xrpc_rate_limit, 3000`.
+
+The budget applies before routing validation, query/body parsing, authentication,
+and WebSocket upgrade. All XRPC paths and methods share it, including unknown
+methods, malformed paths, encoded route spellings, errors, and CORS preflights.
+Existing login, write, blob, identity-resolution, and administrator limits still
+apply independently and may reject requests sooner. An admitted subscription
+handshake consumes one request; individual WebSocket frames do not consume this
+HTTP budget. Subscription connection quotas remain separate future work.
+
+Exhaustion returns HTTP 429 `RateLimitExceeded` with `Retry-After`, no-store, and
+the standard public CORS headers. `[:atoll, :xrpc, :rate_limit]` telemetry reports
+`count: 1` without identifying the client. `/health`, `/health/ready`, `/`, and
+well-known identity routes are outside the XRPC budget.
+
+Buckets use the existing bounded in-memory limiter and reset on process restart.
+Limits are per node, not shared across a cluster. Forwarded headers are ignored;
+behind a reverse proxy, requests currently share that proxy's direct-peer budget.
+Trusted-proxy address handling and distributed limits remain unimplemented.

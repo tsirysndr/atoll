@@ -25,6 +25,10 @@ config :atoll,
          config_env()
        )
 
+config :atoll,
+       :xrpc_rate_limit,
+       AtollWeb.XRPCRequestPlug.rate_limit_from_env!(System.get_env("ATOLL_XRPC_RATE_LIMIT"))
+
 case Integer.parse(System.get_env("ATOLL_DID_CACHE_TTL_SECONDS", "60")) do
   {ttl, ""} when ttl in 0..300 -> config :atoll, :did_cache_ttl_seconds, ttl
   _ -> raise "ATOLL_DID_CACHE_TTL_SECONDS must be an integer from 0 to 300"
