@@ -393,7 +393,8 @@ mutation. Deletes and empty batches need no record schema, even with `validate: 
 - [x] `POST /oauth/par` with strict form parsing, pre-parser rate limits, DPoP nonce challenges, and browser CORS.
 - [x] Internal account-authorized approval/denial with atomic pushed-request consumption and bound authorization-code issuance.
 - [x] Internal one-use authorization-code exchange into bound opaque OAuth tokens, with verified reuse revocation.
-- [ ] Browser authorization/consent flow and HTTP token endpoint.
+- [x] HTTP authorization-code token exchange with DPoP nonce challenges, strict forms, rate limits, and CORS.
+- [ ] Browser authorization/consent flow.
 - [x] Persisted OAuth client/DPoP/session bindings and source password-session deletion cascades.
 - [ ] OAuth refresh rotation, resource authorization, client-key removal revocation, and localhost virtual client metadata.
 - [ ] OAuth nonce challenges and proof admission integrated into remaining authorization/resource server routes.
@@ -4373,7 +4374,7 @@ with the local database transaction; the audit records the head actually observe
 returns its JWK thumbprint, proof ID, issue time, and nonce. It uses the existing
 JOSE library for signature verification and RFC JWK thumbprints. This is an
 internal cryptographic component used by the PAR adapter; it is not an OAuth
-authorization endpoint. Browser authorization and token routes remain unfinished.
+authorization endpoint. Browser authorization and resource authentication remain unfinished.
 
 The caller supplies the externally visible method/URL, current time, and a recent
 server-issued nonce. For protected-resource requests it must supply both the
@@ -4468,7 +4469,7 @@ the `ClientKeys` loader below adds key validation and remote JWKS retrieval, whi
 the assertion guard below adds signature, replay, and supplied key-binding checks.
 The code exchange below persists session bindings. Metadata branding is untrusted
 and must not be displayed as verified application identity. The optional localhost
-virtual-client flow and browser authorization/token routes remain pending.
+virtual-client flow, browser authorization, and token refresh remain pending.
 
 The declaration rules follow the
 [ATProto OAuth client profile](https://atproto.com/specs/oauth#clients).
@@ -4599,8 +4600,8 @@ proofs. Calls inside a caller transaction are rejected.
 Tests cover both client types, key binding, client/issuer isolation, expiry,
 challenge reuse across clients, concurrent reservations, storage capacity, and
 bounded reclamation. The HTTP adapter below exposes PAR admission. Browser
-authorization and consent and HTTP token routing remain unfinished; internal code
-exchange is described below. Protocol references:
+authorization and consent remain unfinished; code exchange and its HTTP adapter
+are described below. Protocol references:
 [PKCE (RFC 7636)](https://www.rfc-editor.org/rfc/rfc7636.html) and
 [PAR (RFC 9126)](https://datatracker.ietf.org/doc/html/rfc9126).
 
@@ -4610,8 +4611,8 @@ exchange is described below. Protocol references:
 and returns HTTP 201 with `request_uri` and `expires_in` after successful admission.
 Configure `ATOLL_OAUTH_NONCE_SECRET` as described above; without it this route
 returns HTTP 503 `temporarily_unavailable`. No complete OAuth server is advertised:
-discovery, browser authorization/consent, and token routes still
-need implementation, so the returned reference cannot yet complete a login.
+discovery, browser authorization/consent, token refresh, and resource authorization
+still need implementation, so the returned reference cannot yet complete a login.
 
 The boundary runs before general body parsing, method rewriting, and Phoenix
 controller parameter logging. Forms are flat, limited to 11 fields and 48 KiB of
@@ -4683,8 +4684,7 @@ and keys, revocation during metadata retrieval, expiry, capacity rollback, and
 concurrent decisions through independent database connections.
 
 This service does not render login/consent. The internal exchange below redeems
-codes; browser consent, refresh, resource authorization, and token endpoints
-remain unfinished.
+codes; browser consent, refresh, and resource authorization remain unfinished.
 
 ### Authorization-code exchange and opaque sessions
 
@@ -4724,7 +4724,45 @@ against the separate 10,000-code cap.
 
 Tests cover digest-only storage, binding failures, source-session revocation,
 expiry, client metadata/key changes, access-only clients, capacity rollback,
-marker retention, and concurrent redemption. This is an internal service: there
-is no HTTP token endpoint yet, refresh tokens cannot yet be rotated, and resource
-routes do not yet accept these access tokens. Browser consent, discovery,
+marker retention, and concurrent redemption. The HTTP adapter below exposes this
+service. Refresh tokens cannot yet be rotated, and resource routes do not yet
+accept these access tokens. Browser consent, discovery,
 refresh/key-removal revocation, and scope enforcement remain unchecked above.
+
+
+### Token HTTP adapter
+
+`POST /oauth/token` accepts UTF-8 `application/x-www-form-urlencoded` requests
+with `grant_type=authorization_code`, `client_id`, `code`, `redirect_uri`, and
+`code_verifier`. Confidential clients additionally send `client_assertion_type`
+and `client_assertion`. Supply a fresh DPoP proof targeting the configured
+endpoint URL, using an authorization-server nonce; HTTP 400 `use_dpop_nonce`
+provides a fresh `DPoP-Nonce` for retry before client metadata retrieval or
+assertion consumption. Success returns HTTP 200 with the token response above.
+
+PAR and token routes share `AtollWeb.OAuthRequestPlug`, ahead of general body
+parsing, method overrides, and controller logging. The token route has a separate
+20-request/five-minute peer budget, including malformed requests and preflight.
+It inherits the 48 KiB encoded body limit, five-second body-read timeout, strict
+flat/duplicate-free form decoding, canonical route checks, and trusted issuer
+configuration. Code exchange further limits decoded fields to seven and their
+combined size to 16 KiB. Query parameters, compressed bodies, unsupported media
+types, unknown fields, and method overrides are rejected.
+
+Configured responses include a fresh nonce, `Cache-Control: no-store`, and
+`Pragma: no-cache`. CORS allows any origin without credentials, exposes the nonce
+and retry headers, and permits only POST with `content-type` and `dpop`.
+Unsupported methods return 405; unsupported grant types return HTTP 400
+`unsupported_grant_type`. Invalid code bindings and verified reuse return
+`invalid_grant`; malformed/replayed proofs return `invalid_dpop_proof`.
+Authorization-header client credentials are unsupported and return
+`invalid_client`, with HTTP 401 and a matching challenge for a valid scheme.
+Client assertions belong in the form body.
+
+Rate exhaustion returns 429; unavailable configuration or storage returns 503.
+HTTP tests cover issuance, nonce retry, code-reuse revocation, proof replay,
+malformed forms, CORS, peer limits, and configured-host binding. Response and
+error shapes follow [RFC 6749 sections 5.1–5.2](https://www.rfc-editor.org/rfc/rfc6749.html#section-5.1).
+Discovery and browser consent remain pending; this route does not yet make Atoll
+a complete OAuth server. `refresh_token` grants remain unsupported until rotation
+and client-key revocation are implemented.

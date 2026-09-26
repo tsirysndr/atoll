@@ -1,15 +1,19 @@
-defmodule AtollWeb.OAuthPARPlug do
-  @moduledoc "PAR HTTP boundary before general parsing, logging, or method rewriting."
+defmodule AtollWeb.OAuthRequestPlug do
+  @moduledoc "PAR and token HTTP boundary before general parsing, logging, or method rewriting."
   @behaviour Plug
   import Plug.Conn
-  alias Atoll.OAuth.{DPoP, Form, Nonce, PAR}
+  alias Atoll.OAuth.{DPoP, Form, Nonce, PAR, CodeExchange}
   @limit 49_152
   @allowed_headers ~w(content-type dpop)
 
   def init(opts), do: opts
 
   def call(conn, _opts) do
-    if Enum.map(conn.path_info, &URI.decode/1) == ["oauth", "par"], do: handle(conn), else: conn
+    case Enum.map(conn.path_info, &URI.decode/1) do
+      ["oauth", "par"] -> handle(put_private(conn, :oauth_endpoint, :oauth_par))
+      ["oauth", "token"] -> handle(put_private(conn, :oauth_endpoint, :oauth_token))
+      _ -> conn
+    end
   end
 
   defp handle(conn) do
@@ -25,7 +29,10 @@ defmodule AtollWeb.OAuthPARPlug do
       {:ok, nonce} ->
         conn = put_resp_header(conn, "dpop-nonce", nonce)
 
-        case Atoll.Accounts.SessionLimiter.check({:oauth_par, conn.remote_ip}, 20) do
+        case Atoll.Accounts.SessionLimiter.check(
+               {conn.private.oauth_endpoint, conn.remote_ip},
+               20
+             ) do
           :ok ->
             route(conn)
 
@@ -40,7 +47,7 @@ defmodule AtollWeb.OAuthPARPlug do
     end
   end
 
-  defp route(%{request_path: path} = conn) when path != "/oauth/par",
+  defp route(%{request_path: path} = conn) when path not in ["/oauth/par", "/oauth/token"],
     do: error(conn, 400, "invalid_request")
 
   defp route(%{method: "OPTIONS"} = conn), do: preflight(conn)
@@ -55,7 +62,7 @@ defmodule AtollWeb.OAuthPARPlug do
         error(conn, 400, "invalid_request")
 
       get_req_header(conn, "authorization") != [] ->
-        error(conn, 400, "invalid_client")
+        reject_authorization(conn)
 
       get_req_header(conn, "content-encoding") not in [[], ["identity"]] ->
         error(conn, 415, "invalid_request")
@@ -70,6 +77,20 @@ defmodule AtollWeb.OAuthPARPlug do
         read(conn)
     end
   end
+
+  defp reject_authorization(%{private: %{oauth_endpoint: :oauth_token}} = conn) do
+    with [header] <- get_req_header(conn, "authorization"),
+         [scheme | _] <- String.split(header, " ", parts: 2),
+         true <- Regex.match?(~r/\A[A-Za-z][A-Za-z0-9_-]{0,63}\z/, scheme) do
+      conn
+      |> put_resp_header("www-authenticate", scheme <> " realm=\"oauth\"")
+      |> error(401, "invalid_client")
+    else
+      _ -> error(conn, 400, "invalid_client")
+    end
+  end
+
+  defp reject_authorization(conn), do: error(conn, 400, "invalid_client")
 
   defp read(conn) do
     case read_body(conn, length: @limit, read_length: @limit + 1, read_timeout: 5000) do
@@ -93,21 +114,37 @@ defmodule AtollWeb.OAuthPARPlug do
   defp admit(conn, params) do
     headers = get_req_header(conn, "dpop")
     # An initial nonce challenge must not consume the confidential assertion or
-    # trigger metadata fetches. Full signature/replay admission still happens in PAR.
+    # trigger metadata fetches. Full signature/replay admission follows this check.
     with {:ok, nonce} <- DPoP.peek_nonce(headers),
          {:ok, _} <- Nonce.verify(nonce, :authorization) do
       opts =
         Application.get_env(:atoll, :oauth_transport_options, [])
         |> Keyword.take([:request, :lookup])
 
-      case PAR.push(params, headers, opts) do
-        {:ok, result} -> reply(conn, 201, result)
-        {:error, reason} -> oauth_error(conn, reason)
+      case execute(conn.private.oauth_endpoint, params, headers, opts) do
+        {:ok, result} ->
+          reply(conn, if(conn.private.oauth_endpoint == :oauth_par, do: 201, else: 200), result)
+
+        {:error, reason} ->
+          oauth_error(conn, reason)
       end
     else
       {:error, reason} -> oauth_error(conn, reason)
     end
   end
+
+  defp execute(:oauth_par, params, headers, opts), do: PAR.push(params, headers, opts)
+
+  defp execute(:oauth_token, %{"grant_type" => "authorization_code"} = params, headers, opts),
+    do: CodeExchange.exchange(params, headers, opts)
+
+  defp execute(:oauth_token, %{"grant_type" => grant}, _, _) when grant != "",
+    do: {:error, :unsupported_grant_type}
+
+  defp execute(:oauth_token, _, _, _), do: {:error, :invalid_request}
+
+  defp oauth_error(conn, reason) when reason in [:invalid_grant, :unsupported_grant_type],
+    do: error(conn, 400, Atom.to_string(reason))
 
   defp oauth_error(conn, :use_dpop_nonce), do: error(conn, 400, "use_dpop_nonce")
 
@@ -128,6 +165,8 @@ defmodule AtollWeb.OAuthPARPlug do
 
   defp oauth_error(conn, reason)
        when reason in [
+              :oauth_session_limit,
+              :oauth_exchange_store_unavailable,
               :oauth_par_store_full,
               :oauth_par_store_unavailable,
               :oauth_assertion_store_full,
