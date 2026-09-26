@@ -43,7 +43,7 @@ defmodule AtollWeb.AdminExportControllerTest do
     for status <- [:active, :deactivated, :takendown, :suspended] do
       {:ok, _} = Repositories.set_status(@did, status)
       result = auth(c.conn) |> get(@repo, %{did: @did})
-      assert response(result, 200) == c.car
+      assert Atoll.CAR.decode(response(result, 200)) == Atoll.CAR.decode(c.car)
       assert get_resp_header(result, "cache-control") == ["no-store"]
 
       assert response(auth(c.conn) |> get(@blob, %{did: @did, cid: c.cid}), 200) ==
@@ -80,7 +80,9 @@ defmodule AtollWeb.AdminExportControllerTest do
 
     assert auth(c.conn) |> get(@blob, %{did: @did, cid: c.cid}) |> json_response(400)
     assert auth(c.conn) |> get(@list, %{did: @did}) |> json_response(200) == %{"cids" => []}
-    assert response(auth(c.conn) |> get(@repo, %{did: @did}), 200) == c.car
+
+    assert Atoll.CAR.decode(response(auth(c.conn) |> get(@repo, %{did: @did}), 200)) ==
+             Atoll.CAR.decode(c.car)
   end
 
   test "bad or disabled admin credentials fail before parsing and cannot use public fallback",
@@ -93,14 +95,16 @@ defmodule AtollWeb.AdminExportControllerTest do
 
     Application.delete_env(:atoll, :admin_password)
     assert auth(c.conn) |> get(@repo, %{did: @did}) |> json_response(503)
-    assert response(get(c.conn, @repo, %{did: @did}), 200) == c.car
+
+    assert Atoll.CAR.decode(response(get(c.conn, @repo, %{did: @did}), 200)) ==
+             Atoll.CAR.decode(c.car)
   end
 
   test "storage rechecks the credential instead of trusting an admin flag", c do
     {:ok, _} = Repositories.set_status(@did, :deactivated)
     headers = ["Basic " <> Base.encode64("admin:" <> @secret)]
     assert {:ok, car} = Repositories.export(@did, nil, {:admin, headers})
-    assert car == c.car
+    assert Atoll.CAR.decode(car) == Atoll.CAR.decode(c.car)
     Application.put_env(:atoll, :admin_password, @secret <> "-rotated")
     {:ok, cid} = CID.from_base32(c.cid)
     assert {:error, :invalid_token} = Repositories.export(@did, nil, {:admin, headers})

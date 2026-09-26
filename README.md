@@ -153,7 +153,8 @@ record Lexicons or grant access to account data.
 - [x] Internal complete CAR import for existing repositories, with pinned-key verification, expected-head checks, and atomic replacement.
 - [x] Authenticated `com.atproto.repo.importRepo` for existing repositories, with bounded uploads and atomic replacement.
 - [x] Existing-DID migration provisioning with source-key verification and destination-key signing.
-- [ ] Streaming large transfers.
+- [x] Chunked repository exports with lazy record-body reads.
+- [ ] Streaming imports and bounded-memory repository metadata traversal.
 - [x] Lazy CARv1 encoding with per-block validation and upstream cancellation cleanup.
 
 `com.atproto.repo.getRecord` returns the current record unless `cid` selects a
@@ -609,7 +610,7 @@ locking protects shared objects when collectors overlap.
 
 ### Synchronization and federation
 
-- [x] Full repository export via `com.atproto.sync.getRepo` (in-memory, 64 MiB archive limit).
+- [x] Full repository export via `com.atproto.sync.getRepo` (chunked CAR, no aggregate archive-size cap).
 - [x] Incremental repository exports using `since`, backed by per-repository revision block sets; unknown revisions return a full snapshot.
 - [x] Transactional per-repository block reference counts for quota/status inventory and garbage-collection lookups.
 - [x] Bounded operator revision-history compaction preserving current heads and retained replay dependencies.
@@ -3076,5 +3077,21 @@ raise `ArgumentError` during enumeration; callers must abort the transfer becaus
 earlier chunks may already have been sent. They must also provide snapshot
 consistency, authorization, and transfer-duration limits. Tests consume a stream
 larger than 64 MiB without collecting it and check resource cleanup on cancellation
-and validation failure. Public export endpoints and CAR decoding still use their
-existing buffered paths; HTTP/database streaming integration remains pending.
+and validation failure. `com.atproto.sync.getRepo` now uses this encoder through
+`Atoll.Repositories.stream_export/4`. It verifies the signed snapshot before sending
+headers, then sends the commit first, MST nodes, and record bodies read individually
+from PostgreSQL. Incremental exports omit blocks owned by the retained `since`
+revision; unknown revisions still receive a full export. Client chunk-write failure
+halts enumeration and releases the transaction. Corruption found after headers
+aborts the stream rather than attempting a JSON error response.
+
+A shared repository-head lock prevents mutation, deletion, or revision compaction
+from invalidating the snapshot while the callback consumes it. Export credentials
+are rechecked after acquiring the snapshot lock. The transaction has a 60-second
+timeout; slow readers hold a database connection and can delay repository writes.
+Snapshot construction still holds the record/CID map and reconstructed MST in
+memory, so metadata memory scales with repository size. Record bodies and the
+complete archive are no longer accumulated. The streaming callback must finish
+consuming the enumerable before returning. CAR decoding and imports remain
+buffered. Tests compare full and incremental block sets with the buffered codec,
+exercise cancellation/corruption, and stream a repository larger than 64 MiB.

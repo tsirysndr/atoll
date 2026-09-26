@@ -50,11 +50,22 @@ defmodule AtollWeb.RepoController do
     with true <- Syntax.did?(params["did"]),
          true <- is_nil(params["since"]) or TID.valid?(params["since"]),
          {:ok, token} <- AtollWeb.ExportToken.optional(conn),
-         {:ok, archive} <- Repositories.export(params["did"], params["since"], token) do
-      conn
-      |> put_resp_header("cache-control", "no-store")
-      |> put_resp_content_type("application/vnd.ipld.car", nil)
-      |> send_resp(200, archive)
+         {:ok, streamed} <-
+           Repositories.stream_export(params["did"], params["since"], token, fn chunks ->
+             conn =
+               conn
+               |> put_resp_header("cache-control", "no-store")
+               |> put_resp_content_type("application/vnd.ipld.car", nil)
+               |> send_chunked(200)
+
+             Enum.reduce_while(chunks, conn, fn bytes, conn ->
+               case chunk(conn, bytes) do
+                 {:ok, conn} -> {:cont, conn}
+                 {:error, _} -> {:halt, conn}
+               end
+             end)
+           end) do
+      streamed
     else
       false -> {:error, :invalid_request}
       error -> error

@@ -492,6 +492,65 @@ defmodule Atoll.Repositories do
     end)
   end
 
+  @doc """
+  Consumes a lazy CAR inside a consistent, authorized snapshot transaction.
+
+  The callback must consume the enumerable before returning. Repository metadata
+  and MST nodes remain in memory; record bodies are read one at a time. A shared
+  head lock pins the snapshot until completion or cancellation. Lazy read failures
+  raise to abort an already-started transfer, rather than returning a JSON error.
+  """
+  def stream_export(did, since, token, consume) when is_function(consume, 1) do
+    Repo.transaction(
+      fn ->
+        unless is_nil(since) or TID.valid?(since), do: Repo.rollback(:invalid_request)
+
+        if not is_nil(token) do
+          case Atoll.Accounts.Sessions.authenticate_export(token, did) do
+            {:ok, _} -> :ok
+            {:error, reason} -> Repo.rollback(reason)
+          end
+        end
+
+        {head, tree, commit} = snapshot!(did, is_nil(token))
+
+        if not is_nil(token) do
+          case Atoll.Accounts.Sessions.authenticate_export(token, did) do
+            {:ok, _} -> :ok
+            {:error, reason} -> Repo.rollback(reason)
+          end
+        end
+
+        known =
+          case since && Repo.get_by(Revision, did: did, rev: since) do
+            %Revision{blocks: blocks} -> MapSet.new(blocks)
+            _ -> MapSet.new()
+          end
+
+        nodes = Stream.reject(tree.blocks, fn {cid, _} -> MapSet.member?(known, cid) end)
+
+        records =
+          tree.records
+          |> Map.values()
+          |> Enum.uniq()
+          |> Stream.reject(
+            &(MapSet.member?(known, &1) or Map.has_key?(tree.blocks, &1) or &1 == head.head)
+          )
+          |> Stream.map(fn cid ->
+            case Storage.get_block(cid) do
+              {:ok, bytes} -> {cid, bytes}
+              _ -> raise "Repository stream contains a missing block"
+            end
+          end)
+
+        blocks = Stream.concat([[{head.head, commit}], nodes, records])
+        {:ok, stream} = CAR.encode_stream([head.head], blocks)
+        consume.(stream)
+      end,
+      timeout: 60_000
+    )
+  end
+
   @doc "Exports a compact existence or absence proof anchored to the current signed commit."
   def export_record(did, path) do
     Repo.transaction(fn ->

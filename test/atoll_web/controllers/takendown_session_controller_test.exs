@@ -72,14 +72,18 @@ defmodule AtollWeb.TakendownSessionControllerTest do
     end
 
     archive = export(c, token, "getRepo", %{did: @did})
-    assert response(archive, 200) == c.car
+    assert Atoll.CAR.decode(response(archive, 200)) == Atoll.CAR.decode(c.car)
     assert get_resp_header(archive, "cache-control") == ["no-store"]
     assert export(c, token, "listBlobs", %{did: @did}) |> json_response(200) == %{"cids" => [cid]}
 
     assert export(c, token, "getBlob", %{did: @did, cid: cid}) |> response(200) ==
              "owner-export-bytes"
 
-    assert export(c, c.full.access_jwt, "getRepo", %{did: @did}) |> response(200) == c.car
+    assert Atoll.CAR.decode(
+             export(c, c.full.access_jwt, "getRepo", %{did: @did})
+             |> response(200)
+           ) == Atoll.CAR.decode(c.car)
+
     # Blob-specific restrictions still apply to the owner.
     {:ok, _} =
       Atoll.Accounts.SubjectStatus.update(%{
@@ -157,7 +161,11 @@ defmodule AtollWeb.TakendownSessionControllerTest do
       assert {:ok, %{"scope" => "com.atproto.takendown"}} =
                Tokens.verify(pair["accessJwt"], :access)
 
-      assert export(c, pair["accessJwt"], "getRepo", %{did: @did}) |> response(200) == c.car
+      assert Atoll.CAR.decode(
+               export(c, pair["accessJwt"], "getRepo", %{did: @did})
+               |> response(200)
+             ) == Atoll.CAR.decode(c.car)
+
       {:ok, _} = Repositories.set_status(@did, :active)
 
       refreshed =
@@ -201,7 +209,12 @@ defmodule AtollWeb.TakendownSessionControllerTest do
   test "deactivated exports require owner credentials and suspension never allows opt-in login",
        c do
     {:ok, _} = Repositories.set_status(@did, :deactivated)
-    assert export(c, c.full.access_jwt, "getRepo", %{did: @did}) |> response(200) == c.car
+
+    assert Atoll.CAR.decode(
+             export(c, c.full.access_jwt, "getRepo", %{did: @did})
+             |> response(200)
+           ) == Atoll.CAR.decode(c.car)
+
     assert get(c.conn, "/xrpc/com.atproto.sync.getRepo", %{did: @did}) |> json_response(400)
     {:ok, _} = Repositories.set_status(@did, :suspended)
     assert login(c) |> json_response(400)
