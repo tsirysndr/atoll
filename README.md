@@ -601,7 +601,8 @@ locking protects shared objects when collectors overlap.
 - [ ] Compact inductive commit proofs (event encoding currently includes the complete MST).
 - [x] Internal `Atoll.Identity.Updates.refresh/2`: resolves hosted identities, verifies claimed handles, and atomically records changed observations with durable identity events.
 - [x] Opt-in supervised identity refresh scheduling, with one task at a time, timeouts, sweep retries, and outcome telemetry.
-- [ ] Authenticated identity-management endpoints and distributed refresh coordination.
+- [x] Owner-authenticated identity refresh with fresh DID resolution and atomic observation events.
+- [ ] Remaining authenticated identity-management endpoints and distributed refresh coordination.
 - [ ] Relay discovery / crawl requests and federation interoperability tests.
 - [x] `com.atproto.server.getServiceAuth` issues short-lived account-signed service JWTs.
 - [x] Internal incoming account service-JWT verification with exact audience/method checks and persistent replay protection.
@@ -1818,3 +1819,30 @@ and survives along with previous audit and invitation-use history. Failed reques
 and rolled-back transactions retain account data and leave no deletion audit entry.
 This endpoint does not send email, require an owner email code, or tombstone the DID
 in PLC. It removes the account from this PDS; it cannot erase copies held elsewhere.
+
+### Owner-requested identity refresh
+
+`POST com.atproto.identity.refreshIdentity` takes a full account access token and
+JSON `identifier` containing the account's DID or a handle resolving to that DID.
+Atoll restricts this endpoint to the requesting account; app passwords and
+taken-down export tokens cannot use it. Active and deactivated accounts are
+supported. Refreshing another DID returns `Forbidden`.
+
+The response contains `did`, the bidirectionally verified `handle` (or
+`handle.invalid`), and the complete `didDoc`. DID lookup bypasses and refreshes the
+node-local cache. DNS/HTTPS resolution retains the existing public-address checks,
+timeouts, response limits, and redirect rejection. Missing identities return
+`DidNotFound` or `HandleNotFound`; other resolution failures preserve the previous
+observation and return an error. Independent PLC-log verification remains pending.
+
+Resolution runs outside database locks. Before storing the observation, Atoll
+rechecks the live session and account availability under the repository/event lock
+order. Revocation during resolution prevents publication. Observation changes and
+identity events commit together; unchanged observations emit no duplicate event.
+Refreshing does not change the account's stored handle, signing key, hosting status,
+or DID document at its authority.
+
+Requests have a 4 KiB JSON limit, no-store responses, and share the per-node
+login/recovery budget of 20 requests per five minutes per direct client IP. This
+endpoint does not provide distributed request coalescing or replace the optional
+periodic refresh worker.

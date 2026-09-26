@@ -1,6 +1,36 @@
 defmodule AtollWeb.IdentityController do
   use AtollWeb, :controller
 
+  def refresh(conn, params) do
+    opts = Application.get_env(:atoll, :identity_resolution_options, [])
+
+    with {:ok, token} <- AtollWeb.BearerToken.get(conn),
+         {:ok, result} <- Atoll.Identity.Updates.refresh_authenticated(token, params, opts) do
+      json(conn, result)
+    else
+      {:error, :did_not_found} ->
+        conn |> put_status(400) |> json(%{error: "DidNotFound", message: "DID not found."})
+
+      {:error, :handle_not_found} ->
+        conn |> put_status(400) |> json(%{error: "HandleNotFound", message: "Handle not found."})
+
+      {:error, reason}
+      when reason in [
+             :resolution_failed,
+             :unsafe_destination,
+             :invalid_did_document,
+             :invalid_did,
+             :unsupported_did_method,
+             :did_document_too_large,
+             :stale_identity_refresh
+           ] ->
+        AtollWeb.XRPCFallback.call(conn, {:error, :identity_unavailable})
+
+      error ->
+        AtollWeb.XRPCFallback.call(conn, error)
+    end
+  end
+
   def recommended(conn, _params) do
     with {:ok, token} <- AtollWeb.BearerToken.get(conn),
          {:ok, result} <- Atoll.Identity.Recommended.get(token) do
