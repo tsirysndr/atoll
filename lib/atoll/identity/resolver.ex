@@ -4,9 +4,8 @@ defmodule Atoll.Identity.Resolver do
 
   Uses public IPv4/IPv6 destinations and pins the checked address. DID redirects are rejected;
   HTTPS handle lookups permit three validated redirect hops. Response bytes are bounded.
-  PLC resolution trusts the directory's HTTPS response.
-  Independent PLC operation-log validation is pending. Routine
-  lookups use a bounded positive cache; force_refresh bypasses and replaces it.
+  PLC resolution supports directory HTTPS trust or independent audit-chain verification.
+  Routine lookups use a bounded positive cache; force_refresh bypasses and replaces it.
   Options provide trusted transport/DNS injection for tests, never request input.
   """
   alias Atoll.{Syntax, Identity.Document}
@@ -22,20 +21,59 @@ defmodule Atoll.Identity.Resolver do
   @doc "Resolves a DID document without requiring a PDS service; useful for service identities."
   def resolve_document(did, opts \\ []) do
     with {:ok, url} <- resolution_url(did) do
-      loader = fn -> load_document(did, url, opts) end
+      mode =
+        Keyword.get(
+          opts,
+          :plc_resolution_mode,
+          Application.get_env(:atoll, :plc_resolution_mode, :directory)
+        )
 
-      case cache_server(opts) do
+      verified? = String.starts_with?(did, "did:plc:") and mode == :audit
+
+      loader = fn ->
+        cond do
+          mode not in [:directory, :audit] -> {:error, :invalid_did_document}
+          verified? -> load_audit_document(did, url, opts)
+          true -> load_document(did, url, opts)
+        end
+      end
+
+      cache_key = if verified?, do: {:plc_audit, did}, else: did
+
+      # Reject invalid trusted policy values even if a directory cache entry exists.
+      cache = if mode in [:directory, :audit], do: cache_server(opts), else: false
+
+      case cache do
         false ->
           loader.()
 
         server ->
           Atoll.Identity.Cache.fetch(
             server,
-            did,
+            cache_key,
             Keyword.get(opts, :force_refresh, false),
             loader
           )
       end
+    end
+  end
+
+  def plc_mode_from_env!(nil), do: :directory
+  def plc_mode_from_env!("directory"), do: :directory
+  def plc_mode_from_env!("audit"), do: :audit
+
+  def plc_mode_from_env!(_),
+    do: raise(ArgumentError, "ATOLL_PLC_RESOLUTION_MODE must be directory or audit")
+
+  defp load_audit_document(did, url, opts) do
+    with {:ok, body} <- fetch(url <> "/log/audit", opts, 8 * 1024 * 1024),
+         {:ok, entries} <- Jason.decode(body),
+         {:ok, document} <- Atoll.Identity.PLC.AuditLog.document(did, entries) do
+      {:ok, document}
+    else
+      {:error, :invalid_plc_log} -> {:error, :invalid_did_document}
+      {:error, %Jason.DecodeError{}} -> {:error, :invalid_did_document}
+      {:error, _} = error -> error
     end
   end
 

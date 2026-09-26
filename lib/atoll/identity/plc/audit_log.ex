@@ -41,6 +41,84 @@ defmodule Atoll.Identity.PLC.AuditLog do
 
   def verify(_, _), do: {:error, :invalid_plc_log}
 
+  @doc "Derives a DID document exclusively from the verified surviving operation."
+  def document(did, entries) do
+    with {:ok, result} <- verify(did, entries) do
+      if result.tombstoned,
+        do: {:error, :did_not_found},
+        else: {:ok, format_document(did, result.operation)}
+    end
+  end
+
+  defp format_document(did, %{"type" => "create"} = op) do
+    handle = op["handle"]
+
+    handle =
+      if String.starts_with?(handle, "at://"),
+        do: handle,
+        else:
+          "at://" <>
+            (handle
+             |> String.replace_prefix("https://", "")
+             |> String.replace_prefix("http://", ""))
+
+    endpoint = op["service"]
+
+    endpoint =
+      if String.starts_with?(endpoint, ["https://", "http://"]),
+        do: endpoint,
+        else: "https://" <> endpoint
+
+    format_document(did, %{
+      "verificationMethods" => %{"atproto" => op["signingKey"]},
+      "alsoKnownAs" => [handle],
+      "services" => %{
+        "atproto_pds" => %{"type" => "AtprotoPersonalDataServer", "endpoint" => endpoint}
+      }
+    })
+  end
+
+  defp format_document(did, op) do
+    methods =
+      op["verificationMethods"]
+      |> Enum.sort()
+      |> Enum.map(fn {id, "did:key:" <> key} ->
+        %{
+          "id" => did <> "#" <> id,
+          "controller" => did,
+          "type" => "Multikey",
+          "publicKeyMultibase" => key
+        }
+      end)
+
+    contexts =
+      Enum.flat_map(methods, fn method ->
+        case Atoll.Multikey.decode(method["publicKeyMultibase"]) do
+          {:ok, %{curve: :p256}} -> ["https://w3id.org/security/suites/ecdsa-2019/v1"]
+          {:ok, %{curve: :k256}} -> ["https://w3id.org/security/suites/secp256k1-2019/v1"]
+          _ -> []
+        end
+      end)
+
+    services =
+      op["services"]
+      |> Enum.sort()
+      |> Enum.map(fn {id, service} ->
+        %{"id" => "#" <> id, "type" => service["type"], "serviceEndpoint" => service["endpoint"]}
+      end)
+
+    %{
+      "@context" =>
+        Enum.uniq(
+          ["https://www.w3.org/ns/did/v1", "https://w3id.org/security/multikey/v1"] ++ contexts
+        ),
+      "id" => did,
+      "alsoKnownAs" => op["alsoKnownAs"],
+      "verificationMethod" => methods,
+      "service" => services
+    }
+  end
+
   defp entry!(
          %{
            "did" => did,

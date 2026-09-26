@@ -290,7 +290,7 @@ mutation. Deletes and empty batches need no record schema, even with `validate: 
 - [x] Bounded node-local positive DID resolution caching with forced refresh for authorization and identity changes.
 - [x] Explicit development/test localhost DID resolution and local server DID publication.
 - [x] Offline PLC audit-log verification of genesis, signatures, CID links, recovery windows, and nullification flags.
-- [ ] Verified PLC audit-log fetching and resolver integration (live resolution currently trusts the directory over HTTPS).
+- [x] Optional verified PLC audit-log resolution with bounded fetching and separate verified-document caching.
 - [x] DNS TXT handle resolution with HTTPS fallback, normalization, ambiguity checks, and reserved-domain rejection.
 - [x] Internal bidirectional handle verification against the resolved DID document.
 - [x] Public `com.atproto.identity.resolveHandle` forward lookup (does not assert bidirectional verification).
@@ -447,8 +447,8 @@ accounts indefinitely and does not schedule deletion from this hint.
 `POST /xrpc/com.atproto.server.activateAccount` has no input body. It resolves the
 account DID, requires its signing key and PDS endpoint to match the local account
 and configured public URL, and requires a decryptable stored signing key. These
-checks use the existing resolver's trust model; independent PLC log/rotation-key
-verification remains pending. Authorization is rechecked under the repository
+checks use the configured PLC resolution policy, including audit verification when
+enabled. Authorization is rechecked under the repository
 write lock after resolution. Both endpoints return an empty HTTP 200 on success,
 publish one durable account event per status change, and are idempotent. They
 cannot undo an administrative takedown or suspension. Activation does not assert
@@ -662,7 +662,8 @@ markers can be removed in bounded batches with
 `Atoll.Accounts.ServiceTokens.prune_expired/1` (default 500, maximum 1000).
 The opt-in authentication-state cleanup worker schedules replay-marker pruning.
 Migration account creation uses this verifier, which
-uses the existing resolver's HTTPS trust model, not independent PLC log validation.
+uses the configured PLC resolution policy: directory HTTPS trust by default, or
+independent audit verification when enabled.
 
 For local development, connect to
 `ws://localhost:4000/xrpc/com.atproto.sync.subscribeRepos?cursor=0`.
@@ -858,8 +859,8 @@ uploads). Counts describe database inventory, not backend byte integrity.
 `privateStateValues` is zero because private application state is not implemented.
 `validDid` checks the resolved signing key against the pinned repository key and
 the DID's PDS endpoint against Phoenix's configured public endpoint URL. Resolution
-failure returns `validDid: false`. PLC operation-log/rotation-key authority and
-private-key availability are not checked. Remote resolution runs before inventory
+failure returns `validDid: false`. PLC operation-log authority is checked when audit
+resolution is enabled; private-key availability is not checked. Remote resolution runs before inventory
 locks; the session is checked again before returning account data. This endpoint
 shares the session query rate limit and does not itself grant write access.
 Deactivated accounts may separately log in, refresh, import a repository, and
@@ -1854,7 +1855,8 @@ node-local cache. DNS/HTTPS resolution retains the existing public-address check
 timeouts and response limits. DID redirects are rejected; handle redirects follow
 the bounded HTTPS policy described below. Missing identities return
 `DidNotFound` or `HandleNotFound`; other resolution failures preserve the previous
-observation and return an error. Independent PLC-log verification remains pending.
+observation and return an error. PLC-log verification follows the configured
+resolution policy.
 
 Resolution runs outside database locks. Before storing the observation, Atoll
 rechecks the live session and account availability under the repository/event lock
@@ -1888,7 +1890,8 @@ the explicit fresh-resolution and observation-update path.
 A missing DID or handle returns `DidNotFound` or `HandleNotFound`; invalid documents
 and upstream failures return `InvalidRequest` without upstream response bodies.
 The resolver does not currently distinguish a deactivated PLC DID from a missing
-DID. Independent PLC operation-log verification remains pending.
+DID. Audit mode independently verifies the operation log before deriving the
+DID document.
 
 All three public identity queries (`resolveDid`, `resolveIdentity`, `resolveHandle`)
 share a per-node limit of 60 requests per five minutes per direct client IP, return
@@ -2385,6 +2388,46 @@ recorded in `test/fixtures/plc/README.md`.
 This validates the supplied history, not proof that it is complete or current.
 Directory timestamps are unsigned metadata; cryptographic verification cannot
 independently establish when an operation was submitted or detect an omitted
-newer suffix. Live DID resolution still uses the configured directory's HTTPS DID
-document. Bounded audit fetching and resolver integration remain pending, as do
-local signing-key rotation and recovery workflows.
+newer suffix. Live resolution can use the verified audit policy described below.
+Local signing-key rotation and recovery workflows remain pending.
+
+
+### Verified PLC resolution
+
+Set `ATOLL_PLC_RESOLUTION_MODE=audit` to derive `did:plc` documents from independently
+verified operation history. The application setting is
+`config :atoll, :plc_resolution_mode, :audit`. The default `directory` mode preserves
+the existing HTTPS trust policy; only `directory` and `audit` are accepted at startup.
+The setting applies to shared resolver callers, including public identity queries,
+service-token verification, login identity checks, activation, and identity refresh.
+Hostname-level `did:web` resolution is unchanged.
+
+Audit mode fetches `https://plc.directory/<did>/log/audit` with the resolver's existing
+public-address checks, DNS address pinning, TLS hostname verification, five-second
+request timeout, and no redirects or automatic retries. It accepts at most 8 MiB
+and 1000 operations. Verification checks the genesis, signatures, CID chain,
+recovery authority/window, timestamps, and declared nullifications as described
+above. No rendered DID document is requested and no directory-trust fallback is
+attempted on invalid, unavailable, or oversized history.
+
+The surviving operation supplies the aliases, Multikey verification methods, and
+services. Legacy genesis operations are normalized to those document fields.
+A surviving tombstone resolves as `did_not_found`; a properly recovered tombstone
+can resolve normally. Invalid logs become `invalid_did_document`. The ordinary
+ATProto key/PDS extraction and bidirectional handle checks still apply afterward.
+
+Verified and directory-trusted documents have separate keys in the bounded positive
+cache. Switching to audit mode cannot reuse a document cached under the directory
+policy. Forced refresh replaces or invalidates the relevant verified entry, using
+the existing TTL, byte/count bounds, and protection against stale in-flight loads.
+The setting is trusted server configuration, never a public request parameter.
+`ATOLL_PLC_DIRECTORY_URL` still controls registration submission only; the shared
+resolver's public PLC source remains `plc.directory`.
+
+Verification authenticates operation contents and their permitted transitions. It
+still relies on the supplied directory timestamps and cannot prove the response is
+complete or detect an omitted newer suffix. No durable last-seen checkpoint or
+independent witness service is implemented. Oversized histories fail closed in
+audit mode rather than being partially verified. Tests mock network traffic and
+exercise pinned upstream logs, invalid recovery, tombstones, response/address
+bounds, and cache isolation; they do not mutate any external DID.

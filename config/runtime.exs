@@ -54,6 +54,10 @@ case System.get_env("ATOLL_SIGNUP_ENABLED", "false") do
 end
 
 config :atoll,
+       :plc_resolution_mode,
+       Atoll.Identity.Resolver.plc_mode_from_env!(System.get_env("ATOLL_PLC_RESOLUTION_MODE"))
+
+config :atoll,
        :plc_directory_url,
        Atoll.Identity.PLC.Client.directory_from_env!(System.get_env("ATOLL_PLC_DIRECTORY_URL"))
 

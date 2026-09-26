@@ -106,6 +106,8 @@ defmodule Atoll.Identity.Cache do
   defp cacheable?({:handle, handle}, did),
     do: Atoll.Syntax.handle?(handle) and Atoll.Syntax.did?(did)
 
+  defp cacheable?({:plc_audit, "did:plc:" <> _ = did}, %{"id" => did}), do: true
+
   defp cacheable?(did, %{"id" => did}) when is_binary(did), do: true
   defp cacheable?(_, _), do: false
 
