@@ -306,6 +306,7 @@ mutation. Deletes and empty batches need no record schema, even with `validate: 
 - [x] Internal PLC operation signing, genesis DID derivation, and predecessor signature checks.
 - [x] Internal PLC genesis submission with bounded responses and exact latest-operation confirmation.
 - [x] Internal ordinary PLC update submission with predecessor checks and exact-operation retry reconciliation.
+- [x] Durable PLC update journal with verified predecessor evidence and separate remote confirmation/local completion.
 - [x] Durable genesis registration journal and encrypted PLC rotation-key retention.
 - [x] Opt-in fresh PLC DID signup under configured server domains, including durable retries and optional recovery keys.
 - [x] Hosted handle resolution through `/.well-known/atproto-did`.
@@ -2599,3 +2600,34 @@ not submit recovery forks against older predecessors. It does not itself change
 local profiles, repository signing keys, or session state. Authenticated handle,
 key rotation, and recovery workflows remain pending. Behavior follows the
 [PLC update specification](https://web.plc.directory/spec/v0.1/did-plc).
+
+
+### Durable PLC update journal
+
+Migration `20260926154349` adds `plc_updates`. Internal
+`Atoll.Identity.PLC.Updates.stage/3` verifies a supplied audit log back to the DID's
+genesis, then verifies the proposed ordinary update against its surviving latest
+operation. It stores the exact signed operation and trusted predecessor under the
+repository lock. Only one locally incomplete update per DID is allowed; identical
+staging retries return the same journal entry. Tombstones and recovery forks are
+not staged by this workflow.
+
+`submit/3` must run after the staging transaction commits. It uses the persisted
+operation and records the first exact directory confirmation. Transport failures
+leave the entry pending. Once confirmed, further calls return the stored historical
+confirmation without posting again. Confirmation is not proof that the operation
+is still latest after subsequent directory changes or recovery.
+
+The future authorized workflow must commit its local profile/key changes together
+with `complete!/2` inside one transaction. Completion requires confirmation and
+releases the pending slot; both completion and local changes roll back together.
+The journal itself changes no account status, profile, key, or session. Its callers
+must authorize the action and verify any current identity conditions needed for
+local activation. Supplied audit evidence proves signatures and chain consistency,
+not freshness or completeness of the directory's history.
+
+Include the journal in database backups. Account deletion cascades local entries;
+it does not undo a public directory operation, including a submission already in
+flight. Never discard an ambiguously submitted pending operation or generate a
+replacement signature merely to retry. No automatic submission worker or public
+identity-mutation endpoint is enabled by this internal foundation.
