@@ -5,6 +5,17 @@ defmodule AtollWeb.XRPCFallback do
     error(conn, 400, "InvalidRequest", "Invalid or unsupported query parameters.")
   end
 
+  def call(conn, {:error, {:repo_inactive, status}}) do
+    code =
+      case status do
+        :deactivated -> "RepoDeactivated"
+        :takendown -> "RepoTakendown"
+        :suspended -> "RepoSuspended"
+      end
+
+    error(conn, 400, code, "Repository is not active.")
+  end
+
   def call(conn, {:error, :record_not_found}),
     do: error(conn, 400, "RecordNotFound", "Record not found.")
 

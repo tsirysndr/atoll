@@ -113,11 +113,12 @@ Raw CID support and generic block storage are implemented; the ATProto blob API 
 
 - [x] Full repository export via `com.atproto.sync.getRepo` (in-memory, 64 MiB archive limit).
 - [ ] Incremental repository exports using `since` (currently rejected explicitly).
-- [x] `getLatestCommit`, `getRepoStatus`, and paginated `listRepos` sync endpoints (all stored repositories currently active).
+- [x] `getLatestCommit`, `getRepoStatus`, and paginated `listRepos` sync endpoints with persistent repository status.
 - [x] `com.atproto.sync.getRecord` compact signed existence and absence proofs.
 - [x] `com.atproto.sync.getBlocks` for current repository blocks (1–100 CIDs; repeated `cids` query parameters).
 - [x] Export consistency checks against the signed commit, tree root, and revision.
-- [ ] Historical block retrieval and inactive repository status handling.
+- [x] Internal deactivation, suspension, takedown, and reactivation; inactive repositories reject public reads, exports, writes, and imports.
+- [ ] Historical block retrieval and repository status event publication.
 - [ ] Durable repository event sequencing and replay.
 - [ ] `com.atproto.sync.subscribeRepos` WebSocket stream with resume cursors.
 - [ ] Commit, sync, identity, and account events.

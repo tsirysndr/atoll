@@ -6,5 +6,9 @@ defmodule Atoll.Repositories.Head do
     field :rev, :string
     field :public_key, :binary
     field :curve, Ecto.Enum, values: [:p256, :k256]
+
+    field :status, Ecto.Enum,
+      values: [:active, :deactivated, :takendown, :suspended],
+      default: :active
   end
 end

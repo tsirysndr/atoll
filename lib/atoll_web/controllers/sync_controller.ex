@@ -48,15 +48,14 @@ defmodule AtollWeb.SyncController do
     do: conn |> put_resp_content_type("application/vnd.ipld.car", nil) |> send_resp(200, bytes)
 
   def latest_commit(conn, params) do
-    with {:ok, head} <- head(params) do
+    with {:ok, head} <- head(params), :ok <- Repositories.availability(head) do
       json(conn, %{cid: CID.to_base32(head.head), rev: head.rev})
     end
   end
 
   def repo_status(conn, params) do
     with {:ok, head} <- head(params) do
-      # All repositories are active until account lifecycle support is added.
-      json(conn, %{did: head.did, active: true, rev: head.rev})
+      json(conn, Repositories.status_fields(head))
     end
   end
 

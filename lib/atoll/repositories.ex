@@ -127,9 +127,33 @@ defmodule Atoll.Repositories do
     end
   end
 
+  @doc "Internal status control, serialized with repository writes. Caller must authorize administration."
+  def set_status(did, status)
+      when is_binary(did) and status in [:active, :deactivated, :takendown, :suspended] do
+    Repo.transaction(fn ->
+      head = locked_head!(did, "FOR UPDATE", false)
+      head |> Ecto.Changeset.change(status: status) |> Repo.update!()
+    end)
+  end
+
+  def set_status(_, _), do: {:error, :invalid_status}
+
+  def get_active_head(did) do
+    with {:ok, head} <- get_head(did), :ok <- availability(head), do: {:ok, head}
+  end
+
+  def availability(%Head{status: :active}), do: :ok
+  def availability(%Head{status: status}), do: {:error, {:repo_inactive, status}}
+
+  def status_fields(%Head{status: :active} = head),
+    do: %{did: head.did, active: true, rev: head.rev}
+
+  def status_fields(%Head{} = head),
+    do: %{did: head.did, active: false, status: Atom.to_string(head.status)}
+
   @doc "Lists collections that currently contain at least one record."
   def collections(did) do
-    with {:ok, _} <- get_head(did) do
+    with {:ok, _} <- get_active_head(did) do
       names =
         Repo.all(
           from r in Record,
@@ -157,13 +181,20 @@ defmodule Atoll.Repositories do
 
     result = %{
       repos:
-        Enum.map(page, &%{did: &1.did, head: CID.to_base32(&1.head), rev: &1.rev, active: true})
+        Enum.map(
+          page,
+          &Map.merge(status_fields(&1), %{head: CID.to_base32(&1.head), rev: &1.rev})
+        )
     }
 
     if length(rows) > limit, do: Map.put(result, :cursor, List.last(page).did), else: result
   end
 
   def get_record(did, path) when is_binary(did) and is_binary(path) do
+    with {:ok, _} <- get_active_head(did), do: read_record(did, path)
+  end
+
+  defp read_record(did, path) do
     case Repo.get_by(Record, did: did, path: path) do
       nil ->
         {:error, :not_found}
@@ -184,7 +215,7 @@ defmodule Atoll.Repositories do
     prefix = collection <> "/"
     upper = collection <> "0"
 
-    with {:ok, _} <- get_head(did) do
+    with {:ok, _} <- get_active_head(did) do
       query =
         from r in Record,
           join: b in Atoll.Storage.Block,
@@ -334,7 +365,7 @@ defmodule Atoll.Repositories do
     end
   end
 
-  defp locked_head!(did, lock) do
+  defp locked_head!(did, lock, require_active \\ true) do
     query = from h in Head, where: h.did == ^did
 
     query =
@@ -343,7 +374,16 @@ defmodule Atoll.Repositories do
         "FOR SHARE" -> from h in query, lock: "FOR SHARE"
       end
 
-    Repo.one(query) || Repo.rollback(:not_found)
+    head = Repo.one(query) || Repo.rollback(:not_found)
+
+    if require_active do
+      case availability(head) do
+        :ok -> :ok
+        {:error, reason} -> Repo.rollback(reason)
+      end
+    end
+
+    head
   end
 
   defp record_map(did),
