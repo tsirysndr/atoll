@@ -137,7 +137,8 @@ record Lexicons or grant access to account data.
 - [x] Encrypted PostgreSQL signing-key storage using AES-256-GCM and a separate runtime master key.
 - [x] Atomic managed repository creation and internal writes using persisted signing keys.
 - [x] Encryption master-key rotation with decryption fallback keys and atomic paginated envelope rewrapping.
-- [ ] Signing-key rotation and recovery workflows.
+- [x] Operator did:web signing-key rotation after external DID-document updates.
+- [ ] PLC signing-key rotation and recovery workflows.
 - [x] Per-revision signing-key provenance for historical record and block verification.
 - [x] Internal atomic repository signing-key replacement with unchanged-tree commits and vault rollback.
 - [x] PostgreSQL repository heads and atomic record, tree, and commit updates with optional head compare-and-swap.
@@ -2054,7 +2055,7 @@ Health and other non-XRPC routes remain outside the general request budget.
 This backend favors consistent, bounded admission over maximum throughput: each
 budget check requires a database transaction and shares the admission lock. Load
 test it for the expected request volume. It does not provide sliding windows,
-per-account abuse policy, or a Redis backend. HTTP guards consume budgets before
+or per-account abuse policy. A separate optional Redis backend is described below. HTTP guards consume budgets before
 handler transactions, so a failed handler does not restore its request allowance.
 
 ### HTTPS handle redirects
@@ -2429,7 +2430,7 @@ This validates the supplied history, not proof that it is complete or current.
 Directory timestamps are unsigned metadata; cryptographic verification cannot
 independently establish when an operation was submitted or detect an omitted
 newer suffix. Live resolution can use the verified audit policy described below.
-Local signing-key rotation and recovery workflows remain pending.
+Operator did:web signing-key rotation is available below; PLC signing-key rotation and recovery remain pending.
 
 
 ### Verified PLC resolution
@@ -3281,9 +3282,40 @@ is an idempotent no-op. Subsequent managed writes use the new key, while histori
 revisions remain verifiable with their recorded keys. This is not a recovery path
 for an unreadable current vault.
 
-Durable pending-key custody, fresh DID/PLC authorization, directory submission,
-reconciliation after ambiguous network results, and an operator/account-facing
-rotation workflow still need integration. No rotation endpoint or command invokes
-this primitive yet. Tests exercise cross-curve replacement, continued writes,
+The did:web operator command below invokes this primitive after fresh authority
+checks. PLC rotation still needs durable pending-key custody, directory submission
+and reconciliation after ambiguous network results. Tests exercise cross-curve replacement, continued writes,
 historical reads, idempotence, deactivation, stale heads, invalid key pairs, vault
 corruption, and quota rollback.
+
+### Operator did:web signing-key rotation
+
+After updating the external did:web document to authorize the replacement
+`#atproto` key, run:
+
+```sh
+mix atoll.keys.rotate_web did:web:alice.example.com /secure/new-key.json did:key:CURRENT_PUBLIC_KEY
+```
+
+The private file must contain exactly `curve` (`k256` or `p256`) and `privateKey`
+(standard base64 encoding of the 32-byte private key), and be at most 4 KiB.
+Restrict its permissions to the operator and retain it securely until completion
+is verified. Pass the currently installed public did:key as the final argument.
+The command never changes the external DID document or submits PLC operations.
+
+Fresh resolution must authorize the replacement key, name this PDS service, and
+claim the existing local handle. Custom handles must resolve back to the DID.
+The transaction rechecks the expected local key and detects intervening local
+identity changes. It atomically replaces the encrypted key, publishes a newer
+commit over the unchanged tree, emits identity then sync events, updates the
+identity observation, and records an operator audit containing public keys and
+commit identifiers only. Active and deactivated accounts are supported; other
+states and unreadable existing vaults are rejected.
+
+After success, retrying with the old expected key fails as stale. Supplying the
+new current key and the same private file succeeds as unchanged without new
+repository events (the attempt is still audited). Remote DID updates and local
+publication cannot be one transaction: schedule an appropriate maintenance
+window, and retry this command if local completion fails after the document
+change. This is operator reconciliation, not automatic key recovery or a PLC
+rotation workflow.

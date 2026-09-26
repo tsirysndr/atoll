@@ -4,6 +4,24 @@ defmodule Atoll.Moderation.Audit do
   alias Atoll.{Repo, Syntax}
   alias Atoll.Moderation.AuditEntry
 
+  @doc "Records an operator repository-key transition with public metadata only."
+  def repository_key!(before_head, after_head, expected, result) do
+    state = fn head ->
+      {:ok, key} = Atoll.Multikey.to_did_key(head.curve, head.public_key)
+      %{key: key, commit: Atoll.CID.to_base32(head.head)}
+    end
+
+    insert!(
+      "atoll.keys.rotateWeb",
+      before_head.did,
+      %{kind: "repositorySigningKey", did: before_head.did},
+      %{expectedKey: expected, result: Atom.to_string(result)},
+      state.(before_head),
+      state.(after_head),
+      "operator"
+    )
+  end
+
   @doc "Records local operator key custody changes using public metadata only."
   def rotation_key!(did, expected, observed_cid, before_key, after_key, result) do
     insert!(
