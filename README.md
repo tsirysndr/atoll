@@ -389,6 +389,8 @@ mutation. Deletes and empty batches need no record schema, even with `validate: 
 - [x] Internal bounded client-metadata retrieval and validation of client IDs, redirects, scopes, and authentication declarations.
 - [x] Fresh inline/remote confidential-client JWKS retrieval and ES256 public-key validation.
 - [x] Internal ES256 JWT client assertions, supplied session-key binding checks, and PostgreSQL-shared assertion replay rejection.
+- [x] Internal S256 PKCE verification and pushed authorization admission with bound client/DPoP keys, short-lived references, and 24-hour challenge reuse prevention.
+- [ ] PAR HTTP adapter, authorization/consent flow, and one-use conversion of pushed requests into authorization codes.
 - [ ] OAuth session binding persistence/revocation and localhost virtual client metadata.
 - [ ] OAuth nonce challenges and proof admission integrated into authorization/resource server routes.
 - [ ] ATProto OAuth authorization and resource server support.
@@ -4537,3 +4539,63 @@ The result authenticates client software only: account authorization, DPoP,
 PAR/PKCE, consent, OAuth sessions and token routes remain separate requirements.
 The assertion profile follows [RFC 7523](https://www.rfc-editor.org/rfc/rfc7523.html)
 and the [ATProto confidential-client requirements](https://atproto.com/specs/oauth#confidential-client-authentication).
+
+### PKCE and pushed authorization request storage
+
+`Atoll.OAuth.PKCE` validates canonical S256 challenges and compares a verifier's
+SHA-256 challenge in constant time. Verifiers must contain 43–128 unreserved
+ASCII characters. The test suite includes the RFC 7636 example. Only S256 is
+accepted; plaintext challenges are rejected.
+
+`Atoll.OAuth.PAR.push/3` takes decoded parameters, the DPoP header list, and trusted
+options. It validates the request, freshly fetches client metadata, authenticates
+confidential clients through the assertion guard, and admits a DPoP proof for
+`POST <issuer>/oauth/par`. Public clients must declare `none`; confidential
+clients must supply their assertion and type. The issuer defaults to the public
+endpoint URL, with trusted `:issuer`/`:secret` and transport options available
+for integration/tests. No caller-supplied URL or forwarding header selects the
+expected proof target.
+
+Requests require `response_type=code`, state, an exactly registered callback,
+declared scopes including `atproto`, and an S256 challenge. Optional `login_hint`
+is preserved but is not account authentication. An optional `dpop_jkt` must match
+the verified proof key. Current scope admission is limited to `atproto` and the
+three transitional scopes; `transition:chat.bsky` requires `transition:generic`.
+Other permissions await scope enforcement. Unknown fields, client secrets,
+verifiers, Request Objects, and supplied request URIs are rejected. Input is capped
+at 16 KiB of decoded names/values; state and login hints are capped at 2 KiB.
+The future form adapter must also reject duplicate fields before producing a map.
+
+Successful admission atomically reserves the challenge for 24 hours and stores
+validated parameters, issuer/client ID, DPoP thumbprint, and any confidential
+client key binding. It returns a random 256-bit `request_uri` with `expires_in: 90`.
+Only the reference's SHA-256 digest is stored, not its bearer value. Assertion and
+DPoP JWT bytes are excluded from request storage; parameters include private state
+and login hints, are redacted from struct inspection, and use queries without
+parameter logging. Confidential key bindings in the database have JSON string
+keys (`kid`, `alg`, `jkt`).
+
+`PAR.get/3` retrieves an unexpired request only for its original client and issuer.
+This read does not consume the request, establish consent, or issue a grant. A
+future authorization flow must atomically consume it during code issuance and
+enforce its stored parameters and bindings. Request expiry does not free its
+challenge reservation, and another client of the same issuer cannot reuse that
+challenge during the reservation period.
+
+PostgreSQL time and a dedicated shared admission lock serialize reservations.
+Capacity is 10,000 stored pushed requests and 100,000 challenge markers globally;
+each successful admission reclaims at most 1,000 expired rows from each table.
+Full storage and database failures reject admission, with one-second lock and
+five-second statement timeouts. No memory/Redis fallback is used. The shared lock
+and table counts constrain throughput, and idle expired rows await later admission
+for cleanup. Failed storage commits reserve neither a request nor a challenge;
+already admitted assertions/DPoP proofs remain consumed, so retries need fresh
+proofs. Calls inside a caller transaction are rejected.
+
+Tests cover both client types, key binding, client/issuer isolation, expiry,
+challenge reuse across clients, concurrent reservations, storage capacity, and
+bounded reclamation. This is an internal component: PAR HTTP responses/nonce
+challenges, browser authorization and consent, one-use code issuance, and token
+exchange remain unfinished. Protocol references:
+[PKCE (RFC 7636)](https://www.rfc-editor.org/rfc/rfc7636.html) and
+[PAR (RFC 9126)](https://datatracker.ietf.org/doc/html/rfc9126).
