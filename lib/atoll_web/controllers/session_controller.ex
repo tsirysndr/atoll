@@ -192,17 +192,22 @@ defmodule AtollWeb.SessionController do
           match?({:ok, _}, Atoll.Accounts.EmailAddress.normalize(identifier))) and
          byte_size(password) in 8..1024 and String.valid?(password) and
          is_boolean(Map.get(body, "allowTakendown", false)) and
-         valid_factor?(Map.get(body, "authFactorToken")),
+         valid_factor?(Map.get(body, "authFactorToken")) and valid_totp?(body["totpCode"]),
        do:
          {:ok, identifier, password,
           [
             auth_factor_token: body["authFactorToken"],
+            totp_code: body["totpCode"],
             allow_takendown: Map.get(body, "allowTakendown", false)
           ]},
        else: {:error, :invalid_request}
   end
 
   defp credentials(_), do: {:error, :invalid_request}
+
+  defp valid_totp?(nil), do: true
+  defp valid_totp?(value) when is_binary(value), do: Regex.match?(~r/\A[0-9]{6}\z/, value)
+  defp valid_totp?(_), do: false
 
   defp valid_factor?(nil), do: true
   defp valid_factor?(token) when is_binary(token), do: byte_size(token) == 32

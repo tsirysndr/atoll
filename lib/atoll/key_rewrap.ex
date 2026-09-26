@@ -1,5 +1,5 @@
 defmodule Atoll.KeyRewrap do
-  @moduledoc "Bounded operator rewrapping of repository and retained PLC private-key envelopes."
+  @moduledoc "Bounded operator rewrapping of repository, PLC and authenticator secret envelopes."
   import Ecto.Query
   alias Atoll.{KeyVault, MasterKeys, Repo, Syntax}
   alias Atoll.Repositories.{Events, Head}
@@ -22,9 +22,13 @@ defmodule Atoll.KeyRewrap do
           counts =
             Enum.reduce(
               page,
-              %{repositories: 0, plc: 0, unchanged: 0, scanned: length(page)},
+              %{repositories: 0, plc: 0, totp: 0, unchanged: 0, scanned: length(page)},
               fn h, counts ->
                 head = Repo.one!(from r in Head, where: r.did == ^h.did, lock: "FOR UPDATE")
+
+                counts =
+                  count(counts, :totp, Atoll.Accounts.Authenticator.rewrap!(head.did, master))
+
                 counts = count(counts, :repositories, KeyVault.rewrap!(head, master))
                 counts = count(counts, :plc, Registrations.rewrap!(head.did, master))
 

@@ -22,12 +22,13 @@ defmodule AtollWeb.AccountController do
     if get_session(conn, :account_access) do
       go(conn, after_login(conn))
     else
-      with true <- Map.keys(p) -- ~w(_csrf_token identifier password authFactorToken) == [],
+      with true <-
+             Map.keys(p) -- ~w(_csrf_token identifier password authFactorToken totpCode) == [],
            identifier when is_binary(identifier) and byte_size(identifier) in 1..2048 <-
              p["identifier"],
            password when is_binary(password) and byte_size(password) in 8..1024 <- p["password"],
            true <- p["authFactorToken"] in [nil, ""] or byte_size(p["authFactorToken"]) == 32,
-           {:ok, pair} <- authenticate(identifier, password, p["authFactorToken"]),
+           {:ok, pair} <- authenticate(identifier, password, p["authFactorToken"], p["totpCode"]),
            :ok <- full_account(pair) do
         pending = get_session(conn, :oauth_pending)
         Plug.CSRFProtection.delete_csrf_token()
@@ -41,6 +42,12 @@ defmodule AtollWeb.AccountController do
         |> put_session(:oauth_pending, pending)
         |> go(if(pending, do: "/oauth/authorize", else: "/account/sessions"))
       else
+        {:error, :totp_required} ->
+          login_form(conn, "Enter the current six-digit code from your authenticator app.", 401)
+
+        {:error, :totp_rate_limited} ->
+          login_form(conn, "Too many authenticator attempts. Try again in five minutes.", 429)
+
         {:error, :auth_factor_required} ->
           login_form(
             conn,
@@ -64,8 +71,10 @@ defmodule AtollWeb.AccountController do
   defp after_login(conn),
     do: if(get_session(conn, :oauth_pending), do: "/oauth/authorize", else: "/account/sessions")
 
-  defp authenticate(identifier, password, factor) do
+  defp authenticate(identifier, password, factor, totp) do
     opts = if factor in [nil, ""], do: [], else: [auth_factor_token: factor]
+
+    opts = Keyword.put(opts, :totp_code, totp)
 
     if Atoll.Syntax.did?(identifier),
       do: Sessions.create(identifier, password, opts),
@@ -190,6 +199,7 @@ defmodule AtollWeb.AccountController do
         "<label>Email or DID<input name=\"identifier\" autocomplete=\"username\" required maxlength=\"2048\"></label>" <>
         "<label>Account password<input type=\"password\" name=\"password\" autocomplete=\"current-password\" required maxlength=\"1024\"></label>" <>
         "<label>Email sign-in code (if requested)<input name=\"authFactorToken\" autocomplete=\"one-time-code\" maxlength=\"32\"></label>" <>
+        "<label>Authenticator code (if enabled)<input name=\"totpCode\" inputmode=\"numeric\" pattern=\"[0-9]{6}\" autocomplete=\"one-time-code\" maxlength=\"6\"></label>" <>
         "<button>Sign in</button></form>"
     )
   end

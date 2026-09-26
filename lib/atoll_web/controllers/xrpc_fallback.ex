@@ -64,6 +64,28 @@ defmodule AtollWeb.XRPCFallback do
   def call(conn, {:error, :invalid_repository_quota}),
     do: error(conn, 503, "ServiceUnavailable", "Repository storage quota is misconfigured.")
 
+  def call(conn, {:error, :totp_required}),
+    do:
+      error(
+        conn,
+        401,
+        "AuthFactorTokenRequired",
+        "Enter a six-digit authenticator code in totpCode."
+      )
+
+  def call(conn, {:error, :invalid_totp}),
+    do:
+      error(conn, 401, "InvalidAuthFactorToken", "Authenticator code is invalid or already used.")
+
+  def call(conn, {:error, :totp_rate_limited}),
+    do:
+      conn
+      |> put_resp_header("retry-after", "300")
+      |> error(429, "RateLimitExceeded", "Too many authenticator attempts.")
+
+  def call(conn, {:error, :totp_store_unavailable}),
+    do: error(conn, 503, "ServiceUnavailable", "Authenticator storage is unavailable.")
+
   def call(conn, {:error, :auth_factor_required}),
     do: error(conn, 400, "AuthFactorTokenRequired", "Check your email for a login code.")
 

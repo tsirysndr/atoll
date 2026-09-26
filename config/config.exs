@@ -48,7 +48,8 @@ config :phoenix, :filter_parameters, [
   "token",
   "accessJwt",
   "refreshJwt",
-  "authFactorToken"
+  "authFactorToken",
+  "totpCode"
 ]
 
 # Import environment specific config. This must remain at the bottom

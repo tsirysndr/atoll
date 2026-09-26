@@ -210,6 +210,62 @@ defmodule AtollWeb.AccountBrowserTest do
     assert get_resp_header(result, "retry-after") != []
   end
 
+  test "enabled authenticators are required by browser login", c do
+    next = enable_totp(c)
+    login = get(c.conn, "/account/login")
+    result = form(login, "/account/login", %{identifier: c.did, password: "account password"})
+    assert html_response(result, 401) =~ "six-digit code"
+
+    signed =
+      form(result, "/account/login", %{
+        identifier: c.did,
+        password: "account password",
+        totpCode: next
+      })
+
+    assert redirected_to(signed, 303) == "/account/sessions"
+  end
+
+  test "XRPC password login accepts totpCode and rejects its replay", c do
+    next = enable_totp(c)
+    body = %{identifier: c.did, password: "account password"}
+    conn = put_req_header(c.conn, "content-type", "application/json")
+
+    assert %{"error" => "AuthFactorTokenRequired"} =
+             post(conn, "/xrpc/com.atproto.server.createSession", Jason.encode!(body))
+             |> json_response(401)
+
+    body = Map.put(body, :totpCode, next)
+
+    assert %{"accessJwt" => _} =
+             post(conn, "/xrpc/com.atproto.server.createSession", Jason.encode!(body))
+             |> json_response(200)
+
+    assert %{"error" => "InvalidAuthFactorToken"} =
+             post(conn, "/xrpc/com.atproto.server.createSession", Jason.encode!(body))
+             |> json_response(401)
+  end
+
+  defp enable_totp(c) do
+    previous = Application.fetch_env(:atoll, :key_encryption_key)
+    Application.put_env(:atoll, :key_encryption_key, :crypto.strong_rand_bytes(32))
+
+    on_exit(fn ->
+      case previous do
+        {:ok, value} -> Application.put_env(:atoll, :key_encryption_key, value)
+        :error -> Application.delete_env(:atoll, :key_encryption_key)
+      end
+    end)
+
+    {:ok, enrollment} = Atoll.Accounts.Authenticator.begin(c.pair.access_jwt, "account password")
+    secret = Base.decode32!(enrollment.secret, padding: false)
+    now = System.system_time(:second)
+    {:ok, code} = Atoll.Accounts.TOTP.code(secret, now)
+    assert {:ok, :enabled} = Atoll.Accounts.Authenticator.confirm(c.pair.access_jwt, code)
+    {:ok, next} = Atoll.Accounts.TOTP.code(secret, now + 30)
+    next
+  end
+
   defp form(page, path, params) do
     [_, csrf] = Regex.run(~r/name="_csrf_token" value="([^"]+)"/, page.resp_body)
 

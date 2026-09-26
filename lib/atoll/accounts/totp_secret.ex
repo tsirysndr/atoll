@@ -9,12 +9,7 @@ defmodule Atoll.Accounts.TOTPSecret do
   def seal(did, <<_::160>> = secret) do
     with true <- Syntax.did?(did),
          {:ok, master} <- MasterKeys.active() do
-      nonce = :crypto.strong_rand_bytes(12)
-
-      {ciphertext, tag} =
-        :crypto.crypto_one_time_aead(:aes_256_gcm, master, nonce, secret, aad(did), 16, true)
-
-      {:ok, <<1, nonce::binary, ciphertext::binary, tag::binary>>}
+      encrypt(did, secret, master)
     else
       false -> {:error, :invalid_totp_secret}
       error -> error
@@ -39,6 +34,29 @@ defmodule Atoll.Accounts.TOTPSecret do
   @doc "Return an envelope under the active key; callers must persist it atomically before retiring fallback keys."
   def rewrap(did, envelope) do
     with {:ok, secret} <- open(did, envelope), do: seal(did, secret)
+  end
+
+  @doc false
+  def rewrap_to(did, <<1, _::binary-size(48)>> = envelope, <<_::256>> = master) do
+    case decrypt(did, envelope, master) do
+      {:ok, _} ->
+        {:ok, :unchanged}
+
+      _ ->
+        with {:ok, secret} <- MasterKeys.decrypt(master, &decrypt(did, envelope, &1)),
+             do: encrypt(did, secret, master)
+    end
+  end
+
+  def rewrap_to(_, _, _), do: {:error, :invalid_totp_secret}
+
+  defp encrypt(did, secret, master) do
+    nonce = :crypto.strong_rand_bytes(12)
+
+    {ciphertext, tag} =
+      :crypto.crypto_one_time_aead(:aes_256_gcm, master, nonce, secret, aad(did), 16, true)
+
+    {:ok, <<1, nonce::binary, ciphertext::binary, tag::binary>>}
   end
 
   defp decrypt(

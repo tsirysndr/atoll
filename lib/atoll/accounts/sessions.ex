@@ -16,7 +16,13 @@ defmodule Atoll.Accounts.Sessions do
     case Credentials.verified_digest(did, password) do
       {:ok, digest} ->
         with :ok <- Atoll.Accounts.EmailFactor.challenge(did, digest, opts),
-             do: create_for_account(did, Keyword.put(opts, :credential_digest, digest))
+             {:ok, admission} <-
+               Atoll.Accounts.Authenticator.check_login(did, digest, opts[:totp_code]),
+             do:
+               create_for_account(
+                 did,
+                 Keyword.merge(opts, credential_digest: digest, totp_admission: admission)
+               )
 
       {:error, :invalid_credentials} ->
         with {:ok, app} <- AppPasswords.verify(did, password),
@@ -71,6 +77,11 @@ defmodule Atoll.Accounts.Sessions do
         end
 
         if digest = opts[:credential_digest] do
+          Atoll.Accounts.Authenticator.recheck!(
+            did,
+            Keyword.get(opts, :totp_admission, :disabled)
+          )
+
           Atoll.Accounts.EmailFactor.consume!(did, digest, opts[:auth_factor_token])
         end
 

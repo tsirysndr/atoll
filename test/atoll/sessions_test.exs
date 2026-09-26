@@ -161,7 +161,7 @@ defmodule Atoll.Accounts.SessionsTest do
 
     assert {:error, pair} =
              Repo.transaction(fn ->
-               {:ok, pair} = Sessions.create(@did, @password, @opts)
+               {:ok, pair} = Sessions.create_for_account(@did, @opts)
                Repo.rollback(pair)
              end)
 

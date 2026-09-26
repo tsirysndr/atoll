@@ -397,7 +397,8 @@ mutation. Deletes and empty batches need no record schema, even with `validate: 
 - [x] Browser pushed-request authorization and explicit consent with optional scope narrowing and account-hint enforcement.
 - [ ] Optional passkey enrollment, authentication, management, and recovery.
 - [x] Internal RFC 6238 TOTP verification, authenticator provisioning URIs, and account-bound encrypted secret envelopes.
-- [ ] Optional authenticator-app (TOTP) enrollment, authentication, management, and recovery.
+- [x] Internal persistent TOTP enrollment and confirmation, one-time login codes, database attempt limits, and key rotation.
+- [ ] Authenticator enrollment/management UI and recovery codes (optional TOTP).
 - [x] Internal owner-authenticated OAuth session inventory and per-grant revocation.
 - [x] Browser account login, OAuth session inventory/revocation, and logout with encrypted cookies and CSRF protection.
 - [x] Persisted OAuth client/DPoP/session bindings and source password-session deletion cascades.
@@ -5213,8 +5214,8 @@ Grants are bound to the browser's password session. Explicit browser sign-out
 revokes that session and therefore the grants authorized through it; the consent
 and account pages state this behavior. Browser cookie expiry alone does not
 revoke grants. Individually revoked applications and independently created grants
-retain their existing behavior. Optional passkeys and authenticator-app TOTP,
-including enrollment and recovery, remain on the authentication roadmap.
+retain their existing behavior. Authenticator login enforcement is described below;
+its enrollment UI and recovery flow, and optional passkeys, remain on the roadmap.
 
 HTTP tests cover login resumption, permission narrowing, code exchange, a resource
 read, denial, logout cascades, CSRF and form tampering, hint mismatches, expired
@@ -5242,15 +5243,33 @@ post-2038 timestamps, malformed inputs and counter overflow.
 `Atoll.Accounts.TOTPSecret` seals 160-bit secrets in versioned AES-256-GCM envelopes
 with fresh nonces and authenticated data binding the account DID and TOTP purpose.
 It uses the existing active master key and bounded decryption-only fallback ring.
-`rewrap/2` returns a fresh envelope under the active key; a future storage caller
-must persist it atomically before retiring old keys. Tests cover account binding,
-ciphertext/nonce/tag tampering, wrong keys, fallback decryption, key retirement,
-and malformed configuration.
+`rewrap/2` returns a fresh envelope under the active key. The persisted-key
+rotation workflow also rewraps enrolled factors atomically and reports a `totp`
+count. Tests cover account binding, tampering, fallback decryption and retirement.
 
-These internal primitives do **not** enable 2FA yet. Enrollment, database-backed
-attempt limits and atomic step consumption, login integration, recovery codes,
-management UI and integration with the persisted-key rotation workflow remain
-pending. The verifier alone does not prevent concurrent reuse: its caller must
-lock the enrolled factor, verify and persist the returned step in the same
-authorization transaction. No existing account or login behavior changes in this
-increment. Optional passkeys remain pending separately.
+### Persistent authenticator enrollment and login
+
+`Atoll.Accounts.Authenticator.begin/2` requires a full account session and fresh
+password. It stores an encrypted pending secret for ten minutes; `confirm/2`
+enables the factor only after a valid code and consumes that code. Enrollment is
+currently an internal API: public enrollment screens, disable/re-enrollment,
+recovery codes and passkeys remain pending. Accounts without a confirmed factor
+retain password login behavior.
+
+Confirmed factors require a six-digit code on browser password login and on
+`com.atproto.server.createSession`, using the Atoll-specific optional `totpCode`
+field. If the email factor is enabled too, both factors are required. Restricted
+app passwords retain their existing behavior and cannot open browser management.
+
+PostgreSQL row locks serialize verification and persist the last consumed time
+step, preventing concurrent reuse. A factor permits five submitted attempts per
+five-minute window, including confirmation and successful codes; restarting
+pending enrollment does not reset the limit. Admission runs in its own transaction
+so failures and consumed codes survive later login failures. Password login must
+therefore be called outside a caller-owned transaction; trusted provisioning may
+still use `Sessions.create_for_account/2` within a transaction.
+
+Session creation rechecks the factor version and a short-lived internal admission
+under the account lock. Admission is server state, never an HTTP parameter.
+Tests cover enrollment expiry, credential changes, replay, parallel connections,
+attempt persistence, stale admissions, browser/API login and master-key rotation.
