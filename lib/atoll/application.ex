@@ -68,8 +68,21 @@ defmodule Atoll.Application do
         []
       end
 
+    relay_children =
+      if Application.get_env(:atoll, :relay_crawl_enabled, false) do
+        [
+          Supervisor.child_spec({Task.Supervisor, name: Atoll.Relays.TaskSupervisor},
+            id: Atoll.Relays.TaskSupervisor
+          ),
+          {Atoll.Relays.Worker, []}
+        ]
+      else
+        []
+      end
+
     Supervisor.start_link(
-      children ++ refresh_children ++ cleanup_children ++ account_cleanup_children,
+      children ++
+        refresh_children ++ cleanup_children ++ account_cleanup_children ++ relay_children,
       opts
     )
   end

@@ -611,7 +611,8 @@ locking protects shared objects when collectors overlap.
 - [x] Owner-authenticated identity refresh with fresh DID resolution and atomic observation events.
 - [ ] Remaining authenticated identity-management endpoints and distributed refresh coordination.
 - [x] Configurable operator crawl announcements to relay `com.atproto.sync.requestCrawl` endpoints.
-- [ ] Automatic relay discovery/announcement scheduling and federation interoperability tests.
+- [x] Opt-in supervised periodic crawl announcements to configured relays.
+- [ ] Automatic relay discovery and federation interoperability tests.
 - [x] `com.atproto.server.getServiceAuth` issues short-lived account-signed service JWTs.
 - [x] Internal incoming account service-JWT verification with exact audience/method checks and persistent replay protection.
 - [x] Service-authenticated migration account creation.
@@ -2157,6 +2158,38 @@ error if any relay does not accept the request. Outcome telemetry uses
 
 Acceptance means the relay accepted the request; it does not prove that it has
 connected, indexed repositories, or satisfied its hosting policies. Crawling requires
-the public PDS routes and subscription stream to be reachable. Automatic periodic
-announcements, relay discovery, and live federation interoperability checks remain
-pending. Tests use mocked relay responses and never announce the development PDS.
+the public PDS routes and subscription stream to be reachable. Relay discovery and
+live federation interoperability checks remain pending. Tests use mocked relay responses and never announce the development PDS.
+
+
+### Periodic relay announcements
+
+To announce automatically to the configured `ATOLL_RELAY_URLS`, set:
+
+```sh
+export ATOLL_RELAY_CRAWL_ENABLED=true
+export ATOLL_RELAY_CRAWL_INTERVAL_SECONDS=900
+```
+
+Scheduling is disabled by default and always disabled in the test environment.
+Enabling it requires at least one configured relay. The interval must be between
+300 and 86400 seconds. Application settings are `:relay_crawl_enabled` and
+`:relay_crawl_interval_seconds`. The public endpoint requirements above still apply.
+
+The supervised worker starts its first batch after one minute, then waits the
+configured interval after each batch finishes. Each pass contacts every configured
+relay, including relays that previously rejected or failed a request. Batches do
+not overlap and have a 60-second deadline; a timeout kills the task. Failures,
+crashes, and timeouts schedule another pass. Requests retain the per-relay limits
+above; there are no immediate retries.
+
+`[:atoll, :relay, :announcement]` telemetry reports `runs: 1` and a result of
+`completed`, `failed`, or `timeout`. Completed batches include counts for
+`accepted`, `host_banned`, `unavailable`, and `rejected`; completion does not mean
+all relays accepted the announcement. Interrupted batches do not report partial
+counts. Per-relay outcome telemetry remains available.
+
+Scheduling is per process, without a database lease or leader election. Enable it
+on one instance of a multi-node PDS to avoid duplicate periodic announcements.
+Tests mock all outbound requests; enabling this setting in a running deployment
+makes real network requests.

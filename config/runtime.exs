@@ -62,6 +62,9 @@ config :atoll,
        Atoll.MasterKeys.previous_from_env!(System.get_env("ATOLL_PREVIOUS_KEY_ENCRYPTION_KEYS"))
 
 config :atoll, :relay_urls, Atoll.Relays.from_env!(System.get_env("ATOLL_RELAY_URLS"))
+relay_schedule = Atoll.Relays.schedule_from_env!(System.get_env(), config_env() == :test)
+config :atoll, :relay_crawl_enabled, relay_schedule.enabled
+config :atoll, :relay_crawl_interval_seconds, relay_schedule.interval_seconds
 
 config :atoll, :email_worker, Atoll.Email.Config.parse!(System.get_env())
 

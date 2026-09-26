@@ -15,6 +15,30 @@ defmodule Atoll.Relays do
 
   def from_env!(_), do: invalid!()
 
+  def schedule_from_env!(env, test? \\ false) do
+    enabled =
+      case Map.get(env, "ATOLL_RELAY_CRAWL_ENABLED", "false") do
+        "true" -> true
+        "false" -> false
+        _ -> raise ArgumentError, "ATOLL_RELAY_CRAWL_ENABLED must be true or false"
+      end
+
+    interval =
+      case Integer.parse(Map.get(env, "ATOLL_RELAY_CRAWL_INTERVAL_SECONDS", "900")) do
+        {seconds, ""} when seconds in 300..86_400 ->
+          seconds
+
+        _ ->
+          raise ArgumentError,
+                "ATOLL_RELAY_CRAWL_INTERVAL_SECONDS must be an integer from 300 to 86400"
+      end
+
+    if enabled and from_env!(env["ATOLL_RELAY_URLS"]) == [],
+      do: raise(ArgumentError, "ATOLL_RELAY_CRAWL_ENABLED requires ATOLL_RELAY_URLS")
+
+    %{enabled: enabled and not test?, interval_seconds: interval}
+  end
+
   def request_crawl(opts \\ []) do
     urls = Application.get_env(:atoll, :relay_urls, [])
     hostname = Keyword.get_lazy(opts, :hostname, fn -> hostname(AtollWeb.Endpoint.url()) end)
