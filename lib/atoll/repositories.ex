@@ -13,7 +13,7 @@ defmodule Atoll.Repositories do
   """
   import Ecto.Query
   alias Atoll.{CAR, CBOR, CID, Commit, DataModel, MST, Repo, SigningKey, Storage, Syntax, TID}
-  alias Atoll.Repositories.{Head, Record, Snapshot}
+  alias Atoll.Repositories.{Head, Record, Revision, Snapshot}
 
   @doc "Creates a repository and encrypted signing key atomically. Requires the key vault master key."
   def create_managed(did, curve \\ :k256) when curve in [:p256, :k256] do
@@ -70,9 +70,13 @@ defmodule Atoll.Repositories do
             |> Enum.chunk_every(1000)
             |> Enum.each(&Repo.insert_all(Record, &1))
 
-            head
-            |> Ecto.Changeset.change(head: snapshot.head, rev: snapshot.rev)
-            |> Repo.update!()
+            updated =
+              head
+              |> Ecto.Changeset.change(head: snapshot.head, rev: snapshot.rev)
+              |> Repo.update!()
+
+            remember_revision!(updated, Map.keys(snapshot.blocks))
+            updated
         end
       end)
     end
@@ -91,8 +95,13 @@ defmodule Atoll.Repositories do
         head = %{did: did, head: commit.cid, rev: rev, public_key: key.public, curve: key.curve}
 
         case Repo.insert_all(Head, [head], on_conflict: :nothing, conflict_target: [:did]) do
-          {1, _} -> Repo.get!(Head, did)
-          {0, _} -> Repo.rollback(:already_exists)
+          {1, _} ->
+            saved = Repo.get!(Head, did)
+            remember_revision!(saved, Map.keys(tree.blocks))
+            saved
+
+          {0, _} ->
+            Repo.rollback(:already_exists)
         end
       end)
     else
@@ -115,7 +124,9 @@ defmodule Atoll.Repositories do
         {:ok, rev} = TID.next(head.rev)
         commit = persist_commit!(did, tree, rev, key)
         Enum.each(prepared, &persist_record!(did, &1))
-        head |> Ecto.Changeset.change(head: commit.cid, rev: rev) |> Repo.update!()
+        updated_head = head |> Ecto.Changeset.change(head: commit.cid, rev: rev) |> Repo.update!()
+        remember_revision!(updated_head, Map.keys(tree.blocks) ++ Map.values(tree.records))
+        updated_head
       end)
     end
   end
@@ -281,14 +292,28 @@ defmodule Atoll.Repositories do
     end
   end
 
-  @doc "Exports a consistent snapshot, holding a shared head lock until the CAR is assembled."
-  def export(did) do
+  @doc """
+  Exports a consistent snapshot or the current blocks absent from a retained revision.
+  Unknown revisions fall back to a full export. The current commit is always included.
+  Deleted records are not sent; the new MST proves the current state. Revision block
+  sets are retained indefinitely for now; compaction and streaming are pending.
+  """
+  def export(did, since \\ nil) do
     Repo.transaction(fn ->
+      unless is_nil(since) or TID.valid?(since), do: Repo.rollback(:invalid_request)
       {head, tree, commit} = snapshot!(did)
 
+      known =
+        case since && Repo.get_by(Revision, did: did, rev: since) do
+          %Revision{blocks: blocks} -> MapSet.new(blocks)
+          _ -> MapSet.new()
+        end
+
+      tree_blocks = Map.reject(tree.blocks, fn {cid, _} -> MapSet.member?(known, cid) end)
+
       blocks =
-        Enum.reduce(Map.values(tree.records), tree.blocks, fn cid, acc ->
-          Map.put(acc, cid, block!(cid))
+        Enum.reduce(Map.values(tree.records), tree_blocks, fn cid, acc ->
+          if MapSet.member?(known, cid), do: acc, else: Map.put(acc, cid, block!(cid))
         end)
 
       archive!([head.head], Map.put(blocks, head.head, commit))
@@ -363,6 +388,15 @@ defmodule Atoll.Repositories do
       {:ok, archive} -> archive
       {:error, reason} -> Repo.rollback(reason)
     end
+  end
+
+  defp remember_revision!(head, cids) do
+    Repo.insert!(%Revision{
+      did: head.did,
+      rev: head.rev,
+      head: head.head,
+      blocks: Enum.uniq([head.head | cids])
+    })
   end
 
   defp locked_head!(did, lock, require_active \\ true) do

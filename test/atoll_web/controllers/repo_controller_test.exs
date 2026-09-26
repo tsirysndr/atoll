@@ -111,11 +111,11 @@ defmodule AtollWeb.RepoControllerTest do
     assert Enum.all?(tree.records, fn {_, cid} -> Map.has_key?(blocks, cid) end)
   end
 
-  test "export errors are JSON, including unsupported diffs", %{conn: conn} do
+  test "export errors are JSON, including malformed revisions", %{conn: conn} do
     assert %{"error" => "RepoNotFound"} =
              conn |> get(@export, %{did: "did:plc:missing"}) |> json_response(400)
 
-    for params <- [%{}, %{did: [@did]}, %{did: @did, since: "2222222222222"}] do
+    for params <- [%{}, %{did: [@did]}, %{did: @did, since: "bad"}] do
       assert %{"error" => "InvalidRequest"} = conn |> get(@export, params) |> json_response(400)
     end
   end

@@ -1,6 +1,6 @@
 defmodule AtollWeb.RepoController do
   use AtollWeb, :controller
-  alias Atoll.{CID, Repositories, Syntax}
+  alias Atoll.{CID, Repositories, Syntax, TID}
   action_fallback AtollWeb.XRPCFallback
 
   def describe(conn, params) do
@@ -49,9 +49,8 @@ defmodule AtollWeb.RepoController do
 
   def get_repo(conn, params) do
     with true <- Syntax.did?(params["did"]),
-         # Diff exports are not available yet; never silently ignore `since`.
-         true <- is_nil(params["since"]),
-         {:ok, archive} <- Repositories.export(params["did"]) do
+         true <- is_nil(params["since"]) or TID.valid?(params["since"]),
+         {:ok, archive} <- Repositories.export(params["did"], params["since"]) do
       conn |> put_resp_content_type("application/vnd.ipld.car", nil) |> send_resp(200, archive)
     else
       false -> {:error, :invalid_request}
