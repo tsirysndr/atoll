@@ -155,7 +155,8 @@ record Lexicons or grant access to account data.
 - [x] Operator reconciliation of pending PLC operations explicitly nullified in verified directory history.
 - [x] Operator reconciliation of ordinary pending PLC operations retained in active history after compatible directory advancement.
 - [x] Operator completion of retained authority-key rotations after compatible directory advancement, without resubmission.
-- [ ] Recovery/repository-key conflict resolution after directory advancement, and resolution of pending operations absent from history.
+- [x] Operator completion of repository signing-key rotations after compatible directory advancement, with atomic commit and custody publication.
+- [ ] Recovery or incompatible-identity conflict resolution after directory advancement, and resolution of pending operations absent from history.
 - [x] Per-revision signing-key provenance for historical record and block verification.
 - [x] Internal atomic repository signing-key replacement with unchanged-tree commits and vault rollback.
 - [x] PostgreSQL repository heads and atomic record, tree, and commit updates with optional head compare-and-swap.
@@ -3523,6 +3524,29 @@ mix atoll.keys.rotate_plc stage did:plc:ACCOUNT CURRENT_PUBLIC_DID_KEY p256
 mix atoll.keys.rotate_plc status did:plc:ACCOUNT
 mix atoll.keys.rotate_plc resume did:plc:ACCOUNT STAGED_OPERATION_CID
 ```
+
+For an accepted rotation whose directory head advanced before local completion:
+
+```sh
+mix atoll.keys.rotate_plc reconcile did:plc:ACCOUNT STAGED_OPERATION_CID EXPECTED_DIRECTORY_HEAD_CID
+```
+
+`reconcile` fetches fresh verified history and requires the exact reviewed head,
+with the staged operation still in the active chain. The current identity must
+advertise the staged replacement repository key, the same handle and local PDS
+endpoint, and the staged authority list in the same order. Unrelated service
+changes are allowed. It verifies forward handle ownership and rechecks local
+profile, observation, current key, and readable custody under account locks.
+Recovery and combined key workflows remain separate.
+
+No directory POST occurs. Local completion uses the same repository transition as
+`resume`: records remain unchanged, a new commit is signed by the retained key,
+and identity then sync events are emitted. Confirmation, commit, key installation,
+journal completion, pending-envelope erasure, observation, and an
+`atoll.keys.reconcilePlc` audit all commit together. The audit includes the accepted
+operation CID and observed current directory head. Quota or other publication
+failures roll the whole transition back, preserving pending custody for retry.
+Compatible completed retries do not create another commit, event, or audit.
 
 `stage` accepts `k256` or `p256`, checks fresh verified directory history against
 the expected local public key, PDS service and handle, verifies the forward

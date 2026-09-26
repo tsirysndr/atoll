@@ -276,6 +276,136 @@ defmodule Atoll.PLCKeyRotationTest do
     assert {:ok, _} = KeyRotation.resume(c.did, cid, c.opts)
   end
 
+  test "reconciliation rotates the repository after compatible advancement exactly once", c do
+    {:ok, _} =
+      Repositories.apply_writes(
+        c.did,
+        [
+          {:put, "com.example.record/one",
+           %{"$type" => "com.example.record", "text" => "retained"}}
+        ],
+        c.old
+      )
+
+    {:ok, record} = Repositories.get_record(c.did, "com.example.record/one")
+    {:ok, prior_head} = Repositories.get_head(c.did)
+    {:ok, %{cid: cid}} = KeyRotation.stage(c.did, c.expected, :p256, c.opts)
+    row = Repo.get_by!(Update, did: c.did, cid: cid)
+    {:ok, key} = PendingSigningKeys.fetch(c.did, cid)
+
+    expected =
+      advance(
+        c,
+        row,
+        &put_in(&1, ["services", "extra"], %{
+          "type" => "ExampleService",
+          "endpoint" => "https://extra.example.com"
+        })
+      )
+
+    seq = Events.latest_seq()
+    assert {:ok, %{result: :completed}} = KeyRotation.reconcile(c.did, cid, expected, c.opts)
+    assert KeyVault.fetch(c.did) == {:ok, key}
+    assert Repositories.get_record(c.did, "com.example.record/one") == {:ok, record}
+    {:ok, head} = Repositories.get_head(c.did)
+    refute head.head == prior_head.head
+    assert head.status == prior_head.status
+    {:ok, bytes} = Atoll.Storage.get_block(head.head)
+    assert {:ok, _} = Atoll.Commit.verify(bytes, c.did, key.curve, key.public)
+    assert {:ok, [%{kind: :identity}, %{kind: :sync}]} = Events.list_after(seq)
+    assert {:error, :key_not_found} = PendingSigningKeys.fetch(c.did, cid)
+    audit = Repo.one!(Atoll.Moderation.AuditEntry)
+    assert audit.operation == "atoll.keys.reconcilePlc"
+    assert audit.requested["operationCid"] == cid
+    assert audit.requested["observedHead"] == expected
+    seq = Events.latest_seq()
+    assert {:ok, _} = KeyRotation.reconcile(c.did, cid, expected, c.opts)
+    assert Events.latest_seq() == seq
+    assert Repositories.get_head(c.did) == {:ok, head}
+    assert Repo.aggregate(Atoll.Moderation.AuditEntry, :count) == 1
+    assert Agent.get(c.directory, & &1.posts) == 0
+  end
+
+  test "failed reconciliation publication rolls back confirmation, custody and events", c do
+    {:ok, %{cid: cid}} = KeyRotation.stage(c.did, c.expected, :p256, c.opts)
+    row = Repo.get_by!(Update, did: c.did, cid: cid)
+    {:ok, key} = PendingSigningKeys.fetch(c.did, cid)
+    expected = advance(c, row, & &1)
+    {:ok, _} = Repositories.set_status(c.did, :deactivated)
+    seq = Events.latest_seq()
+    Application.put_env(:atoll, :repository_quota, max_bytes: 0)
+
+    assert {:error, :repository_quota_exceeded} =
+             KeyRotation.reconcile(c.did, cid, expected, c.opts)
+
+    assert Events.latest_seq() == seq
+    assert KeyVault.fetch(c.did) == {:ok, c.old}
+    assert PendingSigningKeys.fetch(c.did, cid) == {:ok, key}
+    assert is_nil(Repo.get_by!(Update, did: c.did, cid: cid).confirmed_at)
+    assert is_nil(Repo.get_by!(Update, did: c.did, cid: cid).completed_at)
+    assert Repo.aggregate(Atoll.Moderation.AuditEntry, :count) == 0
+    Application.delete_env(:atoll, :repository_quota)
+    assert {:ok, _} = KeyRotation.reconcile(c.did, cid, expected, c.opts)
+    assert {:ok, %{status: :deactivated}} = Repositories.get_head(c.did)
+    assert Agent.get(c.directory, & &1.posts) == 0
+  end
+
+  test "stale heads and changed remote identity cannot install a retained signing key", c do
+    {:ok, %{cid: cid}} = KeyRotation.stage(c.did, c.expected, :p256, c.opts)
+    row = Repo.get_by!(Update, did: c.did, cid: cid)
+    {:ok, key} = PendingSigningKeys.fetch(c.did, cid)
+    base = Agent.get(c.directory, & &1)
+    {:ok, other} = Multikey.to_did_key(:k256, SigningKey.generate().public)
+
+    for change <- [
+          &put_in(&1, ["verificationMethods", "atproto"], other),
+          &Map.put(&1, "alsoKnownAs", ["at://other.example.com"]),
+          &put_in(&1, ["services", "atproto_pds", "endpoint"], "https://other.example.com"),
+          &Map.put(&1, "rotationKeys", [other])
+        ] do
+      Agent.update(c.directory, fn _ -> base end)
+      expected = advance(c, row, change)
+      assert {:error, _} = KeyRotation.reconcile(c.did, cid, expected, c.opts)
+      assert {:error, :plc_conflict} = KeyRotation.reconcile(c.did, cid, cid, c.opts)
+      assert KeyVault.fetch(c.did) == {:ok, c.old}
+      assert PendingSigningKeys.fetch(c.did, cid) == {:ok, key}
+    end
+
+    assert is_nil(Repo.get_by!(Update, did: c.did, cid: cid).confirmed_at)
+    assert Agent.get(c.directory, & &1.posts) == 0
+  end
+
+  defp advance(c, row, change) do
+    {:ok, unsigned} = Operation.successor(row.operation)
+    {:ok, advanced} = Operation.sign(change.(unsigned), c.rotation)
+    {:ok, expected} = Operation.cid(advanced)
+
+    entry = fn operation, cid, date ->
+      %{
+        "did" => c.did,
+        "operation" => operation,
+        "cid" => cid,
+        "nullified" => false,
+        "createdAt" => date
+      }
+    end
+
+    Agent.update(c.directory, fn state ->
+      %{
+        state
+        | audit:
+            state.audit ++
+              [
+                entry.(row.operation, row.cid, "2026-01-02T00:00:00Z"),
+                entry.(advanced, expected, "2026-01-03T00:00:00Z")
+              ],
+          last: advanced
+      }
+    end)
+
+    expected
+  end
+
   test "operator CLI stages and resumes using public metadata only", c do
     Application.put_env(:atoll, :identity_resolution_options, Keyword.drop(c.opts, [:plug]))
     Application.put_env(:atoll, :plc_submission_options, Keyword.take(c.opts, [:plug]))

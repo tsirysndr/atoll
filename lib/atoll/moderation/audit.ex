@@ -35,7 +35,8 @@ defmodule Atoll.Moderation.Audit do
         after_head,
         expected,
         result,
-        operation \\ "atoll.keys.rotateWeb"
+        operation \\ "atoll.keys.rotateWeb",
+        evidence \\ %{}
       ) do
     state = fn head ->
       {:ok, key} = Atoll.Multikey.to_did_key(head.curve, head.public_key)
@@ -46,7 +47,10 @@ defmodule Atoll.Moderation.Audit do
       operation,
       before_head.did,
       %{kind: "repositorySigningKey", did: before_head.did},
-      %{expectedKey: expected, result: Atom.to_string(result)},
+      Map.merge(
+        %{expectedKey: expected, result: Atom.to_string(result)},
+        Map.take(evidence, [:operationCid, :observedHead])
+      ),
       state.(before_head),
       state.(after_head),
       "operator"
