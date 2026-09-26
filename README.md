@@ -25,8 +25,8 @@ Checked items are implemented in this repository. Unchecked items are remaining 
 - [x] Lexicon-based parameter validation for all routed XRPC GET endpoints.
 - [x] JSON procedure envelope validation against pinned upstream Lexicons.
 - [x] Bounded Lexicon-based subscription parameter validation with protocol error frames.
-- [x] Required, optimistic, and skipped record validation for built-in follow, block, like, repost, post, and profile Lexicons.
-- [ ] Broader record Lexicon coverage and authenticated Lexicon discovery/resolution.
+- [x] Required, optimistic, and skipped record validation for all 19 Bluesky record Lexicons in the pinned upstream revision.
+- [ ] Custom record Lexicons and authenticated Lexicon discovery/resolution.
 
 XRPC routing uses the [HTTP API specification](https://atproto.com/specs/xrpc).
 Malformed paths return `400 InvalidRequest`; valid but unimplemented method NSIDs
@@ -140,7 +140,7 @@ record Lexicons or grant access to account data.
 - [x] Authenticated `createRecord`, `putRecord`, and `deleteRecord`, with atomic commit/record compare-and-swap.
 - [x] Authenticated atomic `applyWrites` batches with ordered results and commit compare-and-swap.
 - [x] DID or bidirectionally verified handle addressing for single and batch record writes.
-- [ ] Broader record Lexicon coverage and resolution (six built-in record schemas supported).
+- [ ] Custom record Lexicon loading and resolution (19 pinned Bluesky record schemas supported).
 - [x] `com.atproto.repo.describeRepo` with resolved DID document, current collections, and bidirectional handle status.
 - [x] In-memory CARv1 encoding and decoding with block verification and resource limits.
 - [x] Consistent repository CAR export through the internal storage API.
@@ -185,10 +185,12 @@ The three record validation modes are:
 - `true`: require a known schema and a matching record.
 - `false`: skip record schema validation.
 
-Built-in, pinned schemas currently cover `app.bsky.graph.follow`,
-`app.bsky.graph.block`, `app.bsky.feed.like`, `app.bsky.feed.repost`,
-`app.bsky.feed.post`, and `app.bsky.actor.profile`, with their reachable input
-references. Validation checks required fields, identifier/datetime/URI/language
+Built-in schemas cover all 19 `app.bsky.*` record definitions at the upstream
+revision recorded in `priv/lexicons/README.md`, with their reachable input
+references. This includes posts, profiles, follows/blocks/likes/reposts, feed
+generators, post/thread gates, lists and list membership/blocks/opt-outs, starter
+packs, verifications, labeler services, account status, and visibility/notification
+declarations. Validation checks required fields, identifier/datetime/URI/language
 formats, byte and grapheme limits, arrays, and record keys (TIDs or profile `self`).
 Post dependencies include facets, replies, images, video/captions, galleries,
 external links, quoted records, and self-labels. Open unions accept future
@@ -196,8 +198,10 @@ well-formed variant tags; known variants still require matching fields. Successf
 return `validationStatus: "valid"`; skipped or unknown schemas return `"unknown"`.
 Schema mismatch or unavailable required validation returns `400 InvalidRequest`.
 Unknown extension fields are retained. The validator does not fetch schemas from
-the network; other record collections remain unknown until additional schema
-support is implemented. Internal low-level repository APIs and
+the network; custom record collections remain unknown until additional schema
+support is implemented. The compiled catalog refreshes when schema files are
+added, removed, or edited. Output schemas and application semantics (such as
+verification trust or gate/post ownership relationships) are not validated here. Internal low-level repository APIs and
 CAR imports continue to enforce data integrity without applying this write-API
 Lexicon policy.
 

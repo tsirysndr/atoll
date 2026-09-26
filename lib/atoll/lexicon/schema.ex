@@ -2,12 +2,21 @@ defmodule Atoll.Lexicon.Schema do
   @moduledoc "Shared validator for pinned procedure envelopes and supported record Lexicons."
   alias Atoll.{CID, Syntax, TID}
 
-  @files Path.wildcard(Path.expand("../../../priv/lexicons/*.json", __DIR__))
+  @glob Path.expand("../../../priv/lexicons/*.json", __DIR__)
+  @files Path.wildcard(@glob)
   for file <- @files, do: @external_resource(file)
 
   @documents @files
              |> Enum.map(fn file -> file |> File.read!() |> Jason.decode!() end)
              |> Map.new(&{&1["id"], &1})
+
+  @doc false
+  def __mix_recompile__?, do: Path.wildcard(@glob) != @files
+
+  @doc "Built-in record collection NSIDs at this pinned schema revision."
+  def record_collections do
+    for {nsid, doc} <- @documents, get_in(doc, ["defs", "main", "type"]) == "record", do: nsid
+  end
 
   def methods do
     for {nsid, doc} <- @documents, get_in(doc, ["defs", "main", "type"]) == "procedure", do: nsid

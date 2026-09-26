@@ -2,7 +2,8 @@ defmodule Atoll.Lexicon.Query do
   @moduledoc "Bounded XRPC query decoding and validation against vendored query Lexicons."
   alias Atoll.{CID, Syntax, TID}
 
-  @files Path.wildcard(Path.expand("../../../priv/lexicons/*.json", __DIR__))
+  @glob Path.expand("../../../priv/lexicons/*.json", __DIR__)
+  @files Path.wildcard(@glob)
   for file <- @files, do: @external_resource(file)
 
   @schemas @files
@@ -11,6 +12,9 @@ defmodule Atoll.Lexicon.Query do
            |> Map.new(fn doc ->
              {doc["id"], get_in(doc, ["defs", "main", "parameters"]) || %{}}
            end)
+
+  @doc false
+  def __mix_recompile__?, do: Path.wildcard(@glob) != @files
 
   def methods, do: Map.keys(@schemas)
 
