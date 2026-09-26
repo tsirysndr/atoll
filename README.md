@@ -156,6 +156,7 @@ The same `validate: true` restriction applies to batch requests.
 - [x] Authenticated recommended DID credentials for the destination signing key and service.
 - [x] Email-authorized account deletion with credential/key removal, blob cleanup, and a deleted-account event.
 - [x] Internal PLC operation signing, genesis DID derivation, and predecessor signature checks.
+- [x] Internal PLC genesis submission with bounded responses and exact latest-operation confirmation.
 - [ ] Fresh DID signup.
 - [x] Internal DID-scoped password credentials with salted Argon2id hashes, bounded input, redacted inspection, and duplicate protection.
 - [x] Shared configurable Cloudflare Worker email delivery client.
@@ -633,7 +634,7 @@ For migration, `createAccount` requires an existing DID, a bidirectionally verif
 handle, a password, and a one-use service JWT for this PDS and the createAccount
 method. Email is optional. It creates a deactivated account and a new encrypted
 signing key. `getRecommendedDidCredentials` returns that key and this PDS endpoint;
-PLC rotation keys and PLC operation submission remain pending. Before activation,
+Migration PLC rotation keys and authenticated update submission remain pending. Before activation,
 imports may use the source key pinned during provisioning: Atoll verifies the CAR,
 re-signs its tree with the destination key, and tracks source revisions to reject
 rollback. Exact retries are idempotent. After updating the public DID document,
@@ -978,7 +979,27 @@ keys. Legacy operations can be verified but are not generated.
 Tests use the PLC project's pinned interoperability fixtures (with provenance and
 license in `test/fixtures/plc`) to check exact DIDs, CIDs, signatures, and malformed
 signature rejection. These primitives do not validate recovery windows or audit-log
-nullification, and are not yet used for public signup or registry submission.
+nullification, and are not yet used for public signup.
 Persist a signed genesis operation before attempting registration: signing it again
 can produce different bytes and therefore a different DID. Full audit validation,
-registration delivery/reconciliation, and fresh-account provisioning remain pending.
+durable registration delivery/reconciliation, and fresh-account provisioning remain pending.
+
+
+### PLC directory submission
+
+`Atoll.Identity.PLC.Client.submit_genesis/3` validates a supplied signed genesis,
+submits those exact operation fields, then fetches `/log/last` to confirm the
+operation CID and genesis signature. A timeout or duplicate-submission error can
+still succeed if the directory confirms the exact genesis. A different latest
+operation fails closed; successful submission alone never authorizes activation.
+
+Set `ATOLL_PLC_DIRECTORY_URL` to a trusted HTTPS directory origin (default
+`https://plc.directory`), also available as `config :atoll, :plc_directory_url`.
+This setting currently affects submission only; DID resolution still uses the
+public directory. Redirects and automatic retries are disabled. Each request has
+a 10-second overall deadline and a 64 KiB response limit; compressed log responses
+are rejected. No directory requests run at startup. Tests use a mock transport.
+
+The caller must persist and reuse the signed genesis before calling this client.
+It does not store operations, reserve handles, schedule retries, or create accounts.
+A registration ledger and signup integration remain pending.
