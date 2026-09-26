@@ -18,7 +18,7 @@ defmodule Atoll.Identity.Updates do
     with {:ok, _} <- Repositories.get_head(did) do
       prior = Repo.get(Observation, did)
 
-      with {:ok, identity} <- Resolver.resolve(did, opts) do
+      with {:ok, identity} <- Resolver.resolve(did, Keyword.put(opts, :force_refresh, true)) do
         handle =
           if is_binary(identity.claimed_handle) and
                Handle.resolve(identity.claimed_handle, opts) == {:ok, did},

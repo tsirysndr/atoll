@@ -18,7 +18,8 @@ defmodule Atoll.Accounts.Lifecycle do
     opts = Application.get_env(:atoll, :identity_resolution_options, [])
 
     with {:ok, head} <- Sessions.authenticate_management(token),
-         {:ok, identity} <- Atoll.Identity.Resolver.resolve(head.did, opts) do
+         {:ok, identity} <-
+           Atoll.Identity.Resolver.resolve(head.did, Keyword.put(opts, :force_refresh, true)) do
       transition(token, head.did, :active, identity)
     else
       {:error, {:repo_inactive, _}} = error ->

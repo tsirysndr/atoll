@@ -4,7 +4,8 @@ defmodule Atoll.Identity.Resolver do
 
   Uses public IPv4 destinations only, pins the checked address, rejects redirects,
   and limits response bytes. PLC resolution trusts the directory's HTTPS response;
-  operation-log validation, caching, IPv6, and development localhost are pending.
+  operation-log validation, IPv6, and development localhost are pending. Routine
+  lookups use a bounded positive cache; force_refresh bypasses and replaces it.
   Options provide trusted transport/DNS injection for tests, never request input.
   """
   alias Atoll.{Syntax, Identity.Document}
@@ -19,8 +20,36 @@ defmodule Atoll.Identity.Resolver do
 
   @doc "Resolves a DID document without requiring a PDS service; useful for service identities."
   def resolve_document(did, opts \\ []) do
-    with {:ok, url} <- resolution_url(did),
-         {:ok, body} <- fetch(url, opts),
+    with {:ok, url} <- resolution_url(did) do
+      loader = fn -> load_document(did, url, opts) end
+
+      case cache_server(opts) do
+        false ->
+          loader.()
+
+        server ->
+          Atoll.Identity.Cache.fetch(
+            server,
+            did,
+            Keyword.get(opts, :force_refresh, false),
+            loader
+          )
+      end
+    end
+  end
+
+  defp cache_server(opts) do
+    # Custom transports/DNS are isolated unless a caller explicitly supplies a cache.
+    default =
+      if Keyword.has_key?(opts, :request) or Keyword.has_key?(opts, :lookup),
+        do: false,
+        else: Atoll.Identity.Cache
+
+    Keyword.get(opts, :cache, default)
+  end
+
+  defp load_document(did, url, opts) do
+    with {:ok, body} <- fetch(url, opts),
          {:ok, doc} <- Jason.decode(body),
          %{"id" => ^did} <- doc do
       {:ok, doc}

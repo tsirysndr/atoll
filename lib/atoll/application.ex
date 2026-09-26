@@ -11,6 +11,9 @@ defmodule Atoll.Application do
       AtollWeb.Telemetry,
       Atoll.Repo,
       Atoll.Accounts.SessionLimiter,
+      {Atoll.Identity.Cache,
+       name: Atoll.Identity.Cache,
+       ttl_ms: Application.get_env(:atoll, :did_cache_ttl_seconds, 60) * 1000},
       {DNSCluster, query: Application.get_env(:atoll, :dns_cluster_query) || :ignore},
       {Phoenix.PubSub, name: Atoll.PubSub},
       # Start to serve requests, typically the last entry

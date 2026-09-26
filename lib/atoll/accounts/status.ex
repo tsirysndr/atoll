@@ -10,7 +10,9 @@ defmodule Atoll.Accounts.Status do
   def get(token) do
     with {:ok, prior} <- Sessions.authenticate_status(token) do
       opts = Application.get_env(:atoll, :identity_resolution_options, [])
-      identity = Atoll.Identity.Resolver.resolve(prior.did, opts)
+
+      identity =
+        Atoll.Identity.Resolver.resolve(prior.did, Keyword.put(opts, :force_refresh, true))
 
       # Resolve remotely before taking inventory locks, then recheck the live session.
       Repo.transaction(fn ->

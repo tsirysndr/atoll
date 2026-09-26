@@ -1,5 +1,10 @@
 import Config
 
+case Integer.parse(System.get_env("ATOLL_DID_CACHE_TTL_SECONDS", "60")) do
+  {ttl, ""} when ttl in 0..300 -> config :atoll, :did_cache_ttl_seconds, ttl
+  _ -> raise "ATOLL_DID_CACHE_TTL_SECONDS must be an integer from 0 to 300"
+end
+
 case System.get_env("ATOLL_SIGNUP_ENABLED", "false") do
   "true" -> config :atoll, :signup_enabled, true
   "false" -> config :atoll, :signup_enabled, false

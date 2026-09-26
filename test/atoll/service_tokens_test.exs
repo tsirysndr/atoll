@@ -65,6 +65,25 @@ defmodule Atoll.Accounts.ServiceTokensTest do
     refute Repo.exists?(ServiceTokenUse)
   end
 
+  test "service authorization refreshes a cached signing key before accepting a token" do
+    cache = start_supervised!({Atoll.Identity.Cache, []})
+    {old_key, claims, old_opts} = fixture(:k256)
+    old_opts = Keyword.put(old_opts, :cache, cache)
+    assert {:ok, old_doc} = Atoll.Identity.Resolver.resolve_document(@did, old_opts)
+    {new_key, _, new_opts} = fixture(:k256)
+    new_opts = Keyword.merge(new_opts, cache: cache, force_refresh: false)
+    # A routine lookup still sees the old key, proving the cache is populated.
+    assert {:ok, ^old_doc} = Atoll.Identity.Resolver.resolve_document(@did, new_opts)
+
+    assert {:error, :invalid_service_token} =
+             ServiceTokens.authenticate(token(old_key, claims), @aud, @method, new_opts)
+
+    refute Repo.exists?(ServiceTokenUse)
+
+    assert {:ok, ^claims} =
+             ServiceTokens.authenticate(token(new_key, claims), @aud, @method, new_opts)
+  end
+
   test "rejects malformed encoding and duplicate JSON claims before resolution" do
     {key, claims, opts} = fixture(:k256)
 

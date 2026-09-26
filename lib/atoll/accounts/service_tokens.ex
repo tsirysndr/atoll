@@ -18,7 +18,8 @@ defmodule Atoll.Accounts.ServiceTokens do
     with true <- is_binary(audience) and Syntax.nsid?(method),
          {:ok, header, claims, input, signature} <- decode(token),
          :ok <- claims_valid(claims, audience, method, now),
-         {:ok, doc} <- Resolver.resolve_document(claims["iss"], opts),
+         {:ok, doc} <-
+           Resolver.resolve_document(claims["iss"], Keyword.put(opts, :force_refresh, true)),
          {:ok, key} <- Document.account_key(doc, claims["iss"]),
          true <- header["alg"] == algorithm(key.curve),
          true <- SigningKey.verify(key.curve, key.public, input, signature),

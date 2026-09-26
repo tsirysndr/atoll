@@ -145,7 +145,8 @@ The same `validate: true` restriction applies to batch requests.
 - [x] Modern DID-document parsing for expected identity, signing key, HTTPS PDS endpoint, and unverified handle claim.
 - [x] Internal HTTPS resolution for `did:plc` and hostname-level `did:web`, with expected-document identity checks.
 - [x] Resolver public-IPv4 address pinning, TLS hostname verification, timeouts, redirect rejection, and 256 KiB response limit.
-- [ ] DID resolution caching, IPv6 and localhost development support, and independent PLC operation-log verification (currently trusts `plc.directory` over HTTPS).
+- [x] Bounded node-local positive DID resolution caching with forced refresh for authorization and identity changes.
+- [ ] IPv6 and localhost development resolution support, and independent PLC operation-log verification (currently trusts `plc.directory` over HTTPS).
 - [x] DNS TXT handle resolution with HTTPS fallback, normalization, ambiguity checks, and reserved-domain rejection.
 - [x] Internal bidirectional handle verification against the resolved DID document.
 - [x] Public `com.atproto.identity.resolveHandle` forward lookup (does not assert bidirectional verification).
@@ -1071,3 +1072,29 @@ was lost. Failed session creation leaves the confirmed reservation deactivated a
 resumable. Pending reservations are retained indefinitely; automated cleanup and
 background retries remain pending. No configuration in this change enables signup
 on the running deployment or submits live registrations.
+
+
+### DID resolution cache
+
+Routine DID resolution caches successful, identity-matched documents on each node
+for 60 seconds. Set `ATOLL_DID_CACHE_TTL_SECONDS` between 0 and 300; zero disables
+storage. The supervised cache holds at most 256 entries, including in-flight
+placeholders, and 8 MiB of serialized document payloads. Older entries are evicted
+when either budget is exceeded. These payload limits exclude normal process/map
+metadata. Expiry uses monotonic time and is checked on access; errors are not
+cached and expired documents are never served as a fallback.
+
+Service-JWT verification (including migration authorization), account activation,
+account status checks, and identity refreshes force an authoritative network lookup.
+Forced refresh removes the old cached result even if the request fails. Per-fetch
+tokens prevent an earlier request from overwriting a later refresh. Network work
+runs in the calling process outside the cache server. Cache restarts or failures
+fall back to the resolver; simultaneous misses are not coalesced.
+
+Trusted internal callers can pass `force_refresh: true` or `cache: false`. Custom
+transport/DNS options bypass shared caching unless an explicit cache is supplied,
+keeping test and alternate resolver data isolated. Each account-resolution call
+still parses the document's signing key, PDS endpoint and handle; handle forward
+lookups remain uncached. Multi-node cache invalidation and PLC log verification
+remain pending. Existing SSRF checks, pinned addresses and response limits apply
+on every network lookup.
