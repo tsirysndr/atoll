@@ -64,7 +64,9 @@ record Lexicons or grant access to account data.
 
 - [x] Merkle Search Tree construction, lookup, insertion, and deletion (rebuilds on mutation).
 - [x] Deterministic MST serialization and reference root CID compatibility tests.
-- [ ] Repository signing keys, commit signing, and signature verification.
+- [x] P-256 and secp256k1 in-memory key generation, compact low-S signing, and signature verification.
+- [x] Version-3 commit signing and verification with expected-DID and schema checks.
+- [ ] Persistent repository signing keys and secure key lifecycle management.
 - [ ] Repository heads and atomic record, tree, and commit updates.
 - [ ] Record reads and listing (`getRecord`, `listRecords`).
 - [ ] Record writes and deletion (`createRecord`, `putRecord`, `deleteRecord`, `applyWrites`).
