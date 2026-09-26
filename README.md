@@ -158,7 +158,9 @@ The same `validate: true` restriction applies to batch requests.
 - [x] Internal PLC operation signing, genesis DID derivation, and predecessor signature checks.
 - [x] Internal PLC genesis submission with bounded responses and exact latest-operation confirmation.
 - [x] Durable genesis registration journal and encrypted PLC rotation-key retention.
-- [ ] Fresh DID signup.
+- [x] Opt-in fresh PLC DID signup under configured server domains, including durable retries and optional recovery keys.
+- [x] Hosted handle resolution through `/.well-known/atproto-did`.
+- [ ] Custom-domain signup, invite/phone verification policies, and abandoned signup reservation cleanup.
 - [x] Internal DID-scoped password credentials with salted Argon2id hashes, bounded input, redacted inspection, and duplicate protection.
 - [x] Shared configurable Cloudflare Worker email delivery client.
 - [x] Email confirmation requests and one-use confirmation through the Worker.
@@ -182,8 +184,8 @@ The same `validate: true` restriction applies to batch requests.
 a password to an existing repository DID. It never replaces an existing credential.
 `verify/2` returns only the DID on success, and the same `:invalid_credentials`
 error for missing credentials and incorrect passwords. It proves password possession;
-callers must separately check account status and authorization. Public signup is
-not implemented for new DIDs; existing DIDs can provision migration accounts through `createAccount`.
+callers must separately check account status and authorization. `createAccount` supports
+opt-in fresh PLC signup and service-authorized migration of existing DIDs.
 
 Passwords must be valid UTF-8, 8–1024 bytes, with no trimming or normalization.
 Hashes use [argon2_elixir](https://argon2-elixir.hexdocs.pm/Argon2.html) Argon2id
@@ -980,10 +982,10 @@ keys. Legacy operations can be verified but are not generated.
 Tests use the PLC project's pinned interoperability fixtures (with provenance and
 license in `test/fixtures/plc`) to check exact DIDs, CIDs, signatures, and malformed
 signature rejection. These primitives do not validate recovery windows or audit-log
-nullification, and are not yet used for public signup.
+nullification. Fresh signup uses the genesis primitives.
 Persist a signed genesis operation before attempting registration: signing it again
-can produce different bytes and therefore a different DID. Full audit validation,
-automatic registration retries and fresh-account provisioning remain pending.
+can produce different bytes and therefore a different DID. Full audit validation
+and automatic background registration retries remain pending.
 
 
 ### PLC directory submission
@@ -1004,7 +1006,7 @@ are rejected. No directory requests run at startup. Tests use a mock transport.
 The caller must persist and reuse the signed genesis before calling this client.
 It does not store operations, reserve handles, schedule retries, or create accounts.
 `Atoll.Identity.PLC.Registrations` supplies the internal durable journal described
-below. Public signup integration and automatic retries remain pending.
+below. Fresh signup uses this journal; automatic background retries remain pending.
 
 
 ### Durable PLC registration journal
@@ -1029,6 +1031,43 @@ never activates an account or issues sessions, and is historical acceptance evid
 not a substitute for checking current identity state. Account deletion cascades to
 the local journal and encrypted rotation key; it does not tombstone the public DID.
 
-These APIs are internal and do not authorize callers. No registration scheduler or
-public fresh-signup route invokes them yet. No live PLC registrations are performed
-by the tests, migrations, or startup.
+These APIs are internal and do not authorize callers. Fresh signup invokes them after
+validating account input and authenticating retries. No registration scheduler runs.
+No live PLC registrations are performed by tests, migrations, or startup.
+
+
+### Fresh account signup
+
+Set `ATOLL_SIGNUP_ENABLED=true` to allow `com.atproto.server.createAccount` without
+an existing DID or service token. It defaults to false. Configure a public HTTPS
+PDS endpoint, the vault and session signing keys, and `ATOLL_AVAILABLE_USER_DOMAINS`
+(for example `.users.example.com`). Route wildcard DNS and HTTPS for those user
+hosts to Atoll; Atoll does not provision DNS or certificates. Handles must be one
+label beneath an advertised domain. `GET /.well-known/atproto-did` serves completed
+accounts by the actual request host, ignoring forwarded-host headers. Disabling
+signup does not disable resolution of existing handles.
+
+Supply `handle` and `password`, optionally `email` and a valid secp256k1 or P-256
+`recoveryKey` DID key. Handles and emails are normalized. The recovery key precedes
+the server's independently generated PLC rotation key in priority. Invite codes,
+phone verification, custom-domain signup, and caller-supplied PLC operations are
+not supported by this fresh-signup path; existing-DID migration still requires its
+service JWT. Email confirmation uses the existing Worker-backed request endpoint.
+
+Signup atomically reserves the profile, password, deactivated repository, encrypted
+keys and signed genesis before contacting the directory. No login or hosted handle
+resolution is available while registration is pending. After exact directory
+confirmation, activation, completion and the initial session commit together.
+The response contains the DID, handle, access JWT and refresh JWT. Requests retain
+the existing 4 KiB body limit, no-store responses and 20-attempt direct-IP login
+bucket per five minutes.
+
+On a directory error, retry the same handle, password, email and recovery key.
+The pending account and original signed operation are reused; changed passwords
+or reservation details cannot take over a pending account. A concurrent password
+reset invalidates an in-flight signup proof. Once signup is complete, further
+create requests return an account-exists error; use login if the success response
+was lost. Failed session creation leaves the confirmed reservation deactivated and
+resumable. Pending reservations are retained indefinitely; automated cleanup and
+background retries remain pending. No configuration in this change enables signup
+on the running deployment or submits live registrations.

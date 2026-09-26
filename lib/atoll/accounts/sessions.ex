@@ -52,6 +52,7 @@ defmodule Atoll.Accounts.Sessions do
       Repo.transaction(fn ->
         # Serialize account logins before counting so parallel creates cannot exceed the cap.
         head = active_head!(did, true, true)
+        if Atoll.Accounts.Signup.pending?(did), do: Repo.rollback(:signup_pending)
         # Password verification happens outside locks; reject a proof made stale by recovery.
         if digest = opts[:credential_digest] do
           unless Credentials.current_digest?(did, digest), do: Repo.rollback(:invalid_credentials)

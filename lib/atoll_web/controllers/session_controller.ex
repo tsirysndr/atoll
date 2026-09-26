@@ -67,9 +67,16 @@ defmodule AtollWeb.SessionController do
   end
 
   def create_account(conn, _params) do
-    with {:ok, token} <- bearer(conn),
-         {:ok, account} <- Atoll.Accounts.Provisioning.import_account(token, conn.body_params),
-         do: json(conn, account)
+    result =
+      if Map.has_key?(conn.body_params, "did") do
+        with {:ok, token} <- bearer(conn),
+             do: Atoll.Accounts.Provisioning.import_account(token, conn.body_params)
+      else
+        opts = Application.get_env(:atoll, :plc_submission_options, [])
+        Atoll.Accounts.Signup.create(conn.body_params, opts)
+      end
+
+    with {:ok, account} <- result, do: json(conn, account)
   end
 
   def create(conn, _params) do

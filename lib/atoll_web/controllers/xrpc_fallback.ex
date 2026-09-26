@@ -1,6 +1,26 @@
 defmodule AtollWeb.XRPCFallback do
   use AtollWeb, :controller
 
+  def call(conn, {:error, :signup_disabled}),
+    do: error(conn, 403, "Forbidden", "Fresh signup is disabled.")
+
+  def call(conn, {:error, :unsupported_domain}),
+    do: error(conn, 400, "UnsupportedDomain", "Choose a handle under an available server domain.")
+
+  def call(conn, {:error, :signup_pending}),
+    do: error(conn, 503, "ServiceUnavailable", "Retry account creation to complete registration.")
+
+  def call(conn, {:error, reason})
+      when reason in [
+             :plc_unavailable,
+             :plc_rejected,
+             :plc_conflict,
+             :invalid_plc_response,
+             :invalid_plc_operation,
+             :invalid_plc_directory
+           ],
+      do: error(conn, 503, "ServiceUnavailable", "Identity registration is unavailable.")
+
   def call(conn, {:error, :repository_quota_exceeded}),
     do: error(conn, 400, "RepoQuotaExceeded", "Repository storage quota exceeded.")
 

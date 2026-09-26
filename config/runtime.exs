@@ -1,5 +1,11 @@
 import Config
 
+case System.get_env("ATOLL_SIGNUP_ENABLED", "false") do
+  "true" -> config :atoll, :signup_enabled, true
+  "false" -> config :atoll, :signup_enabled, false
+  _ -> raise "ATOLL_SIGNUP_ENABLED must be true or false"
+end
+
 config :atoll,
        :plc_directory_url,
        Atoll.Identity.PLC.Client.directory_from_env!(System.get_env("ATOLL_PLC_DIRECTORY_URL"))

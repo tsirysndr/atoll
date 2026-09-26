@@ -10,6 +10,29 @@ defmodule AtollWeb.IdentityController do
     end
   end
 
+  def hosted_handle(conn, _params) do
+    host = String.downcase(conn.host)
+
+    conn =
+      conn
+      |> put_resp_header("access-control-allow-origin", "*")
+      |> put_resp_header("cache-control", "no-store")
+
+    if Atoll.Accounts.Signup.hosted_handle?(host) do
+      case Atoll.Repo.get_by(Atoll.Accounts.Profile, handle: host) do
+        %{did: did} ->
+          if Atoll.Accounts.Signup.pending?(did),
+            do: send_resp(conn, 404, "Not found"),
+            else: conn |> put_resp_content_type("text/plain") |> send_resp(200, did)
+
+        nil ->
+          send_resp(conn, 404, "Not found")
+      end
+    else
+      send_resp(conn, 404, "Not found")
+    end
+  end
+
   alias Atoll.Identity.Handle
 
   def resolve_handle(conn, params) do
