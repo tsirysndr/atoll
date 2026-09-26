@@ -144,6 +144,18 @@ defmodule Atoll.Identity.Resolver do
     fetch_lexicon_response(pds, did, nsid, opts, :proof)
   end
 
+  @doc "Fetches an OAuth JSON document with a 64 KiB limit, no redirects, and exact HTTP 200 status."
+  def fetch_oauth_document(url, opts \\ []) do
+    with true <- is_binary(url) and byte_size(url) in 1..2048,
+         {:ok, %URI{scheme: "https", host: host, userinfo: nil, fragment: nil}} <- URI.new(url),
+         true <- is_binary(host) and host != "" do
+      opts = opts |> Keyword.put(:accept, "application/json") |> Keyword.put(:oauth_json, true)
+      fetch(url, opts, 65_536)
+    else
+      _ -> {:error, :invalid_oauth_document_url}
+    end
+  end
+
   defp fetch_lexicon_response(pds, did, nsid, opts, mode) do
     with true <- is_binary(pds) and Syntax.did?(did) and Syntax.nsid?(nsid),
          {:ok,
@@ -237,9 +249,10 @@ defmodule Atoll.Identity.Resolver do
 
         {:ok, %{status: status, body: body, headers: headers}}
         when status in 200..299 and is_binary(body) ->
-          if Map.get(headers, "content-encoding", []) in [[], ["identity"]],
-            do: {:ok, body},
-            else: {:error, :resolution_failed}
+          if Map.get(headers, "content-encoding", []) in [[], ["identity"]] and
+               valid_response?(status, headers, opts),
+             do: {:ok, body},
+             else: {:error, :resolution_failed}
 
         {:ok, %{status: status, headers: headers}}
         when status in [301, 302, 303, 307, 308] and redirects > 0 ->
@@ -256,6 +269,22 @@ defmodule Atoll.Identity.Resolver do
     else
       false -> {:error, :unsafe_destination}
       _ -> {:error, :resolution_failed}
+    end
+  end
+
+  defp valid_response?(status, headers, opts) do
+    if Keyword.get(opts, :oauth_json, false) do
+      case Map.get(headers, "content-type", []) do
+        [type] ->
+          status == 200 and
+            type |> String.split(";", parts: 2) |> hd() |> String.trim() |> String.downcase() ==
+              "application/json"
+
+        _ ->
+          false
+      end
+    else
+      true
     end
   end
 

@@ -386,6 +386,8 @@ mutation. Deletes and empty batches need no record schema, even with `validate: 
 - [x] App password creation, metadata listing, revocation, restricted sessions, and privileged service delegation.
 - [x] Internal ES256 DPoP signature, request, nonce, and access-token binding verification.
 - [x] Internal issuer/role-bound OAuth nonce issuance and PostgreSQL-shared atomic DPoP replay rejection.
+- [x] Internal bounded client-metadata retrieval and validation of client IDs, redirects, scopes, and authentication declarations.
+- [ ] OAuth client JWKS verification, JWT client assertions, and localhost virtual client metadata.
 - [ ] OAuth nonce challenges and proof admission integrated into authorization/resource server routes.
 - [ ] ATProto OAuth authorization and resource server support.
 - [x] Live-session and repository ownership checks for blob uploads and single/batch record writes.
@@ -4427,3 +4429,37 @@ Tests cover nonce expiry and issuer/role separation, token binding, concurrent
 admission through independent database transactions, rollback behavior, replay
 with a fresh nonce, and capacity exhaustion/reclamation. HTTP nonce challenges,
 OAuth authorization flows, and resource-route integration remain pending.
+
+### OAuth client metadata foundation
+
+`Atoll.OAuth.ClientMetadata.fetch/2` freshly retrieves a public HTTPS client-ID
+document through the existing DNS-pinned resolver. It permits only public IP
+destinations, preserves the original hostname for HTTP and TLS, refuses redirects
+and compressed responses, and requires HTTP 200 with `application/json`. Response
+bodies are capped at 64 KiB; duplicate JSON members and nesting beyond 16 levels
+are rejected. DNS/connect timeouts are three seconds and the HTTP request timeout
+is five seconds. There is no metadata cache or fallback to stale data.
+
+The returned document must exactly identify the requested client ID, declare
+`atproto`, require DPoP, and declare the authorization-code flow. Refresh-token
+grants are optional. Client IDs cannot contain credentials, fragments, or explicit
+ports. URLs must use ASCII serialization (including punycode hostnames and
+percent-encoded non-ASCII paths). Web callbacks require HTTPS; native callbacks
+require the client's HTTPS origin or its reversed-domain custom scheme. Explicit
+default HTTPS callback ports are rejected. `redirect_allowed?/2` compares the
+entire callback exactly, including any query. `scopes_allowed?/2` requires
+`atproto` and checks that every requested scope was declared; this does not grant
+permissions or replace consent and endpoint scope enforcement.
+
+Local bounds are 32 distinct callbacks, 128 scope tokens in a 4 KiB scope string,
+and 2 KiB URLs. The loader supports public `none` authentication and declarations
+for confidential `private_key_jwt` clients using ES256. A confidential declaration
+must identify exactly one inline or remote JWKS source; inline sets are limited
+to 32 key objects. These declarations are **not verified client authentication**:
+key validation, remote JWKS retrieval, JWT assertions, and session key binding
+remain unfinished. Metadata branding is untrusted and must not be displayed as
+verified application identity. The optional localhost virtual-client flow and
+PAR/authorization/token route integration also remain pending.
+
+The declaration rules follow the
+[ATProto OAuth client profile](https://atproto.com/specs/oauth#clients).
