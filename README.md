@@ -17,7 +17,8 @@ Checked items are implemented in this repository. Unchecked items are remaining 
 - [x] `GET /` plain-text ATProto ASCII banner and API location.
 - [x] `GET /xrpc/com.atproto.server.describeServer` with configurable `did` and `availableUserDomains`.
 - [x] Controller test for unauthenticated server description.
-- [ ] Public server identity and domain configuration (development uses `did:web:localhost`).
+- [x] Validated runtime server DID and advertised domain configuration (development defaults to `did:web:localhost`).
+- [ ] Public server DID document publication and identity provisioning.
 - [ ] General XRPC request validation and protocol error responses.
 - [ ] Lexicon-based record validation.
 
@@ -445,6 +446,20 @@ The `[:atoll, :readiness, :check]` telemetry event includes `count`, `duration`
 Install Elixir / Erlang and PostgreSQL. The project declares Elixir `~> 1.17`; see `mix.exs` for dependency requirements.
 
 Configure `Atoll.Repo` in `config/dev.exs` and `config/test.exs` for your local PostgreSQL role and credentials. Keep development and test database names separate. Configure the development server metadata under `config :atoll, :pds`.
+
+Runtime metadata can be configured with `ATOLL_PDS_DID` and
+`ATOLL_AVAILABLE_USER_DOMAINS` (comma-separated, dot-prefixed suffixes such as
+`.example.com,.example.org`; empty clears the list). Suffixes are normalized to
+lowercase and deduplicated. Unset values preserve development/test configuration.
+Production requires an explicit `ATOLL_PDS_DID` and `PHX_HOST`; it advertises no
+handle domains unless configured. `PHX_HOST` must be a DNS hostname without a
+scheme, port, or path and sets Phoenix's public HTTPS URL on port 443. Existing
+production database and secret-key configuration is still required.
+
+These settings advertise metadata; they do not publish a DID document, provision
+DNS, implement signup, or verify domain ownership. `describeServer` also reports
+the enforced `blobUploadLimit` of 5,242,880 bytes. The server DID is the session JWT
+audience, so changing it invalidates existing session tokens.
 
 ```sh
 mix setup

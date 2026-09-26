@@ -6,7 +6,8 @@ defmodule AtollWeb.ServerControllerTest do
 
     assert %{
              "did" => "did:web:pds.example.test",
-             "availableUserDomains" => [".example.test"]
+             "availableUserDomains" => [".example.test"],
+             "blobUploadLimit" => 5_242_880
            } = json_response(conn, 200)
   end
 end

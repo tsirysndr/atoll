@@ -1,5 +1,8 @@
 import Config
 
+server = Atoll.ServerConfig.parse!(System.get_env(), config_env() == :prod)
+config :atoll, :pds, server.pds
+
 if encoded = System.get_env("ATOLL_SESSION_SIGNING_KEY") do
   case Base.decode64(encoded) do
     {:ok, <<_::binary-size(32)>> = key} -> config :atoll, :session_signing_key, key
@@ -118,7 +121,7 @@ if config_env() == :prod do
       You can generate one by calling: mix phx.gen.secret
       """
 
-  host = System.get_env("PHX_HOST") || "example.com"
+  host = server.host
 
   config :atoll, :dns_cluster_query, System.get_env("DNS_CLUSTER_QUERY")
 

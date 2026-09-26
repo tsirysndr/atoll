@@ -6,7 +6,8 @@ defmodule AtollWeb.ServerController do
 
     json(conn, %{
       did: Keyword.fetch!(config, :did),
-      availableUserDomains: Keyword.fetch!(config, :available_user_domains)
+      availableUserDomains: Keyword.fetch!(config, :available_user_domains),
+      blobUploadLimit: Atoll.Blobs.max_size()
     })
   end
 end

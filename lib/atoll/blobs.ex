@@ -16,6 +16,9 @@ defmodule Atoll.Blobs do
   alias Atoll.Repositories.{Events, Head}
   @max_size 5 * 1024 * 1024
 
+  @doc "Maximum accepted blob upload size in bytes."
+  def max_size, do: @max_size
+
   @doc "Stages an upload authorized by a live access token, with authorization held through commit."
   def stage_authenticated(token, bytes, content_type, opts \\ []) do
     with {:ok, claims} <- Atoll.Accounts.Tokens.verify(token, :access) do
