@@ -46,6 +46,18 @@ defmodule AtollWeb.OAuthResource do
     end
   end
 
+  def prepare_write(conn) do
+    with {:ok, token} <- token(get_req_header(conn, "authorization")),
+         do:
+           Resource.prepare_write(
+             token,
+             get_req_header(conn, "dpop"),
+             AtollWeb.Endpoint.url() <> conn.request_path
+           )
+  end
+
+  def error(conn, reason), do: failure(conn, reason)
+
   defp token([header]) when byte_size(header) <= 128 do
     case Regex.run(~r/\ADPoP +(atoll_access_[A-Za-z0-9_-]{43})\z/i, header) do
       [_, token] -> {:ok, token}

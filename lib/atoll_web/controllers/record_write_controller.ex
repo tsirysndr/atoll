@@ -7,16 +7,22 @@ defmodule AtollWeb.RecordWriteController do
   def delete(conn, _params), do: write(conn, :delete)
 
   def batch(%{private: %{atoll_record_token: token}} = conn, _params) do
-    with {:ok, result} <- Atoll.Repositories.Writes.batch(token, conn.body_params),
-         do: json(conn, result)
+    respond(conn, token, Atoll.Repositories.Writes.batch(token, conn.body_params))
   end
 
   def batch(_, _), do: {:error, :auth_required}
 
   defp write(%{private: %{atoll_record_token: token}} = conn, action) do
-    with {:ok, result} <- Atoll.Repositories.Writes.write(token, action, conn.body_params),
-         do: json(conn, result)
+    respond(conn, token, Atoll.Repositories.Writes.write(token, action, conn.body_params))
   end
 
   defp write(_, _), do: {:error, :auth_required}
+
+  defp respond(conn, _, {:ok, result}), do: json(conn, result)
+
+  defp respond(conn, %Atoll.OAuth.WriteCredential{}, {:error, reason})
+       when reason in [:invalid_token, :insufficient_scope, :oauth_resource_store_unavailable],
+       do: AtollWeb.OAuthResource.error(conn, reason)
+
+  defp respond(_, _, error), do: error
 end

@@ -1,18 +1,120 @@
 defmodule Atoll.OAuth.Resource do
   @moduledoc """
-  DPoP-bound OAuth reads. Proof admission commits before the read transaction;
+  DPoP-bound OAuth reads and process-bound credentials for record writes.
+  Proof admission commits before request parsing and mutation transactions;
   account, source session, OAuth session and access-token locks protect the callback.
   The reader is trusted server code and must not perform mutations or network IO.
   Required scopes and issuer options are trusted endpoint policy, never request input.
   """
   import Ecto.Query
   alias Atoll.Repo
-  alias Atoll.OAuth.{AccessToken, Session, Proofs, PKCE, ClientMetadata}
+  alias Atoll.OAuth.{AccessToken, Session, Proofs, PKCE, ClientMetadata, WriteCredential}
   alias Atoll.Accounts.Session, as: AccountSession
   alias Atoll.Accounts.Signup
   alias Atoll.Repositories.Head
 
-  def read(token, headers, url, reader, opts \\ []) when is_function(reader, 1) do
+  def read(token, headers, url, reader, opts \\ []) when is_function(reader, 1),
+    do: admit(token, headers, "GET", url, fn _, _, principal -> reader.(principal) end, opts)
+
+  @write_methods %{
+    create: "createRecord",
+    put: "putRecord",
+    delete: "deleteRecord",
+    batch: "applyWrites"
+  }
+
+  @doc "Admit a POST proof and issue a process/method-bound internal credential, valid for 30 seconds."
+  def prepare_write(token, headers, url, opts \\ []) do
+    issuer = Keyword.get(opts, :issuer, AtollWeb.Endpoint.url())
+
+    action =
+      Enum.find_value(@write_methods, fn {action, method} ->
+        if url == issuer <> "/xrpc/com.atproto.repo." <> method, do: action
+      end)
+
+    if action do
+      admit(
+        token,
+        headers,
+        "POST",
+        url,
+        fn access, session, _ ->
+          claims = %{
+            "digest" => Base.url_encode64(access.digest, padding: false),
+            "binding" => fingerprint(session),
+            "owner" => owner(),
+            "action" => Atom.to_string(action),
+            "expires" => clock!() + 30
+          }
+
+          %WriteCredential{
+            receipt: Plug.Crypto.MessageVerifier.sign(Jason.encode!(claims), receipt_key(opts))
+          }
+        end,
+        Keyword.put(opts, :required_scopes, ["transition:generic"])
+      )
+    else
+      {:error, :invalid_request}
+    end
+  end
+
+  @doc "Recheck an admitted credential inside the caller's write transaction without admitting its proof twice."
+  def recheck(%WriteCredential{receipt: receipt}, action)
+      when is_binary(receipt) and byte_size(receipt) <= 4096 do
+    with true <- action in Map.keys(@write_methods),
+         <<_::256>> = secret <- Application.get_env(:atoll, :oauth_nonce_secret),
+         {:ok, body} <- Plug.Crypto.MessageVerifier.verify(receipt, receipt_key(secret: secret)),
+         {:ok, %{} = claims} <- Jason.decode(body),
+         true <- claims["owner"] == owner() and claims["action"] == Atom.to_string(action),
+         true <- is_integer(claims["expires"]) and claims["expires"] > clock!(),
+         true <- is_binary(claims["digest"]),
+         {:ok, <<_::256>> = digest} <- Base.url_decode64(claims["digest"], padding: false),
+         %AccessToken{} = access <- Repo.get(AccessToken, digest, log: false),
+         %Session{} = session <- Repo.get(Session, access.session_id, log: false),
+         true <- claims["binding"] == fingerprint(session) do
+      locked_read(
+        access,
+        session,
+        fn principal ->
+          if claims["expires"] <= clock!(), do: Repo.rollback(:invalid_token)
+          principal
+        end,
+        required_scopes: ["transition:generic"]
+      )
+    else
+      _ -> {:error, :invalid_token}
+    end
+  rescue
+    _ in [Postgrex.Error, DBConnection.ConnectionError] ->
+      {:error, :oauth_resource_store_unavailable}
+  end
+
+  def recheck(_, _), do: {:error, :invalid_token}
+
+  defp owner, do: :erlang.term_to_binary(self()) |> Base.url_encode64(padding: false)
+
+  defp fingerprint(session),
+    do:
+      session_binding(session)
+      |> :erlang.term_to_binary([:deterministic])
+      |> then(&:crypto.hash(:sha256, &1))
+      |> Base.url_encode64(padding: false)
+
+  defp receipt_key(opts),
+    do:
+      :crypto.mac(
+        :hmac,
+        :sha256,
+        Keyword.get(opts, :secret, Application.get_env(:atoll, :oauth_nonce_secret)),
+        "atoll.oauth.write-credential.v1"
+      )
+
+  defp clock! do
+    %{rows: [[now]]} = Repo.query!("SELECT floor(extract(epoch FROM clock_timestamp()))::bigint")
+    now
+  end
+
+  defp admit(token, headers, method, url, reader, opts) do
     issuer = Keyword.get(opts, :issuer, AtollWeb.Endpoint.url())
 
     cond do
@@ -31,13 +133,18 @@ defmodule Atoll.OAuth.Resource do
              {:ok, _} <-
                Proofs.verify(
                  headers,
-                 "GET",
+                 method,
                  url,
                  :resource,
                  Keyword.take(opts, [:secret]) ++
                    [issuer: issuer, access_token: token, jkt: candidate.dpop_jkt]
                ) do
-          locked_read(access, candidate, reader, opts)
+          locked_read(
+            access,
+            candidate,
+            fn principal -> reader.(access, candidate, principal) end,
+            opts
+          )
         else
           {:error, _} = error -> error
           _ -> {:error, :invalid_token}

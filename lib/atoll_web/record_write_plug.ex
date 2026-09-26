@@ -30,12 +30,14 @@ defmodule AtollWeb.RecordWritePlug do
 
   defp write(%{method: "POST"} = conn) do
     with :ok <- limit(conn),
-         {:ok, token} <- AtollWeb.BearerToken.get(conn),
-         {:ok, _} <- Atoll.Accounts.Sessions.authenticate(token),
+         {:ok, token} <- authorize(conn),
          [content_type] <- get_req_header(conn, "content-type"),
          {:ok, "application", "json", _} <- Plug.Conn.Utils.media_type(content_type) do
       conn |> Plug.Parsers.call(@parser) |> put_private(:atoll_record_token, token)
     else
+      {:error, {:oauth, reason}} ->
+        AtollWeb.OAuthResource.error(conn, reason)
+
       {:error, {:rate_limited, seconds}} ->
         conn
         |> put_resp_header("retry-after", Integer.to_string(seconds))
@@ -61,6 +63,19 @@ defmodule AtollWeb.RecordWritePlug do
       Jason.encode!(%{error: "MethodNotAllowed", message: "Use POST to write records."})
     )
     |> halt()
+  end
+
+  defp authorize(conn) do
+    if AtollWeb.OAuthResource.attempt?(conn) do
+      case AtollWeb.OAuthResource.prepare_write(conn) do
+        {:ok, credential} -> {:ok, credential}
+        {:error, reason} -> {:error, {:oauth, reason}}
+      end
+    else
+      with {:ok, token} <- AtollWeb.BearerToken.get(conn),
+           {:ok, _} <- Atoll.Accounts.Sessions.authenticate(token),
+           do: {:ok, token}
+    end
   end
 
   defp limit(conn) do

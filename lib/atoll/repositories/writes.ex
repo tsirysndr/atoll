@@ -7,18 +7,18 @@ defmodule Atoll.Repositories.Writes do
   @batch_type "com.atproto.repo.applyWrites#"
 
   def batch(token, body) when is_map(body) do
-    with {:ok, claims} <- Tokens.verify(token, :access),
+    with {:ok, claims} <- claims(token, :batch),
          :ok <- batch_parameters(body),
          {:ok, _} <- batch_operations(Map.put(body, "validate", false), %{}),
          {:ok, commit} <- swap(body, "swapCommit", false),
          {:ok, did} <- repository_did(body["repo"]),
          true <- did == claims["sub"],
-         {:ok, _} <- Sessions.authenticate(token),
+         {:ok, _} <- authenticate(token, :batch),
          {:ok, catalog} <- Atoll.Lexicon.WriteValidation.catalog(body, :batch),
          {:ok, writes} <- batch_operations(body, catalog) do
       Repo.transaction(fn ->
         did = claims["sub"]
-        head = authorize!(token, did)
+        head = authorize!(token, did, :batch)
         if commit != :any and commit != head.head, do: Repo.rollback(:invalid_swap)
 
         {prepared, _} =
@@ -135,32 +135,44 @@ defmodule Atoll.Repositories.Writes do
     end
   end
 
-  defp authorize!(token, did) do
+  defp claims(%Atoll.OAuth.WriteCredential{} = credential, action) do
+    with {:ok, principal} <- Atoll.OAuth.Resource.recheck(credential, action),
+         do: {:ok, %{"sub" => principal.did}}
+  end
+
+  defp claims(token, _action), do: Tokens.verify(token, :access)
+
+  defp authenticate(%Atoll.OAuth.WriteCredential{} = credential, action),
+    do: Atoll.OAuth.Resource.recheck(credential, action)
+
+  defp authenticate(token, _action), do: Sessions.authenticate(token)
+
+  defp authorize!(token, did, action) do
     Events.lock!()
     # Write-lock the head before locking the session, matching other authenticated writes.
     head =
       Repo.one(from h in Head, where: h.did == ^did, lock: "FOR UPDATE") ||
         Repo.rollback(:invalid_token)
 
-    case Sessions.authenticate(token) do
+    case authenticate(token, action) do
       {:ok, _} -> head
       {:error, reason} -> Repo.rollback(reason)
     end
   end
 
   def write(token, action, body) when action in [:create, :put, :delete] and is_map(body) do
-    with {:ok, claims} <- Tokens.verify(token, :access),
+    with {:ok, claims} <- claims(token, action),
          :ok <- parameters(action, body),
          {:ok, commit} <- swap(body, "swapCommit", false),
          {:ok, record} <- record_swap(action, body),
          {:ok, did} <- repository_did(body["repo"]),
          true <- did == claims["sub"],
-         {:ok, _} <- Sessions.authenticate(token),
+         {:ok, _} <- authenticate(token, action),
          {:ok, catalog} <- Atoll.Lexicon.WriteValidation.catalog(body, action),
          {:ok, validation} <- record_validation(action, body, catalog) do
       Repo.transaction(fn ->
         did = claims["sub"]
-        head = authorize!(token, did)
+        head = authorize!(token, did, action)
 
         rkey =
           case Map.fetch(body, "rkey") do

@@ -399,7 +399,8 @@ mutation. Deletes and empty batches need no record schema, even with `validate: 
 - [x] OAuth refresh rotation with persistent reuse revocation, per-access scope narrowing, and observed confidential-key removal revocation.
 - [x] Configurable periodic confidential-client key checks, including idle sessions, with bounded revocation and sweep progress after failures.
 - [x] OAuth resource read guard and DPoP `getSession`, with per-access-token email scope enforcement.
-- [ ] OAuth authorization for repository/blob writes, service auth, exports, and remaining resource routes.
+- [x] DPoP repository create/put/delete/applyWrites with transitional generic scope and transactional authorization rechecks.
+- [ ] OAuth authorization for blob writes, service auth, exports, and remaining resource routes.
 - [x] Localhost virtual public-client metadata, loopback callback matching, and flow integration without metadata network requests.
 - [ ] OAuth nonce challenges and proof admission integrated into remaining authorization/resource server routes.
 - [ ] ATProto OAuth authorization and resource server support.
@@ -4807,7 +4808,8 @@ token, whose scope is stored explicitly; the replacement refresh token retains
 the original grant. Omitting scope uses the original grant. The migration
 backfills existing access-token scopes from their sessions before enforcing a
 non-null column. Resource authorization must enforce the access token's scope;
-`getSession` now does so, while write and other resource integrations remain pending.
+`getSession` and repository record writes now do so; blob writes and other
+resource integrations remain pending.
 
 On refresh, a valid current confidential key set with the bound key removed or
 replaced causes permanent session revocation, including an empty inline or
@@ -4875,8 +4877,9 @@ rate-limit errors, configured-origin binding, and rollback persistence. An
 independent-connection test verifies all four row locks remain held through the
 read and that later reads fail after session deletion. Resource
 challenges follow [RFC 9449 sections 7 and 9](https://www.rfc-editor.org/rfc/rfc9449.html#section-7).
-Repository/blob writes, service authorization, exports, and other resource routes
-still need OAuth integration and endpoint-specific scope enforcement.
+Repository record writes are integrated as described below. Blob writes, service
+authorization, exports, and other resource routes still need OAuth integration
+and endpoint-specific scope enforcement.
 
 
 ### Periodic confidential-client key checks
@@ -4978,3 +4981,46 @@ queries, loopback restrictions, and a flow through HTTP PAR, internal account
 approval, HTTP code exchange, refresh, and DPoP `getSession` with all metadata
 network access prohibited. Browser login/consent remains unfinished. The behavior
 implements the [ATProto localhost client profile](https://atproto.com/specs/oauth#localhost-client-development).
+
+
+### DPoP repository record writes
+
+`com.atproto.repo.createRecord`, `putRecord`, `deleteRecord`, and `applyWrites`
+accept DPoP access tokens with `atproto transition:generic`. A token narrowed to
+`atproto` or email access cannot borrow the broader session grant. These routes
+require the canonical XRPC path and a new POST proof bound to the configured
+origin, resource nonce, access-token hash, and original DPoP key. Legacy password
+and app-password JWT writes retain their existing behavior.
+
+After the existing peer rate limit, `RecordWritePlug` admits the proof and checks
+current authorization **before** parsing the bounded JSON body. It creates a
+signed internal `WriteCredential` containing the access-token digest, a fingerprint
+of the session binding, the operation, request-process identity, and a 30-second
+expiry. The credential is never sent to clients and is redacted when inspected.
+Its HMAC key is derived with a separate purpose from `ATOLL_OAUTH_NONCE_SECRET`;
+changing that secret invalidates outstanding credentials. It cannot be used in
+another process or for another operation, and HTTP token parsers do not accept it.
+
+The write service uses the same ownership checks, handle resolution, schema
+preparation, record validation, and swap constraints for both authentication
+schemes. After network schema lookup, it takes the existing event-sequencing lock
+and repository write lock, then rechecks the credential and current account,
+source session, OAuth session, access expiry, and access-token scope under row
+locks. These locks remain held through record/blob-reference changes, signed
+commit creation, and event publication. Revocation or scope changes during schema
+lookup therefore prevent mutation. All operations in `applyWrites` retain their
+existing transaction atomicity.
+
+Proof admission stays committed when parsing, validation, swaps, or the write
+transaction fail. Retries need fresh proofs. Work that outlives the internal
+credential also fails closed and must be retried; the credential is not a cache
+of permission that can survive session revocation. Authorization failures use
+DPoP challenges with 401/403, while existing record and validation errors retain
+their XRPC responses. Fresh resource nonces and CORS headers remain available.
+
+Tests cover all four methods, foreign-repository denial, schema and swap failures,
+batch rollback, proof replay after failures, body limits, session revocation and
+scope narrowing during schema lookup, and rejection of altered, expired,
+wrong-operation, or foreign-process internal credentials. Fine-grained repository
+permissions beyond the transitional generic scope remain pending, as do OAuth
+blob upload and the other resource integrations listed above.
