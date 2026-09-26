@@ -145,7 +145,8 @@ record Lexicons or grant access to account data.
 - [x] Signed PLC recovery preflight against verified history, with priority/window checks and displaced-operation reporting.
 - [x] Internal durable recovery journal and head-bound submission with verified readback and exact retries.
 - [x] Operator recovery of the current local identity from signed forks, with credential revocation and resumable completion.
-- [ ] Recovery with replacement private keys, pending-operation conflict resolution, and lost-key recovery.
+- [x] Internal atomic repository key restoration with missing, corrupt, or lost-master-key custody.
+- [ ] Recovery with replacement private keys, pending-operation conflict resolution, and operator lost-key recovery.
 - [x] Per-revision signing-key provenance for historical record and block verification.
 - [x] Internal atomic repository signing-key replacement with unchanged-tree commits and vault rollback.
 - [x] PostgreSQL repository heads and atomic record, tree, and commit updates with optional head compare-and-swap.
@@ -3570,3 +3571,33 @@ Directory acceptance and local completion cannot be atomic. Keep the journal
 after any interruption, and use `status` to recover its CID before retrying
 `resume`. A conflict leaves the operation pending for reconciliation rather than
 restaging or expanding its recovery scope. No email is sent by this command.
+
+### Internal repository key restoration
+
+`Atoll.Repositories.recover_signing_key/3` supplies the local publication primitive
+for recovery when the prior repository vault envelope is missing, corrupt, or
+unreadable under the available master keys. Its caller must independently
+authorize recovery and freshly establish that the DID document authorizes the
+supplied replacement key. No existing HTTP endpoint or recovery command invokes
+this primitive yet; ordinary rotation still requires readable old custody.
+
+Restoration requires the expected current head and a valid private/public key
+pair. Under normal event/account locks it verifies the current commit signature,
+revision and MST root, then reads and hash-checks every referenced record body
+before installing custody. Record bodies are checked one at a time; repository
+metadata and the reconstructed MST remain in memory. This is an operator path
+whose cost grows with repository size. Suspended and taken-down accounts are
+rejected; active/deactivated status is preserved.
+
+A different key installs an envelope under the active encryption master key and
+publishes a newer commit over the unchanged tree, retained revision-key metadata,
+and a sync event in one transaction. Quota or publication failure rolls back all
+changes, including a newly inserted vault row. Historical revisions retain their
+original verification keys. Supplying the original key repairs missing or corrupt
+custody without changing the commit or emitting a sync event; a readable same-key
+retry preserves its envelope. Master-key rewrapping remains a separate operation.
+
+This cannot reconstruct private material from a public key. The caller must
+provide the authorized private key and an active encryption master key. Durable
+replacement-key custody and operator recovery orchestration for this primitive
+remain unfinished.

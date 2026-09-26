@@ -42,7 +42,20 @@ defmodule Atoll.Repositories do
   authorizes the replacement key. This function performs no directory requests.
   It preserves records and publishes a new signed commit plus a sync event.
   """
-  def rotate_signing_key(did, %SigningKey{} = key, expected_head) do
+  def rotate_signing_key(did, key, expected_head),
+    do: transition_signing_key(did, key, expected_head, :rotate)
+
+  @doc """
+  Internal restoration after independent recovery authorization and fresh DID-key
+  verification by the caller. Requires the expected head and verifies existing
+  repository data, but does not require the previous private-key envelope.
+  A changed key publishes an unchanged-tree commit; same-key restoration only
+  repairs custody. This is not an authorization boundary or a public endpoint.
+  """
+  def recover_signing_key(did, key, expected_head),
+    do: transition_signing_key(did, key, expected_head, :recover)
+
+  defp transition_signing_key(did, %SigningKey{} = key, expected_head, mode) do
     with {:ok, derived} <- SigningKey.from_private(key.curve, key.private),
          true <- derived.public == key.public do
       Repo.transaction(fn ->
@@ -55,15 +68,24 @@ defmodule Atoll.Repositories do
         if head.head != expected_head, do: Repo.rollback(:invalid_swap)
         {_head, tree, _commit} = snapshot!(did, false)
 
-        case Atoll.KeyVault.fetch(did) do
-          {:ok, _} -> :ok
-          {:error, reason} -> Repo.rollback(reason)
+        case mode do
+          :rotate ->
+            case Atoll.KeyVault.fetch(did) do
+              {:ok, _} -> :ok
+              {:error, reason} -> Repo.rollback(reason)
+            end
+
+          :recover ->
+            tree.records |> Map.values() |> Enum.uniq() |> Enum.each(&block!/1)
+
+            unless Atoll.KeyVault.fetch(did) == {:ok, key},
+              do: Atoll.KeyVault.restore!(head, key)
         end
 
         if head.curve == key.curve and head.public_key == key.public do
           head
         else
-          :ok = Atoll.KeyVault.replace!(head, key)
+          if mode == :rotate, do: Atoll.KeyVault.replace!(head, key)
           {:ok, rev} = TID.next(head.rev)
           commit = persist_commit!(did, tree, rev, key)
 
@@ -87,7 +109,7 @@ defmodule Atoll.Repositories do
     end
   end
 
-  def rotate_signing_key(_, _, _), do: {:error, :invalid_key}
+  defp transition_signing_key(_, _, _, _), do: {:error, :invalid_key}
 
   @doc """
   Replaces an existing repository with a verified complete CAR snapshot.

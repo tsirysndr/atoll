@@ -67,6 +67,43 @@ defmodule Atoll.KeyVault do
     end
   end
 
+  @doc """
+  Internal recovery replacement of missing or unreadable custody. The caller
+  must independently authorize recovery and atomically publish the matching head.
+  Never use this to bypass ordinary rotation's old-key readability checks.
+  """
+  def restore!(head, %SigningKey{} = key) do
+    unless Repo.in_transaction?(),
+      do: raise(ArgumentError, "key restoration requires a transaction")
+
+    Atoll.Repositories.Events.lock!()
+
+    current =
+      Repo.one(from h in Head, where: h.did == ^head.did, lock: "FOR UPDATE") ||
+        Repo.rollback(:not_found)
+
+    unless current.head == head.head and current.curve == head.curve and
+             current.public_key == head.public_key,
+           do: Repo.rollback(:invalid_swap)
+
+    with {:ok, master} <- master_key(),
+         {:ok, derived} <- SigningKey.from_private(key.curve, key.private),
+         true <- derived.public == key.public do
+      updated = %{current | curve: key.curve, public_key: key.public}
+
+      Repo.insert!(%EncryptedKey{did: head.did, envelope: encrypt(updated, key.private, master)},
+        on_conflict: {:replace, [:envelope]},
+        conflict_target: [:did],
+        log: false
+      )
+
+      :ok
+    else
+      {:error, reason} -> Repo.rollback(reason)
+      _ -> Repo.rollback(:invalid_key)
+    end
+  end
+
   def fetch(did) when is_binary(did) do
     with {:ok, master} <- master_key() do
       query =
