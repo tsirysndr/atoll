@@ -48,7 +48,22 @@ defmodule Atoll.Application do
         []
       end
 
-    Supervisor.start_link(children ++ refresh_children ++ cleanup_children, opts)
+    account_cleanup_children =
+      if Application.get_env(:atoll, :account_cleanup_enabled, false) do
+        [
+          Supervisor.child_spec({Task.Supervisor, name: Atoll.Accounts.CleanupTaskSupervisor},
+            id: Atoll.Accounts.CleanupTaskSupervisor
+          ),
+          {Atoll.Accounts.CleanupWorker, []}
+        ]
+      else
+        []
+      end
+
+    Supervisor.start_link(
+      children ++ refresh_children ++ cleanup_children ++ account_cleanup_children,
+      opts
+    )
   end
 
   # Tell Phoenix to update the endpoint configuration

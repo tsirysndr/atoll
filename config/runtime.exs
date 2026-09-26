@@ -78,6 +78,12 @@ config :atoll, :blob_quota,
   max_bytes: nonnegative_integer.("ATOLL_BLOB_MAX_ACCOUNT_BYTES", "1073741824"),
   max_count: nonnegative_integer.("ATOLL_BLOB_MAX_ACCOUNT_COUNT", "10000")
 
+case System.get_env("ATOLL_ACCOUNT_CLEANUP_ENABLED", "false") do
+  "true" -> config :atoll, :account_cleanup_enabled, config_env() != :test
+  "false" -> config :atoll, :account_cleanup_enabled, false
+  _ -> raise "ATOLL_ACCOUNT_CLEANUP_ENABLED must be true or false"
+end
+
 case System.get_env("ATOLL_BLOB_CLEANUP_ENABLED", "false") do
   "true" -> config :atoll, :blob_cleanup_enabled, config_env() != :test
   "false" -> config :atoll, :blob_cleanup_enabled, false

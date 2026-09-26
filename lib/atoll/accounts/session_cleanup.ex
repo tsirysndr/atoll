@@ -10,6 +10,8 @@ defmodule Atoll.Accounts.SessionCleanup do
     cutoff = System.system_time(:second)
 
     Repo.transaction(fn ->
+      Repo.query!("SET LOCAL lock_timeout = '1s'")
+      Repo.query!("SET LOCAL statement_timeout = '5s'")
       # Only lock sessions; never acquire repository locks after these locks.
       # Refresh/authentication may hold a session lock, so leave those rows for a later batch.
       ids =

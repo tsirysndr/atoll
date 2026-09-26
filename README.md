@@ -421,7 +421,8 @@ by another transaction are skipped. Repeat or schedule the command to clear a
 backlog; zero deleted rows can mean remaining expired rows are locked. Cleanup
 does not revoke live sessions or alter refresh-token rotation. The internal
 `Atoll.Accounts.SessionCleanup.prune_expired/1` API supports release maintenance.
-Automatic in-application scheduling is not enabled.
+Opt-in automatic cleanup is available with `ATOLL_ACCOUNT_CLEANUP_ENABLED=true`
+(see authentication-state cleanup below).
 
 `ATOLL_SESSION_MAX_COUNT` limits unexpired sessions per account (default 100,
 range 0–1000). Login creation is serialized per repository before counting and
@@ -650,7 +651,8 @@ digest row. No bearer token is persisted. Callers can include verification in th
 operation transaction so rollback also restores the ability to retry. Expired replay
 markers can be removed in bounded batches with
 `Atoll.Accounts.ServiceTokens.prune_expired/1` (default 500, maximum 1000).
-Automatic replay-marker cleanup scheduling remains pending. Migration account creation uses this verifier, which
+The opt-in authentication-state cleanup worker schedules replay-marker pruning.
+Migration account creation uses this verifier, which
 uses the existing resolver's HTTPS trust model, not independent PLC log validation.
 
 For local development, connect to
@@ -699,6 +701,7 @@ events. The `[:atoll, :identity, :refresh]` telemetry event reports a count and
 - [ ] Production configuration, HTTPS deployment, and signing-key protection.
 - [ ] Database and blob backup / restore workflow.
 - [x] `GET /health/ready` database connectivity readiness with bounded queries and outcome telemetry.
+- [x] Opt-in supervised cleanup of expired sessions and service-token replay markers, with bounded batches and outcome telemetry.
 - [ ] Comprehensive operational monitoring and alerting.
 - [ ] End-to-end compatibility tests with existing ATProto clients and servers.
 
@@ -1873,3 +1876,32 @@ All three public identity queries (`resolveDid`, `resolveIdentity`, `resolveHand
 share a per-node limit of 60 requests per five minutes per direct client IP, return
 no-store responses, and reject request bodies. Query parsing retains the existing
 32 KiB bound and Lexicon parameter validation.
+
+### Authentication-state cleanup
+
+Set `ATOLL_ACCOUNT_CLEANUP_ENABLED=true` before starting Atoll to enable the
+supervised account cleanup worker. It is disabled by default and automatically
+disabled in tests. Invalid values fail startup; application configuration uses
+`config :atoll, :account_cleanup_enabled, true`.
+
+The first batch starts after one minute. Each run deletes at most 500 expired
+sessions and then at most 500 expired service-token replay markers, oldest expiry
+first, with `FOR UPDATE SKIP LOCKED`. Live sessions and unexpired replay markers
+are retained. Each prune transaction has a one-second lock timeout and five-second
+statement timeout; the supervised task has a 15-second overall deadline.
+
+The worker waits one minute after each completion or failure before trying again.
+Runs do not overlap within an instance; locked or unfinished work remains eligible
+for a later batch. Sessions and replay markers commit in separate transactions, so
+a later failure does not undo earlier cleanup. Task crashes and timeouts do not
+stop future scheduling. Worker shutdown terminates any active cleanup task.
+
+Multiple nodes may run the worker: row locks prevent concurrent deletion of the
+same batch. One enabled instance is usually sufficient; there is no cluster-wide
+leader election or combined cluster batch limit. Cleanup does not acquire repository
+locks, change passwords, or revoke live authentication.
+
+The `[:atoll, :accounts, :cleanup]` telemetry event reports `runs: 1` and a `result`
+of `ok`, `failed`, or `timeout`. Successful runs also report `sessions` and
+`replay_markers` deletion counts. Failed runs do not claim counts for any partially
+completed work. Telemetry contains no DIDs, credentials, or nonce digests.
