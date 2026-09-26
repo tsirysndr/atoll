@@ -139,7 +139,8 @@ record Lexicons or grant access to account data.
 - [x] Encryption master-key rotation with decryption fallback keys and atomic paginated envelope rewrapping.
 - [x] Operator did:web signing-key rotation after external DID-document updates.
 - [x] Encrypted pending signing-key custody bound to durable PLC updates, with master-key rewrapping.
-- [ ] PLC signing-key rotation and recovery workflows.
+- [x] Operator PLC repository signing-key rotation with durable staging and resumable publication.
+- [ ] PLC recovery workflows and rotation of directory authority keys.
 - [x] Per-revision signing-key provenance for historical record and block verification.
 - [x] Internal atomic repository signing-key replacement with unchanged-tree commits and vault rollback.
 - [x] PostgreSQL repository heads and atomic record, tree, and commit updates with optional head compare-and-swap.
@@ -2432,7 +2433,7 @@ This validates the supplied history, not proof that it is complete or current.
 Directory timestamps are unsigned metadata; cryptographic verification cannot
 independently establish when an operation was submitted or detect an omitted
 newer suffix. Live resolution can use the verified audit policy described below.
-Operator did:web signing-key rotation is available below; PLC signing-key rotation and recovery remain pending.
+Operator did:web and ordinary PLC repository signing-key rotation are available below; recovery remains pending.
 
 
 ### Verified PLC resolution
@@ -3284,9 +3285,9 @@ is an idempotent no-op. Subsequent managed writes use the new key, while histori
 revisions remain verifiable with their recorded keys. This is not a recovery path
 for an unreadable current vault.
 
-The did:web operator command below invokes this primitive after fresh authority
-checks. PLC rotation still needs durable pending-key custody, directory submission
-and reconciliation after ambiguous network results. Tests exercise cross-curve replacement, continued writes,
+The did:web and PLC operator commands below invoke this primitive after fresh
+authority checks. PLC rotation retains encrypted pending custody across directory
+submission and local publication failures. Tests exercise cross-curve replacement, continued writes,
 historical reads, idempotence, deactivation, stale heads, invalid key pairs, vault
 corruption, and quota rollback.
 
@@ -3343,5 +3344,47 @@ After verified directory acceptance and matching local key publication, callers
 mark the journal completed and release pending custody in the same transaction.
 Release verifies the installed key is readable and matches the replacement; it
 erases only the pending encrypted private key, retaining public journal metadata.
-Account deletion cascades the journal and its encrypted custody. Operator-facing
-PLC rotation orchestration, fresh completion checks, and recovery remain pending.
+Account deletion cascades the journal and its encrypted custody. The operator
+workflow below supplies orchestration and fresh completion checks; recovery
+remains pending.
+
+### Operator PLC repository signing-key rotation
+
+The server must retain a PLC rotation private key currently authorized by the
+directory, either from signup or the operator rotation-key installation command.
+This workflow changes only `verificationMethods.atproto`; directory rotation
+authority, services, aliases, and other verification methods are preserved.
+It implements ordinary successor updates under the
+[PLC specification](https://web.plc.directory/spec/v0.1/did-plc), not recovery forks.
+
+```sh
+mix atoll.keys.rotate_plc stage did:plc:ACCOUNT CURRENT_PUBLIC_DID_KEY p256
+mix atoll.keys.rotate_plc status did:plc:ACCOUNT
+mix atoll.keys.rotate_plc resume did:plc:ACCOUNT STAGED_OPERATION_CID
+```
+
+`stage` accepts `k256` or `p256`, checks fresh verified directory history against
+the expected local public key, PDS service and handle, verifies the forward
+handle claim, and generates a new repository key. It atomically persists the
+encrypted replacement and signed operation without directory submission or
+changing the active key. It prints only public metadata including the operation
+CID. A second stage while an update is pending fails; use `status` to recover the
+existing CID instead. Status is local journal state, not a fresh directory check.
+
+`resume` verifies fresh history before submitting the exact persisted operation
+and again before completing the local transition. The operation must still be
+the current directory head; historical acceptance alone is insufficient. Under
+local mutation locks, it rechecks account state, current key, handle, and identity
+observation. Identity and sync events, unchanged-tree commit publication, key
+vault replacement, journal completion, pending-secret erasure, and an operator
+audit of public keys/commits are committed together. Active and deactivated
+accounts are supported, preserving their status. Completed retries emit no new
+events or audits and still require current directory and local compatibility.
+
+Directory acceptance and PostgreSQL publication cannot be atomic. Schedule a
+maintenance window and securely back up the database and vault master key before
+operating on production identities. If a timeout, quota failure, or process exit
+interrupts completion, retry `resume` with the same CID; do not restage or delete
+the pending journal. Matching directory acceptance avoids a second POST. A later
+conflicting directory update leaves custody intact and fails closed, requiring
+operator reconciliation; automatic recovery/rebasing is not implemented.
