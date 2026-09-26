@@ -1,5 +1,12 @@
 import Config
 
+if encoded = System.get_env("ATOLL_KEY_ENCRYPTION_KEY") do
+  case Base.decode64(encoded) do
+    {:ok, <<_::binary-size(32)>> = key} -> config :atoll, :key_encryption_key, key
+    _ -> raise "ATOLL_KEY_ENCRYPTION_KEY must be a base64-encoded 32-byte key"
+  end
+end
+
 # config/runtime.exs is executed for all environments, including
 # during releases. It is executed after compilation and before the
 # system starts, so it is typically used to load production configuration

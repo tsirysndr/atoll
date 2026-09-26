@@ -66,7 +66,9 @@ record Lexicons or grant access to account data.
 - [x] Deterministic MST serialization and reference root CID compatibility tests.
 - [x] P-256 and secp256k1 in-memory key generation, compact low-S signing, and signature verification.
 - [x] Version-3 commit signing and verification with expected-DID and schema checks.
-- [ ] Persistent repository signing keys and secure key lifecycle management.
+- [x] Encrypted PostgreSQL signing-key storage using AES-256-GCM and a separate runtime master key.
+- [x] Atomic managed repository creation and internal writes using persisted signing keys.
+- [ ] Signing-key rotation, master-key rotation, and recovery workflows.
 - [x] PostgreSQL repository heads and atomic record, tree, and commit updates with optional head compare-and-swap.
 - [x] Internal record create, put, delete, and read operations with collection/type checks (not Lexicon validation).
 - [x] Public `getRecord` and paginated `listRecords` for repository DIDs and current record versions.
@@ -147,6 +149,25 @@ The development server description currently returns:
 ```json
 {"did":"did:web:localhost","availableUserDomains":[]}
 ```
+
+## Encrypted signing keys
+
+Set `ATOLL_KEY_ENCRYPTION_KEY` to a base64-encoded random 32-byte master key
+before starting Atoll. There is no default. Keep it outside version control and
+back it up separately from PostgreSQL: losing it makes stored signing keys
+unrecoverable. Changing it does not rotate existing encrypted keys.
+
+With the master key configured, trusted internal callers can use:
+
+```elixir
+{:ok, head} = Atoll.Repositories.create_managed(did)
+Atoll.Repositories.apply_managed_writes(did, operations, swap_commit: head.head)
+```
+
+For an existing repository whose private key is still available,
+`Atoll.KeyVault.store(did, key)` persists it only if it matches the pinned public
+key. Existing encrypted keys cannot be overwritten. These functions do not
+authorize accounts; authenticated HTTP writes remain pending.
 
 ## Checks
 

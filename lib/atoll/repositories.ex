@@ -2,7 +2,7 @@ defmodule Atoll.Repositories do
   @moduledoc """
   Internal, transactional repository storage. Not an authorization boundary.
 
-  Callers provide the signing key; private keys are never stored here. Mutations
+  Callers provide a signing key or use the encrypted key vault. Mutations
   lock the head, enforce optional compare-and-swap, and atomically persist
   records, MST blocks, commit, and revision. Trees rebuild on each mutation.
   Old blocks are retained until reference tracking and GC exist.
@@ -14,6 +14,27 @@ defmodule Atoll.Repositories do
   import Ecto.Query
   alias Atoll.{CAR, CBOR, CID, Commit, DataModel, MST, Repo, SigningKey, Storage, Syntax, TID}
   alias Atoll.Repositories.{Head, Record, Snapshot}
+
+  @doc "Creates a repository and encrypted signing key atomically. Requires the key vault master key."
+  def create_managed(did, curve \\ :k256) when curve in [:p256, :k256] do
+    key = SigningKey.generate(curve)
+
+    Repo.transaction(fn ->
+      with {:ok, head} <- create(did, key),
+           {:ok, :stored} <- Atoll.KeyVault.store(did, key) do
+        head
+      else
+        {:error, reason} -> Repo.rollback(reason)
+      end
+    end)
+  end
+
+  @doc "Internal write API using the persisted signing key. Callers must authorize the account."
+  def apply_managed_writes(did, operations, opts \\ []) do
+    with {:ok, key} <- Atoll.KeyVault.fetch(did) do
+      apply_writes(did, operations, key, opts)
+    end
+  end
 
   @doc """
   Replaces an existing repository with a verified complete CAR snapshot.
