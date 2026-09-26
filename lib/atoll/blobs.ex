@@ -6,7 +6,8 @@ defmodule Atoll.Blobs do
   MIME metadata belong to each repository. Public access requires a current
   record reference with matching metadata and an active repository.
   MIME validation checks syntax only, not file contents. The local size limit is
-  5 MiB per blob; streaming, quotas, expiration and garbage collection are pending.
+  5 MiB per blob. Internal expiration and queued cleanup are available; scheduling,
+  streaming, quotas, and discovery of untracked orphan objects remain pending.
   """
   import Ecto.Query
   alias Atoll.{CID, Repo, Repositories, Storage}
@@ -21,11 +22,17 @@ defmodule Atoll.Blobs do
     with :ok <- size(bytes, Keyword.get(opts, :content_length)),
          {:ok, mime} <- normalize_mime(content_type),
          {:ok, _} <- Repositories.get_active_head(did),
-         cid = CID.create(bytes, :raw),
-         {:ok, backend} <- prepare_backend(did, cid, bytes, storage(opts)) do
+         cid = CID.create(bytes, :raw) do
       Repo.transaction(fn ->
         Events.lock!()
         active_head!(did, "FOR UPDATE")
+
+        backend =
+          case prepare_backend(did, cid, bytes, storage(opts)) do
+            {:ok, backend} -> backend
+            {:error, reason} -> Repo.rollback(reason)
+          end
+
         if backend == :postgres, do: Storage.put_block(cid, bytes)
 
         Repo.insert_all(
@@ -40,7 +47,7 @@ defmodule Atoll.Blobs do
               staged_at: DateTime.utc_now()
             }
           ],
-          on_conflict: :nothing,
+          on_conflict: {:replace, [:staged_at]},
           conflict_target: [:did, :cid]
         )
 

@@ -108,12 +108,14 @@ record Lexicons or grant access to account data.
 - [ ] Authenticated blob upload endpoint and media-content validation.
 - [x] Atomic nested record-reference tracking, ownership/metadata checks on writes, and withdrawal when the last reference is removed.
 - [x] Public `com.atproto.sync.getBlob` and paginated `listBlobs`, with `since` filtering, repository status checks, and restrictive content headers.
-- [ ] Blob lifecycle management and cleanup.
+- [x] Internal staged-blob expiration with a 24-hour default grace period and a one-hour minimum.
+- [x] Durable cleanup queue for withdrawn/expired blob ownership, shared-owner checks, PostgreSQL/S3 deletion, and retryable S3 failures.
+- [ ] Automatic cleanup scheduling, untracked-object inventory, and storage quotas.
 
 Staged blobs are private until referenced by a current record with matching
 metadata. Imports may reference missing blobs; matching uploads make those blobs
 available. Removing the last reference removes account ownership and public
-access, while physical byte cleanup remains pending. Existing records predating
+access and queues physical byte cleanup. Existing records predating
 the reference-index migration need to be rewritten or imported in a newer
 snapshot before their blobs become public. Authenticated uploads remain pending.
 
@@ -130,7 +132,7 @@ in PostgreSQL. S3 uses signed, path-style requests and fixed object keys
 | `ATOLL_S3_ENDPOINT` | Service origin, such as `https://s3.us-east-1.amazonaws.com` or `http://localhost:9000` for local MinIO |
 | `ATOLL_S3_BUCKET` | Existing bucket name |
 | `ATOLL_S3_REGION` | Signing region; defaults to `us-east-1` |
-| `ATOLL_S3_ACCESS_KEY_ID` | Access key with object PUT/GET permission |
+| `ATOLL_S3_ACCESS_KEY_ID` | Access key with object PUT/GET/DELETE permission |
 | `ATOLL_S3_SECRET_ACCESS_KEY` | Secret key, supplied outside version control |
 | `ATOLL_S3_SESSION_TOKEN` | Optional temporary-credential token |
 
@@ -148,10 +150,28 @@ are never transformed. MIME syntax validation does not inspect media contents.
 Existing PostgreSQL blobs remain readable when S3 is selected. Moving existing
 S3 objects to another endpoint, bucket, or backend requires a separate migration;
 retain their original S3 configuration until that is complete.
-S3 PUT happens before the metadata transaction, so database failure can leave an
-unreferenced object. Cleanup, quotas, multipart uploads, and broader provider
-interoperability tests remain pending. The standard tests use a mocked S3 transport;
+Uploads and cleanup share the repository write lock, including the S3 request,
+to prevent publication racing with object deletion. Slow S3 operations therefore
+delay other writes. A successful PUT followed by database failure can still leave
+an untracked object. Inventory-based orphan discovery, quotas, multipart uploads,
+and broader provider interoperability tests remain pending. The standard tests use a mocked S3 transport;
 the optional Docker suite exercises a real MinIO server.
+
+Trusted operators can run bounded cleanup batches:
+
+```elixir
+Atoll.Blobs.Cleanup.expire_staged(limit: 100, grace_seconds: 86_400)
+Atoll.Blobs.Cleanup.collect(limit: 100)
+```
+
+Expiration removes only old, unreferenced ownership metadata and queues its bytes.
+Re-uploading renews the staging grace period. Collection rechecks all accounts for
+ownership of that backend/CID before deleting bytes, and leaves failed S3 deletes
+queued for retry. Run collection outside any caller transaction: S3 deletion cannot
+be rolled back. Collection is not automatically scheduled and does not discover
+objects orphaned before this queue was introduced. Versioned S3 buckets retain
+older object versions behind delete markers; bucket lifecycle/version cleanup is
+separate from this collector.
 
 ### Synchronization and federation
 

@@ -17,6 +17,13 @@ defmodule Atoll.Blobs.S3 do
     end
   end
 
+  def delete(cid, config) do
+    case request(:delete, cid, "", config) do
+      {:ok, %{status: status}} when status in 200..299 -> :ok
+      _ -> {:error, :blob_storage_unavailable}
+    end
+  end
+
   defp request(method, cid, body, config) do
     with {:ok, url, signing} <- options(cid, config) do
       req = Keyword.get(config, :request, Req.new())

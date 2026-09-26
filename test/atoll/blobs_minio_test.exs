@@ -88,6 +88,42 @@ defmodule Atoll.BlobsMinioTest do
     assert Blobs.get_staged(@did, cid, context.opts) == {:error, :invalid_blob_storage}
   end
 
+  test "cleanup preserves shared S3 objects and retries failed deletes", context do
+    alias Atoll.Blobs.{Cleanup, CleanupJob}
+    bytes = "cleanup-in-minio"
+    cid = CID.create(bytes, :raw)
+    path = "com.example.record/cleanup"
+    other = "did:plc:miniocleanupother"
+    {:ok, _} = Repositories.create(other, context.key)
+
+    for did <- [@did, other] do
+      {:ok, blob} = Blobs.stage(did, bytes, "text/plain", context.opts)
+
+      {:ok, _} =
+        Repositories.apply_writes(
+          did,
+          [{:put, path, %{"$type" => "com.example.record", "blob" => blob}}],
+          context.key
+        )
+    end
+
+    {:ok, _} = Repositories.apply_writes(@did, [{:delete, path}], context.key)
+    assert {:ok, %{retained: 1, deleted: 0}} = Cleanup.collect(context.opts)
+    assert {:ok, %{bytes: ^bytes}} = Blobs.get_public(other, cid, context.opts)
+
+    {:ok, _} = Repositories.apply_writes(other, [{:delete, path}], context.key)
+    bad = put_in(context.opts, [:storage, :s3, :secret_access_key], "wrong-secret")
+    assert {:ok, %{failed: 1, deleted: 0}} = Cleanup.collect(bad)
+    assert Repo.aggregate(CleanupJob, :count) == 1
+    url = context.bucket_url <> "/blobs/" <> CID.to_base32(cid)
+    assert {:ok, %{status: 200, body: ^bytes}} = s3_request(:get, url, "", context.config)
+    assert {:ok, %{deleted: 1, failed: 0}} = Cleanup.collect(context.opts)
+    assert Repo.aggregate(CleanupJob, :count) == 0
+    assert {:ok, %{status: 404}} = s3_request(:get, url, "", context.config)
+    assert {:ok, _} = Blobs.stage(@did, bytes, "text/plain", context.opts)
+    assert {:ok, %{bytes: ^bytes}} = Blobs.get_staged(@did, cid, context.opts)
+  end
+
   defp s3_request(method, url, body, config) do
     signing =
       Keyword.take(config, [:region, :access_key_id, :secret_access_key])

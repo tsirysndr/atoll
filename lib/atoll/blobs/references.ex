@@ -73,14 +73,15 @@ defmodule Atoll.Blobs.References do
   defp collect(_, acc), do: acc
 
   defp withdraw!(did, cids) do
-    # Remove ownership when the last current reference disappears. Physical bytes
-    # remain until shared-block/object garbage collection is implemented.
+    # Removing ownership and enqueueing byte cleanup are one transaction.
     remaining = from r in Reference, where: r.did == ^did, select: r.cid
 
-    Repo.delete_all(
+    query =
       from b in Blob,
         where: b.did == ^did and b.cid in ^Enum.uniq(cids),
         where: b.cid not in subquery(remaining)
-    )
+
+    Atoll.Blobs.Cleanup.enqueue!(Repo.all(query))
+    Repo.delete_all(query)
   end
 end
