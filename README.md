@@ -144,7 +144,8 @@ record Lexicons or grant access to account data.
 - [x] Operator PLC authority-key rotation with preserved priority, durable staging, and resumable completion.
 - [x] Signed PLC recovery preflight against verified history, with priority/window checks and displaced-operation reporting.
 - [x] Internal durable recovery journal and head-bound submission with verified readback and exact retries.
-- [ ] Operator PLC recovery authorization, key custody, and local reconciliation workflows.
+- [x] Operator recovery of the current local identity from signed forks, with credential revocation and resumable completion.
+- [ ] Recovery with replacement private keys, pending-operation conflict resolution, and lost-key recovery.
 - [x] Per-revision signing-key provenance for historical record and block verification.
 - [x] Internal atomic repository signing-key replacement with unchanged-tree commits and vault rollback.
 - [x] PostgreSQL repository heads and atomic record, tree, and commit updates with optional head compare-and-swap.
@@ -3522,6 +3523,50 @@ that invalidates more operations. Readback detects that mismatch and leaves the
 journal unconfirmed for operator reconciliation; it cannot undo directory
 acceptance. Expiry, rejection, conflicts and timeouts retain the exact staged
 operation. Generic ordinary-update submission paths cannot complete recovery
-journals. Account deletion cascades the journal. Operator authorization,
-replacement-key custody, conflict resolution and atomic local recovery completion
-remain pending. No recovery command is exposed yet.
+journals. Account deletion cascades the journal. The operator command below
+provides authorized staging and atomic local completion for restoring existing
+readable local keys. Recovery with replacement keys and conflicting pending work
+remains unfinished.
+
+### Operator recovery of the current local identity
+
+For a signed recovery that restores the existing local repository signing key,
+handle, PDS service, and a retained readable PLC authority, run:
+
+```sh
+mix atoll.plc.recover stage did:plc:ACCOUNT signed-recovery.json
+mix atoll.plc.recover status did:plc:ACCOUNT
+mix atoll.plc.recover resume did:plc:ACCOUNT STAGED_OPERATION_CID
+```
+
+The operation must already be signed by an authority allowed to recover from its
+chosen surviving ancestor. The JSON file is bounded to 64 KiB, rejects duplicate
+object keys and excessive nesting, and must pass the signed-operation and recovery
+verifiers. The command never receives the external recovery private key. The
+retained local PLC authority must be included in the recovered rotation-key list.
+`stage` verifies fresh directory history, forward handle ownership and local key
+readability before persisting the exact reviewed fork. It performs no POST.
+
+`resume` rechecks local compatibility, uses verified recovery submission/readback,
+and fetches fresh directory history again before local completion. Under account
+locks, completion checks for intervening identity changes and atomically revokes
+all local sessions and app passwords, clears pending account challenges, updates
+the identity observation, emits an identity event, completes the journal, and
+records an operator audit of public recovery scope and revocation counts. A
+completed retry verifies directory/local compatibility and creates no duplicate
+event, audit or revocation; sessions created after recovery remain usable.
+
+The repository key and commit, account password, email, and account status are
+preserved. Active and deactivated accounts are supported; suspended and taken-down
+accounts require separate operator handling. This path assumes the retained local
+keys are still trusted and readable. It does not repair compromised account
+passwords/email, revoke service tokens already accepted by external services,
+replace lost/private keys, or overwrite another pending PLC operation. Use the
+existing password-management workflow when local credentials are compromised.
+Recovery requiring new key custody and pending-operation conflict reconciliation
+remains unfinished.
+
+Directory acceptance and local completion cannot be atomic. Keep the journal
+after any interruption, and use `status` to recover its CID before retrying
+`resume`. A conflict leaves the operation pending for reconciliation rather than
+restaging or expanding its recovery scope. No email is sent by this command.

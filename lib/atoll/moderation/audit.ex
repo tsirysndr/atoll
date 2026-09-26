@@ -28,6 +28,23 @@ defmodule Atoll.Moderation.Audit do
     )
   end
 
+  @doc "Records a locally reconciled recovery with public scope and credential counts."
+  def recovery!(row, counts) do
+    insert!(
+      "atoll.plc.recover",
+      row.did,
+      %{kind: "plcRecovery", did: row.did},
+      %{operationCid: row.cid, nullifiedCids: row.recovery_nullified_cids},
+      %{directoryHead: row.recovery_expected_head},
+      %{
+        directoryHead: row.cid,
+        revokedSessions: counts.sessions,
+        revokedAppPasswords: counts.app_passwords
+      },
+      "operator"
+    )
+  end
+
   @doc "Records an ordinary PLC authority-key replacement without private material."
   def authority_rotation!(did, cid, expected, replacement) do
     insert!(
