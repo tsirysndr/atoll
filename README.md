@@ -54,8 +54,9 @@ Checked items are implemented in this repository. Unchecked items are remaining 
 - [x] `Atoll.Storage.get_block/1` retrieves exact bytes and distinguishes invalid CIDs from missing blocks.
 - [x] PostgreSQL integration tests for reads, writes, duplicates, and rejected content.
 - [x] Structured CBOR node storage and retrieval with CID verification and decoding validation.
-- [ ] Repository ownership and block references.
-- [ ] Unreferenced-block cleanup and storage quotas.
+- [x] Per-repository block ownership inventories for every retained revision, with indexed membership checks.
+- [x] Bounded unreferenced repository-block cleanup with age grace and write serialization.
+- [ ] Repository block storage quotas.
 
 Block storage is currently an internal API. `put_block/2` verifies digests;
 `put_node/1` also validates CBOR and decoding limits. `get_node/1` verifies stored
@@ -879,9 +880,34 @@ or explicit collection to finish physical blob cleanup.
 
 Prior firehose events for the DID are removed, and a new account event reports
 `active: false, status: "deleted"`. This prevents old commits from reappearing if
-the same DID is later provisioned again. Shared repository block bytes are retained
-pending block garbage collection; backups and copies held by other services are
+the same DID is later provisioned again. Unowned repository block bytes can be reclaimed with the bounded block cleanup
+command after its age grace period; backups and copies held by other services are
 outside this deletion operation. Email changes and password recovery invalidate
 outstanding deletion codes. Deletion requests use the bounded session parser;
 final deletion shares the direct-IP login attempt limit. No external PLC identity
 is tombstoned or deleted by this operation.
+
+
+### Repository block cleanup
+
+`mix atoll.blocks.prune --limit 500 --grace-seconds 86400` deletes one batch of old
+DAG-CBOR blocks not referenced by retained revision inventories, revision commit
+heads, current heads, or indexed records. The default grace is 24 hours; accepted
+values are one hour through one year, with batch sizes 1–1000. Existing blocks
+receive the migration time as their initial age. New blocks track first insertion;
+repeated inserts preserve that timestamp.
+
+Cleanup uses the same transaction advisory lock as repository writes, imports,
+and account deletion, so selection and deletion cannot race new ownership. A
+GIN index accelerates revision-inventory membership checks. Row locks skip locked
+candidates; lock waits are limited to one second and SQL statements to five seconds.
+Timeouts roll back the batch. Run again or schedule recurring invocations to clear
+a backlog. No automatic block-cleanup scheduler is enabled.
+
+Historical revisions remain owners even after a record is updated/deleted or an
+account is deactivated. Account deletion removes those ownership inventories,
+allowing unique blocks to expire while other accounts protect shared blocks.
+Raw blob bytes are deliberately handled by the separate blob cleanup queue.
+Standalone internal `Storage.put_node` writes have no ownership until attached to
+a repository; callers must not rely on unowned blocks surviving beyond the grace
+period. Revision compaction and normalized reference indexing remain pending.

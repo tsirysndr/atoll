@@ -8,5 +8,6 @@ defmodule Atoll.Storage.Block do
   @primary_key {:cid, :binary, autogenerate: false}
   schema "blocks" do
     field :data, :binary
+    timestamps(type: :utc_datetime_usec, updated_at: false)
   end
 end
