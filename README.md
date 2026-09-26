@@ -69,7 +69,8 @@ record Lexicons or grant access to account data.
 - [ ] Record reads and listing (`getRecord`, `listRecords`).
 - [ ] Record writes and deletion (`createRecord`, `putRecord`, `deleteRecord`, `applyWrites`).
 - [ ] Repository description (`com.atproto.repo.describeRepo`).
-- [ ] CAR import and export.
+- [x] In-memory CARv1 encoding and decoding with block verification and resource limits.
+- [ ] Repository CAR import and export integration, including streaming large transfers.
 
 ### Identity, accounts, and authentication
 
