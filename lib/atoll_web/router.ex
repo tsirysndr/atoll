@@ -65,6 +65,8 @@ defmodule AtollWeb.Router do
     post "/com.atproto.server.activateAccount", SessionController, :activate
     post "/com.atproto.server.deactivateAccount", SessionController, :deactivate
     post "/com.atproto.identity.refreshIdentity", IdentityController, :refresh
+    get "/com.atproto.identity.resolveDid", IdentityController, :resolve_did
+    get "/com.atproto.identity.resolveIdentity", IdentityController, :resolve_identity
     get "/com.atproto.identity.resolveHandle", IdentityController, :resolve_handle
     get "/com.atproto.identity.getRecommendedDidCredentials", IdentityController, :recommended
     get "/com.atproto.repo.getRecord", RepoController, :get_record

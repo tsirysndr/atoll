@@ -21,15 +21,21 @@ defmodule AtollWeb.SessionRequestPlug do
     @prefix <> "activateAccount",
     @prefix <> "deactivateAccount"
   ]
-  @queries [
-    @prefix <> "getAccountInviteCodes",
-    @prefix <> "listAppPasswords",
-    @prefix <> "getSession",
-    @prefix <> "checkAccountStatus",
-    @prefix <> "getServiceAuth",
-    "/xrpc/com.atproto.repo.listMissingBlobs",
-    "/xrpc/com.atproto.identity.getRecommendedDidCredentials"
+  @identity_queries [
+    "/xrpc/com.atproto.identity.resolveDid",
+    "/xrpc/com.atproto.identity.resolveIdentity",
+    "/xrpc/com.atproto.identity.resolveHandle"
   ]
+  @queries @identity_queries ++
+             [
+               @prefix <> "getAccountInviteCodes",
+               @prefix <> "listAppPasswords",
+               @prefix <> "getSession",
+               @prefix <> "checkAccountStatus",
+               @prefix <> "getServiceAuth",
+               "/xrpc/com.atproto.repo.listMissingBlobs",
+               "/xrpc/com.atproto.identity.getRecommendedDidCredentials"
+             ]
   @parser Plug.Parsers.init(
             parsers: [:json],
             json_decoder: Jason,
@@ -56,16 +62,23 @@ defmodule AtollWeb.SessionRequestPlug do
 
     if conn.method == method do
       {bucket, limit} =
-        if path in [
-             "/xrpc/com.atproto.identity.refreshIdentity",
-             @prefix <> "createSession",
-             @prefix <> "createAccount",
-             @prefix <> "requestPasswordReset",
-             @prefix <> "resetPassword",
-             @prefix <> "deleteAccount"
-           ],
-           do: {:login, 20},
-           else: {:session, 300}
+        cond do
+          path in @identity_queries ->
+            {:identity_resolution, 60}
+
+          path in [
+            "/xrpc/com.atproto.identity.refreshIdentity",
+            @prefix <> "createSession",
+            @prefix <> "createAccount",
+            @prefix <> "requestPasswordReset",
+            @prefix <> "resetPassword",
+            @prefix <> "deleteAccount"
+          ] ->
+            {:login, 20}
+
+          true ->
+            {:session, 300}
+        end
 
       case Atoll.Accounts.SessionLimiter.check({bucket, conn.remote_ip}, limit) do
         :ok ->

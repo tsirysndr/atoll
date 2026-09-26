@@ -31,6 +31,30 @@ defmodule AtollWeb.IdentityController do
     end
   end
 
+  def resolve_did(conn, params) do
+    resolve_result(conn, Atoll.Identity.Resolution.did(params["did"], resolution_options()))
+  end
+
+  def resolve_identity(conn, params) do
+    resolve_result(
+      conn,
+      Atoll.Identity.Resolution.identity(params["identifier"], resolution_options())
+    )
+  end
+
+  defp resolution_options, do: Application.get_env(:atoll, :identity_resolution_options, [])
+
+  defp resolve_result(conn, {:ok, result}), do: json(conn, result)
+
+  defp resolve_result(conn, {:error, :did_not_found}),
+    do: conn |> put_status(400) |> json(%{error: "DidNotFound", message: "DID not found."})
+
+  defp resolve_result(conn, {:error, :handle_not_found}),
+    do: conn |> put_status(400) |> json(%{error: "HandleNotFound", message: "Handle not found."})
+
+  defp resolve_result(conn, {:error, _}),
+    do: AtollWeb.XRPCFallback.call(conn, {:error, :identity_unavailable})
+
   def recommended(conn, _params) do
     with {:ok, token} <- AtollWeb.BearerToken.get(conn),
          {:ok, result} <- Atoll.Identity.Recommended.get(token) do

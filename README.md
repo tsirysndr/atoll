@@ -43,7 +43,7 @@ Phoenix for server-side reporting. Non-XRPC routes retain their existing error
 format. Failures rejected by the HTTP adapter before reaching Phoenix and errors
 after a response or WebSocket upgrade has begun are outside this JSON renderer.
 
-Routed GET query parameters are checked against 24 unmodified upstream Lexicons
+Routed GET query parameters are checked against 26 unmodified upstream Lexicons
 vendored in `priv/lexicons`, pinned to the revision recorded there with its MIT
 license. Validation covers required parameters, string identifier formats and
 lengths, integer bounds, booleans, and repeated-key arrays. Controller-specific
@@ -292,6 +292,7 @@ mutation. Deletes and empty batches need no record schema, even with `validate: 
 - [x] DNS TXT handle resolution with HTTPS fallback, normalization, ambiguity checks, and reserved-domain rejection.
 - [x] Internal bidirectional handle verification against the resolved DID document.
 - [x] Public `com.atproto.identity.resolveHandle` forward lookup (does not assert bidirectional verification).
+- [x] Public `resolveDid` and `resolveIdentity` queries for remote DID documents and verified identity information.
 - [x] Handle-based repository reads with bidirectional verification and canonical DID record URIs.
 - [ ] Handle updates, caching, and redirect support.
 - [x] Authenticated account activation and deactivation with atomic status events.
@@ -1846,3 +1847,29 @@ Requests have a 4 KiB JSON limit, no-store responses, and share the per-node
 login/recovery budget of 20 requests per five minutes per direct client IP. This
 endpoint does not provide distributed request coalescing or replace the optional
 periodic refresh worker.
+
+### Public identity resolution
+
+`GET com.atproto.identity.resolveDid?did=...` returns `{ "didDoc": ... }` for a
+resolved DID, without requiring an ATProto signing key or PDS service and without
+verifying a handle. `GET com.atproto.identity.resolveIdentity?identifier=...`
+accepts a DID or handle and returns `did`, `handle`, and `didDoc`. It requires valid
+ATProto identity fields and verifies the document's claimed handle back to the DID;
+an absent or unverified claim is returned as `handle.invalid`. Handle input is
+case-insensitive. Neither endpoint requires a local account or authentication.
+
+Queries use the existing bounded positive DID cache, public-address-pinned HTTPS
+resolver, DNS handle resolution, and response/time limits. They reject redirects
+and cannot override resolver options through query parameters. Resolution performs
+no account mutation and emits no identity event. Owner `refreshIdentity` remains
+the explicit fresh-resolution and observation-update path.
+
+A missing DID or handle returns `DidNotFound` or `HandleNotFound`; invalid documents
+and upstream failures return `InvalidRequest` without upstream response bodies.
+The resolver does not currently distinguish a deactivated PLC DID from a missing
+DID. Independent PLC operation-log verification remains pending.
+
+All three public identity queries (`resolveDid`, `resolveIdentity`, `resolveHandle`)
+share a per-node limit of 60 requests per five minutes per direct client IP, return
+no-store responses, and reject request bodies. Query parsing retains the existing
+32 KiB bound and Lexicon parameter validation.
