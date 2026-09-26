@@ -85,7 +85,8 @@ defmodule Atoll.Identity.PLC.Submission do
   end
 
   defp reject_key_workflow!(row) do
-    if row.signing_public_key || row.authority_public_key, do: Repo.rollback(:plc_update_pending)
+    if row.signing_public_key || row.authority_public_key || row.recovery_expected_head,
+      do: Repo.rollback(:plc_update_pending)
   end
 
   defp compatible(head, operation) do

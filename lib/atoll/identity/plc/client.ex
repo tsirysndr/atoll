@@ -109,6 +109,80 @@ defmodule Atoll.Identity.PLC.Client do
     end
   end
 
+  @doc "Submit a persisted recovery only against its reviewed head, checking fresh audit evidence."
+  def submit_recovery(did, %{expected_head: expected_head} = reviewed, operation, opts \\ []) do
+    with {:ok, cid} <- Operation.cid(operation),
+         {:ok, %{entries: audit, state: state}} <- fetch_audit(did, opts) do
+      cond do
+        state.cid == cid ->
+          recovery_accepted(audit, cid, reviewed)
+
+        state.cid != expected_head ->
+          {:error, :plc_conflict}
+
+        true ->
+          with {:ok, plan} <- Atoll.Identity.PLC.RecoveryPlan.preview(did, audit, operation),
+               :ok <- same_recovery_scope(plan, reviewed),
+               {:ok, origin} <-
+                 directory(Application.get_env(:atoll, :plc_directory_url, @default_directory)) do
+            url = origin <> "/" <> URI.encode(did, &URI.char_unreserved?/1)
+            posted = request(:post, url, [json: operation], opts)
+
+            case fetch_audit(did, opts) do
+              {:ok, %{state: %{cid: ^cid}, entries: accepted}} ->
+                recovery_accepted(accepted, cid, reviewed)
+
+              {:ok, %{state: %{cid: ^expected_head}}} ->
+                update_failure(posted)
+
+              {:ok, _} ->
+                {:error, :plc_conflict}
+
+              error ->
+                error
+            end
+          end
+      end
+    end
+  end
+
+  defp same_recovery_scope(plan, reviewed) do
+    if plan.nullified_cids == reviewed.nullified_cids and
+         DateTime.compare(plan.valid_until, reviewed.valid_until) == :eq,
+       do: :ok,
+       else: {:error, :plc_recovery_conflict}
+  end
+
+  defp recovery_accepted(entries, cid, reviewed) do
+    with [accepted, prior | _] <- Enum.reverse(entries),
+         true <- accepted["cid"] == cid and prior["cid"] == reviewed.expected_head,
+         {:ok, received, 0} <- DateTime.from_iso8601(accepted["createdAt"]),
+         true <- DateTime.compare(received, reviewed.valid_until) != :gt do
+      displaced = MapSet.new(reviewed.nullified_cids)
+
+      before_recovery =
+        entries
+        |> Enum.drop(-1)
+        |> Enum.map(fn entry ->
+          if MapSet.member?(displaced, entry["cid"]),
+            do: Map.put(entry, "nullified", false),
+            else: entry
+        end)
+
+      with {:ok, plan} <-
+             Atoll.Identity.PLC.RecoveryPlan.preview(
+               accepted["did"],
+               before_recovery,
+               accepted["operation"],
+               received
+             ),
+           :ok <- same_recovery_scope(plan, reviewed),
+           do: :ok
+    else
+      _ -> {:error, :plc_recovery_conflict}
+    end
+  end
+
   defp update_failure({:ok, %{status: status}})
        when status in 400..499 and status not in [408, 429],
        do: {:error, :plc_rejected}

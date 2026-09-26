@@ -32,6 +32,9 @@ defmodule Atoll.Identity.PLC.Updates do
         lock_head!(did)
 
         case Repo.get_by(Update, did: did, cid: cid) do
+          %Update{recovery_expected_head: head} when not is_nil(head) ->
+            Repo.rollback(:plc_update_pending)
+
           %Update{} = row ->
             summary(row)
 
@@ -72,9 +75,17 @@ defmodule Atoll.Identity.PLC.Updates do
       {:error, :plc_update_inside_transaction}
     else
       case Repo.get_by(Update, did: did, cid: cid) do
-        nil -> {:error, :plc_update_not_found}
-        %Update{confirmed_at: time} = row when not is_nil(time) -> {:ok, summary(row)}
-        row -> submit_row(row, opts)
+        nil ->
+          {:error, :plc_update_not_found}
+
+        %Update{recovery_expected_head: head} when not is_nil(head) ->
+          {:error, :plc_update_pending}
+
+        %Update{confirmed_at: time} = row when not is_nil(time) ->
+          {:ok, summary(row)}
+
+        row ->
+          submit_row(row, opts)
       end
     end
   end

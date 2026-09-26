@@ -15,6 +15,9 @@ defmodule Atoll.Identity.PLC.Update do
     field :authority_public_key, :binary
     field :expected_authority_key, :string
     field :authority_envelope, :binary, redact: true
+    field :recovery_expected_head, :string
+    field :recovery_deadline, :utc_datetime_usec
+    field :recovery_nullified_cids, {:array, :string}
     field :confirmed_at, :utc_datetime_usec
     field :completed_at, :utc_datetime_usec
     timestamps(type: :utc_datetime_usec)

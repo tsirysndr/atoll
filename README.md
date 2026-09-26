@@ -143,7 +143,8 @@ record Lexicons or grant access to account data.
 - [x] Internal encrypted pending custody and atomic installation for PLC directory-authority replacement keys.
 - [x] Operator PLC authority-key rotation with preserved priority, durable staging, and resumable completion.
 - [x] Signed PLC recovery preflight against verified history, with priority/window checks and displaced-operation reporting.
-- [ ] Durable PLC recovery staging, submission, and local reconciliation workflows.
+- [x] Internal durable recovery journal and head-bound submission with verified readback and exact retries.
+- [ ] Operator PLC recovery authorization, key custody, and local reconciliation workflows.
 - [x] Per-revision signing-key provenance for historical record and block verification.
 - [x] Internal atomic repository signing-key replacement with unchanged-tree commits and vault rollback.
 - [x] PostgreSQL repository heads and atomic record, tree, and commit updates with optional head compare-and-swap.
@@ -2639,8 +2640,9 @@ chain to the requested DID, authorize the user action, and durably retain the ex
 signed update before submission. The initial read does not lock the remote directory;
 the directory arbitrates concurrent operations under its PLC rules. This path does
 not submit recovery forks against older predecessors. It does not itself change
-local profiles, repository signing keys, or session state. Authenticated handle,
-key rotation, and recovery workflows remain pending. Behavior follows the
+local profiles, repository signing keys, or session state. Authenticated handle changes and operator key rotation use this transport.
+Recovery has a separate journal and submission path described below; operator
+recovery reconciliation remains pending. Behavior follows the
 [PLC update specification](https://web.plc.directory/spec/v0.1/did-plc).
 
 
@@ -2759,7 +2761,9 @@ identity event. A directory conflict leaves local state pending for reconciliati
 
 This supports modern PLC accounts whose rotation key is retained by Atoll. Legacy
 predecessors can now be converted into modern updates, with operator-installed
-rotation keys. Retained-key replacement and recovery remain pending. did:web owners use the reconciliation path below. Current configured directory/key availability is required;
+rotation keys. Operator retained-key replacement and authority rotation are
+available below; operator recovery remains pending. did:web owners use the
+reconciliation path below. Current configured directory/key availability is required;
 local confirmation history never substitutes for fresh completion checks. No live
 PLC writes are exercised by the test suite.
 
@@ -2860,7 +2864,8 @@ submission workflow. Directory changes after lookup can make its predecessor sta
 A successful response consumes the code once. If the response is lost after commit,
 request a new code after the cooldown; there is no signed-response replay cache.
 Keep the returned signed operation unchanged when submitting or retrying it. Public submission is available for operations matching the local account;
-local signing-key transition/recovery workflows remain pending.
+operator signing-key transition workflows are described below; local recovery
+reconciliation remains pending.
 
 
 ### Authenticated PLC submission
@@ -2953,7 +2958,9 @@ can also repair a damaged envelope when the operator supplies the correct author
 private key and expected public key. It does not recover a lost private key. Signup
 registration evidence and its original envelope remain intact; the installed key
 continues to take precedence. Replacement uses the active encryption master key.
-Directory recovery operations and repository signing-key transitions remain pending.
+Repository signing-key transitions and ordinary directory-authority rotation are
+available below. Recovery submission primitives are available, with operator
+reconciliation still pending.
 
 
 ### Rotation-key custody audit
@@ -3486,5 +3493,35 @@ to perform network lookup within a database transaction. These are preflight
 primitives: they do not authorize an operator, store or submit operations, or
 change local identity. Directory timestamps and history completeness remain
 trusted. A preview cannot reserve the window or guarantee acceptance after an
-intervening operation; the directory uses its actual receipt time. Durable
-recovery staging, submission and local reconciliation remain pending.
+intervening operation; the directory uses its actual receipt time. The durable
+recovery journal below builds on this preflight; local recovery reconciliation
+remains pending.
+
+### Durable PLC recovery journal and submission
+
+`Atoll.Identity.PLC.Recoveries.stage/4` stores an already signed, preflighted
+recovery operation, its fork predecessor, reviewed directory head, recovery
+deadline and displaced operation CIDs. Staging uses the same account mutation
+locks and single-pending-update constraint as ordinary PLC updates, and can be
+combined with caller reservations in one transaction. Exact retries preserve
+the row; changed review scope is rejected. This is an internal primitive: the
+caller must authorize recovery and obtain fresh evidence before staging.
+
+`Recoveries.submit/3` fetches fresh verified audit history before POST. The
+current head, displaced suffix and deadline must match the staged review; it
+never automatically rebases a recovery onto intervening operations. After POST,
+including ambiguous failures, it checks fresh verified readback and reconstructs
+the pre-recovery evidence to confirm the reviewed scope. A matching accepted
+operation supports read-only retries, even after the recovery window has elapsed
+provided directory receipt was within the reviewed window. Confirmation time is
+recorded once and does not complete any local identity change.
+
+The PLC API cannot atomically enforce Atoll's reviewed-head condition. An operation
+may arrive between preflight and POST, and the directory might accept a fork
+that invalidates more operations. Readback detects that mismatch and leaves the
+journal unconfirmed for operator reconciliation; it cannot undo directory
+acceptance. Expiry, rejection, conflicts and timeouts retain the exact staged
+operation. Generic ordinary-update submission paths cannot complete recovery
+journals. Account deletion cascades the journal. Operator authorization,
+replacement-key custody, conflict resolution and atomic local recovery completion
+remain pending. No recovery command is exposed yet.
