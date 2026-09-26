@@ -13,6 +13,8 @@ defmodule Mix.Tasks.Atoll.Plc.Recover do
   replace the corresponding retained keys; omitted keys must remain readable
   and authorized by the operation. Completion revokes sessions, app passwords
   and pending account challenges. Account password and email are unchanged.
+  Use literal "absent" for EXPECTED_AUTHORITY_DID_KEY only when no local authority
+  public metadata exists; repository expected keys must always be did:key values.
   """
   def run(args) do
     action =
@@ -34,7 +36,13 @@ defmodule Mix.Tasks.Atoll.Plc.Recover do
           key = read_key!(key_path)
 
           fn opts ->
-            Atoll.Identity.PLC.LocalRecovery.stage_authority(did, operation, expected, key, opts)
+            Atoll.Identity.PLC.LocalRecovery.stage_authority(
+              did,
+              operation,
+              authority_expected(expected),
+              key,
+              opts
+            )
           end
 
         [
@@ -55,7 +63,7 @@ defmodule Mix.Tasks.Atoll.Plc.Recover do
               did,
               operation,
               {expected_repository, repository},
-              {expected_authority, authority},
+              {authority_expected(expected_authority), authority},
               opts
             )
           end
@@ -90,6 +98,9 @@ defmodule Mix.Tasks.Atoll.Plc.Recover do
         )
     end
   end
+
+  defp authority_expected("absent"), do: :absent
+  defp authority_expected(value), do: value
 
   defp read_key!(path) do
     with {:ok, bytes} when is_binary(bytes) and byte_size(bytes) <= 4096 <-

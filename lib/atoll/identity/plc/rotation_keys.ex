@@ -116,7 +116,12 @@ defmodule Atoll.Identity.PLC.RotationKeys do
     end
   end
 
-  defp retained_public(did, :recovery), do: public_key(did)
+  defp retained_public(did, :recovery) do
+    case public_key(did) do
+      {:error, :key_not_found} -> {:ok, :absent}
+      result -> result
+    end
+  end
 
   defp retained_public(did, :ordinary) do
     with {:ok, old} <- Atoll.Identity.PLC.Registrations.rotation_key(did),
@@ -144,7 +149,9 @@ defmodule Atoll.Identity.PLC.RotationKeys do
          {:ok, key} <- Atoll.Identity.PLC.PendingAuthorityKeys.fetch(did, cid),
          {:ok, current} <- retained_public(did, mode),
          {:ok, replacement} <- Multikey.to_did_key(key.curve, key.public) do
-      unless current in [row.expected_authority_key, replacement],
+      expected = row.expected_authority_key || :absent
+
+      unless current in [expected, replacement],
         do: Repo.rollback(:stale_rotation_key)
 
       updated = %RotationKey{

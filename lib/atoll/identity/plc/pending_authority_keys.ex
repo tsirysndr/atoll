@@ -21,7 +21,7 @@ defmodule Atoll.Identity.PLC.PendingAuthorityKeys do
   defp stage_key(did, audit, operation, expected, %SigningKey{} = key, mode)
        when is_map(operation) do
     with {:ok, master} <- MasterKeys.active(),
-         {:ok, _} <- Multikey.from_did_key(expected),
+         :ok <- validate_expected(expected, mode),
          {:ok, derived} <- SigningKey.from_private(key.curve, key.private),
          true <- derived.public == key.public,
          {:ok, public} <- Multikey.to_did_key(key.curve, key.public),
@@ -41,6 +41,7 @@ defmodule Atoll.Identity.PLC.PendingAuthorityKeys do
           end
 
         case current_public do
+          {:error, :key_not_found} when expected == :absent and mode != :ordinary -> :ok
           {:ok, ^expected} -> :ok
           {:ok, _} -> Repo.rollback(:stale_rotation_key)
           {:error, reason} -> Repo.rollback(reason)
@@ -69,8 +70,9 @@ defmodule Atoll.Identity.PLC.PendingAuthorityKeys do
             Repo.rollback(:plc_update_completed)
 
           row.authority_envelope ->
-            unless row.expected_authority_key == expected and fetch(did, cid) == {:ok, key},
-              do: Repo.rollback(:pending_key_conflict)
+            unless row.expected_authority_key == stored_expected(expected) and
+                     fetch(did, cid) == {:ok, key},
+                   do: Repo.rollback(:pending_key_conflict)
 
             :unchanged
 
@@ -87,14 +89,14 @@ defmodule Atoll.Identity.PLC.PendingAuthorityKeys do
               row
               | authority_curve: key.curve,
                 authority_public_key: key.public,
-                expected_authority_key: expected
+                expected_authority_key: stored_expected(expected)
             }
 
             row
             |> Ecto.Changeset.change(
               authority_curve: key.curve,
               authority_public_key: key.public,
-              expected_authority_key: expected,
+              expected_authority_key: stored_expected(expected),
               authority_envelope: encrypt(bound, key.private, master)
             )
             |> Repo.update!(log: false)
@@ -109,6 +111,18 @@ defmodule Atoll.Identity.PLC.PendingAuthorityKeys do
   end
 
   defp stage_key(_, _, _, _, _, _), do: {:error, :invalid_key}
+
+  defp validate_expected(:absent, {:recovery, _}), do: :ok
+
+  defp validate_expected(expected, _) do
+    case Multikey.from_did_key(expected) do
+      {:ok, _} -> :ok
+      _ -> {:error, :invalid_key}
+    end
+  end
+
+  defp stored_expected(:absent), do: nil
+  defp stored_expected(expected), do: expected
 
   def fetch(did, cid) do
     with {:ok, master} <- MasterKeys.active() do

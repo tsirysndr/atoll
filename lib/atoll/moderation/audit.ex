@@ -38,7 +38,9 @@ defmodule Atoll.Moderation.Audit do
       %{
         directoryHead: row.recovery_expected_head,
         repositoryKey: row.expected_signing_key,
-        authorityKey: row.expected_authority_key
+        authorityKey: row.expected_authority_key,
+        authorityWasAbsent:
+          not is_nil(row.authority_public_key) and is_nil(row.expected_authority_key)
       },
       %{
         directoryHead: row.cid,

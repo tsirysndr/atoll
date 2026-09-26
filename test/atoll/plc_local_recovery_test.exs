@@ -371,6 +371,127 @@ defmodule Atoll.PLCLocalRecoveryTest do
     assert Agent.get(c.directory, & &1.posts) == 1
   end
 
+  test "recovery installs authority when local metadata is absent and binds absence to custody",
+       c do
+    Repo.delete!(Repo.get!(Atoll.Identity.PLC.Registration, c.did))
+    assert {:ok, _} = LocalRecovery.stage_authority(c.did, c.recovery, :absent, c.high, c.opts)
+    row = Repo.get_by!(Update, did: c.did, cid: c.cid)
+    assert row.authority_public_key == c.high.public
+    assert is_nil(row.expected_authority_key)
+    assert {:ok, key} = Atoll.Identity.PLC.PendingAuthorityKeys.fetch(c.did, c.cid)
+    assert key == c.high
+    assert {:ok, _} = LocalRecovery.stage_authority(c.did, c.recovery, :absent, c.high, c.opts)
+
+    assert Repo.get_by!(Update, did: c.did, cid: c.cid).authority_envelope ==
+             row.authority_envelope
+
+    {:ok, public} = Multikey.to_did_key(c.high.curve, c.high.public)
+    row |> Ecto.Changeset.change(expected_authority_key: public) |> Repo.update!()
+
+    assert {:error, :key_decryption_failed} =
+             Atoll.Identity.PLC.PendingAuthorityKeys.fetch(c.did, c.cid)
+
+    Repo.get_by!(Update, did: c.did, cid: c.cid)
+    |> Ecto.Changeset.change(expected_authority_key: nil)
+    |> Repo.update!()
+
+    assert {:ok, _} = LocalRecovery.resume(c.did, c.cid, c.opts)
+    assert Registrations.rotation_key(c.did) == {:ok, c.high}
+    audit = Repo.one!(Atoll.Moderation.AuditEntry)
+    assert audit.before_state["authorityWasAbsent"]
+    assert audit.before_state["authorityKey"] == nil
+    assert audit.after_state["authorityKey"] == public
+    assert {:ok, _} = LocalRecovery.resume(c.did, c.cid, c.opts)
+    assert Agent.get(c.directory, & &1.posts) == 1
+    assert {:ok, %{unchanged: 2}} = Atoll.KeyRewrap.batch()
+  end
+
+  test "combined recovery restores missing repository custody and absent authority metadata", c do
+    repository = SigningKey.generate(:p256)
+    authority = SigningKey.generate()
+    {op, cid, expected_repository, _} = combined_recovery(c, repository, authority)
+    Repo.delete!(Repo.get!(Atoll.Identity.PLC.Registration, c.did))
+    Repo.delete!(Repo.get!(Atoll.Repositories.EncryptedKey, c.did))
+    seq = Events.latest_seq()
+
+    assert {:ok, _} =
+             LocalRecovery.stage_keys(
+               c.did,
+               op,
+               {expected_repository, repository},
+               {:absent, authority},
+               c.opts
+             )
+
+    assert {:ok, _} = LocalRecovery.resume(c.did, cid, c.opts)
+    assert KeyVault.fetch(c.did) == {:ok, repository}
+    assert Registrations.rotation_key(c.did) == {:ok, authority}
+    assert {:ok, [%{kind: :identity}, %{kind: :sync}]} = Events.list_after(seq)
+  end
+
+  test "absent authority expectation rejects existing metadata and ordinary rotation", c do
+    assert {:error, :stale_rotation_key} =
+             LocalRecovery.stage_authority(c.did, c.recovery, :absent, c.high, c.opts)
+
+    assert {:error, :invalid_key} =
+             Atoll.Identity.PLC.PendingAuthorityKeys.stage(
+               c.did,
+               c.audit,
+               c.recovery,
+               :absent,
+               c.high
+             )
+
+    assert Repo.all(Update) == []
+    assert Agent.get(c.directory, & &1.posts) == 0
+  end
+
+  test "authority metadata appearing after staging blocks recovery before POST", c do
+    original = Repo.get!(Atoll.Identity.PLC.Registration, c.did)
+    Repo.delete!(original)
+    assert {:ok, _} = LocalRecovery.stage_authority(c.did, c.recovery, :absent, c.high, c.opts)
+    Repo.insert!(Ecto.reset_fields(original, [:__meta__]))
+    assert {:error, :stale_rotation_key} = LocalRecovery.resume(c.did, c.cid, c.opts)
+    assert Agent.get(c.directory, & &1.posts) == 0
+    assert {:ok, _} = Atoll.Identity.PLC.PendingAuthorityKeys.fetch(c.did, c.cid)
+    assert {:ok, _} = Sessions.authenticate(c.pair.access_jwt)
+  end
+
+  test "authority recovery CLI accepts explicit absent metadata", c do
+    Repo.delete!(Repo.get!(Atoll.Identity.PLC.Registration, c.did))
+    base = Path.join(System.tmp_dir!(), "atoll-absent-#{System.unique_integer([:positive])}")
+    op_path = base <> ".op.json"
+    key_path = base <> ".key.json"
+    on_exit(fn -> Enum.each([op_path, key_path], &File.rm/1) end)
+    File.write!(op_path, Jason.encode!(c.recovery))
+
+    File.write!(
+      key_path,
+      Jason.encode!(%{curve: "p256", privateKey: Base.encode64(c.high.private)})
+    )
+
+    File.chmod!(key_path, 0o600)
+    Application.put_env(:atoll, :identity_resolution_options, Keyword.drop(c.opts, [:plug]))
+    Application.put_env(:atoll, :plc_submission_options, Keyword.take(c.opts, [:plug]))
+
+    output =
+      ExUnit.CaptureIO.capture_io(fn ->
+        Mix.Tasks.Atoll.Plc.Recover.run(["stage-authority", c.did, op_path, key_path, "absent"])
+      end)
+
+    assert Jason.decode!(output)["cid"] == c.cid
+    refute output =~ Base.encode64(c.high.private)
+    File.rm!(key_path)
+
+    output =
+      ExUnit.CaptureIO.capture_io(fn ->
+        Mix.Tasks.Atoll.Plc.Recover.run(["resume", c.did, c.cid])
+      end)
+
+    assert Jason.decode!(output)["result"] == "completed"
+    assert Registrations.rotation_key(c.did) == {:ok, c.high}
+  end
+
   test "explicit signup retirement unblocks rewrap after lost-master recovery", c do
     repository = SigningKey.generate(:p256)
     authority = SigningKey.generate()

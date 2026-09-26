@@ -72,7 +72,7 @@ defmodule Atoll.Identity.PLC.LocalRecovery do
          :ok <- Operation.validate_submission(operation),
          true <- not is_nil(repository) or not is_nil(authority),
          {:ok, repository_context} <- validate_key(repository),
-         {:ok, authority_context} <- validate_key(authority),
+         {:ok, authority_context} <- validate_authority(authority),
          %Profile{} = profile <- Repo.get(Profile, did),
          observation = Repo.get(Observation, did),
          {:ok, %{entries: audit}} <- Client.fetch_audit(did, Keyword.take(opts, [:plug])),
@@ -116,6 +116,14 @@ defmodule Atoll.Identity.PLC.LocalRecovery do
       error -> error
     end
   end
+
+  defp validate_authority({:absent, %SigningKey{} = key}) do
+    with {:ok, public} <- Multikey.to_did_key(key.curve, key.public),
+         {:ok, _} <- validate_key({public, key}),
+         do: {:ok, {:absent, public}}
+  end
+
+  defp validate_authority(value), do: validate_key(value)
 
   defp validate_key(nil), do: {:ok, nil}
 
@@ -232,7 +240,7 @@ defmodule Atoll.Identity.PLC.LocalRecovery do
     if row.authority_public_key && is_nil(row.completed_at) do
       key = unwrap!(PendingAuthorityKeys.fetch(row.did, row.cid))
       {:ok, public} = Multikey.to_did_key(key.curve, key.public)
-      {row.expected_authority_key, public}
+      {row.expected_authority_key || :absent, public}
     end
   end
 
@@ -257,6 +265,12 @@ defmodule Atoll.Identity.PLC.LocalRecovery do
         nil ->
           authority = unwrap!(Registrations.rotation_key(head.did))
           unwrap!(Multikey.to_did_key(authority.curve, authority.public))
+
+        {:absent, replacement} ->
+          unless RotationKeys.public_key(head.did) == {:error, :key_not_found},
+            do: Repo.rollback(:stale_rotation_key)
+
+          replacement
 
         {expected, replacement} ->
           unless RotationKeys.public_key(head.did) == {:ok, expected},

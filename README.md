@@ -151,7 +151,8 @@ record Lexicons or grant access to account data.
 - [x] Internal recovery custody and atomic restoration of PLC authority keys without decrypting old custody.
 - [x] Operator authority-only and combined repository/authority key recovery, including old-master-key loss.
 - [x] Explicit audited retirement of historical signup key envelopes after completed key reconciliation.
-- [ ] Recovery conflict resolution for existing pending operations and missing authority metadata.
+- [x] Recovery with explicitly absent local authority metadata and supplied private custody.
+- [ ] Recovery conflict resolution for existing pending operations.
 - [x] Per-revision signing-key provenance for historical record and block verification.
 - [x] Internal atomic repository signing-key replacement with unchanged-tree commits and vault rollback.
 - [x] PostgreSQL repository heads and atomic record, tree, and commit updates with optional head compare-and-swap.
@@ -3533,7 +3534,7 @@ operation. Generic ordinary-update submission paths cannot complete recovery
 journals. Account deletion cascades the journal. The operator command below
 provides authorized staging and atomic local completion for restoring existing
 local keys, with optional repository and PLC authority key replacement. Recovery
-with conflicting pending work or missing authority metadata remains unfinished.
+with conflicting pending work remains unfinished.
 
 ### Operator recovery of the current local identity
 
@@ -3572,7 +3573,8 @@ replace lost/private keys, or overwrite another pending PLC operation. Use the
 existing password-management workflow when local credentials are compromised.
 Repository-key replacement is supported by `stage-key` below; `stage-authority`
 and `stage-keys` also restore PLC authority custody. Pending-operation conflict
-reconciliation and recovery with missing authority metadata remain unfinished.
+reconciliation remains unfinished. Missing authority metadata is supported with
+an explicit `absent` expectation as described below.
 
 Directory acceptance and local completion cannot be atomic. Keep the journal
 after any interruption, and use `status` to recover its CID before retrying
@@ -3733,9 +3735,9 @@ retry. Authority-only repair does not change the repository commit.
 
 Combined recovery can restore both active vaults under a new master key even if
 the old master key is lost, provided authorized replacement private keys and a
-valid signed recovery remain available. Existing public authority metadata is
-required; missing metadata and conflicting pending operations still need an
-operator reconciliation workflow. The old signup envelope remains retained as
+valid signed recovery remain available. When authority metadata is missing, use
+the explicit `absent` expectation below. Conflicting pending operations still
+need an operator reconciliation workflow. The old signup envelope remains retained as
 historical custody and may remain unreadable; recovery does not restore lost
 master keys or make those old envelopes rewrappable. The explicit retirement
 command below can remove superseded signup custody so future rewraps can proceed.
@@ -3776,3 +3778,37 @@ skips explicitly retired signup envelopes while continuing to check installed an
 pending custody. Other unreadable envelopes still fail the entire rewrap page.
 Rolling back the retirement migration refuses rows with erased envelopes, since
 those private keys cannot be reconstructed.
+
+
+### Recovery with absent authority metadata
+
+For an account with neither a retained signup authority row nor an installed
+PLC authority row, supply the authorized private key and explicitly expect
+`absent` instead of an old authority did:key:
+
+```sh
+mix atoll.plc.recover stage-authority did:plc:ACCOUNT signed-recovery.json /secure/authority.json absent
+mix atoll.plc.recover stage-keys did:plc:ACCOUNT signed-recovery.json /secure/repository.json EXPECTED_REPOSITORY_DID_KEY /secure/authority.json absent
+mix atoll.plc.recover resume did:plc:ACCOUNT STAGED_OPERATION_CID
+```
+
+The internal APIs accept the atom `:absent` for the authority expectation only.
+A missing repository private envelope still requires the repository's existing
+public metadata and its expected did:key. Missing or corrupt authority *private*
+custody with retained public metadata must use that public did:key, not `absent`.
+This workflow cannot reconstruct any lost private key or recreate signed signup
+history. The supplied authority must be authorized by the signed recovery, and
+all recovery signature, priority, expiry, fresh-directory, handle, and local PDS
+checks still apply.
+
+For a recovery row with authority public metadata, a null expected authority key
+records the explicit absence expectation. It is bound into the authenticated
+pending-key envelope; changing it prevents decryption. Ordinary rotation still
+requires existing authority metadata. Staging and resume check absence under the
+account lock; any newly installed or restored metadata causes a stale-key error,
+even if it names the intended replacement key. The pending journal and custody
+remain available for operator reconciliation rather than overwriting that change.
+Completion installs supplied custody, releases pending secrets, and audits the
+previously absent state atomically with the other recovery changes. Completed
+retries verify the now-installed key normally. Downgrading the schema refuses
+existing absent-authority recovery rows rather than inventing old key metadata.
