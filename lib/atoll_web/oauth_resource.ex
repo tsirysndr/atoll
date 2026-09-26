@@ -31,6 +31,17 @@ defmodule AtollWeb.OAuthResource do
   end
 
   def read(conn, reader, opts \\ []) do
+    case read_result(conn, reader, opts) do
+      {:ok, result} ->
+        conn |> put_resp_content_type("application/json") |> send_resp(200, Jason.encode!(result))
+
+      {:error, conn} ->
+        conn
+    end
+  end
+
+  @doc "Run a read callback under OAuth authorization locks, preserving its domain result."
+  def read_result(conn, reader, opts \\ []) do
     with {:ok, token} <- token(get_req_header(conn, "authorization")),
          {:ok, result} <-
            Resource.read(
@@ -40,9 +51,9 @@ defmodule AtollWeb.OAuthResource do
              reader,
              opts
            ) do
-      conn |> put_resp_content_type("application/json") |> send_resp(200, Jason.encode!(result))
+      {:ok, result}
     else
-      {:error, reason} -> failure(conn, reason)
+      {:error, reason} -> {:error, failure(conn, reason)}
     end
   end
 

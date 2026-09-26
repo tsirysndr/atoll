@@ -401,7 +401,8 @@ mutation. Deletes and empty batches need no record schema, even with `validate: 
 - [x] OAuth resource read guard and DPoP `getSession`, with per-access-token email scope enforcement.
 - [x] DPoP repository create/put/delete/applyWrites with transitional generic scope and transactional authorization rechecks.
 - [x] DPoP blob uploads with transitional generic scope, pre-body proof admission, and transactional authorization rechecks.
-- [ ] OAuth authorization for service auth, exports, and remaining resource routes.
+- [x] DPoP service-token issuance with current generic/chat scope checks and authorization locks held through signing.
+- [ ] OAuth authorization for exports and remaining resource routes.
 - [x] Localhost virtual public-client metadata, loopback callback matching, and flow integration without metadata network requests.
 - [ ] OAuth nonce challenges and proof admission integrated into remaining authorization/resource server routes.
 - [ ] ATProto OAuth authorization and resource server support.
@@ -710,7 +711,7 @@ load multiple complete retained trees, so its cost grows with repository history
 more scalable signed-tree membership verification remains pending.
 
 `GET /xrpc/com.atproto.server.getServiceAuth` normally requires an active account's access
-token and a stored repository signing key. Supply `aud` as a DID or DID with a
+token (legacy JWT or DPoP OAuth) and a stored repository signing key. Supply `aud` as a DID or DID with a
 service fragment, optionally `lxm` as an XRPC method NSID and `exp` as Unix epoch
 seconds. Tokens default to 60 seconds; method-less tokens cannot exceed 60 seconds,
 and method-bound tokens cannot exceed one hour. Expired or excessive timestamps
@@ -723,7 +724,7 @@ occur in one transaction. Tokens already issued remain cryptographically valid
 until expiration even if the originating session is revoked; receiving services
 must enforce audience, method, expiration, and their own authorization policy.
 Atoll does not yet accept service JWTs as local access tokens or proxy requests.
-Deactivated accounts can request only the `com.atproto.server.createAccount`
+With a legacy full-account session, deactivated accounts can request only the `com.atproto.server.createAccount`
 method for migration. Taken-down scopes cannot request service tokens. App-password delegation requires an explicit method; standard app passwords cannot delegate chat methods.
 
 The internal `Atoll.Accounts.ServiceTokens.authenticate/4` verifier accepts account
@@ -5048,3 +5049,32 @@ validation, failure replay, revocation and scope changes between the upload plug
 and controller, quotas, and mocked S3 success/failure. These additions do not
 change the opt-in MinIO integration tests. Fine-grained blob permissions remain
 pending along with the broader permissions system.
+
+### DPoP service-token issuance
+
+`GET /xrpc/com.atproto.server.getServiceAuth` accepts DPoP OAuth access tokens with
+`atproto transition:generic`. It verifies the resource nonce, original client key,
+access-token hash, configured origin and GET proof before examining delegation
+parameters. Account, source-session, OAuth-session, and access-token share locks
+remain held while checking the requested method, loading the repository key, and
+signing. Expired, revoked, or inactive-account access cannot issue a token.
+
+The access token's current scope controls delegation, even if its session has a
+broader grant. Explicit `chat.bsky.*` methods additionally require
+`transition:chat.bsky`; checks include case variants. Protected account-management
+methods remain prohibited, and transitional OAuth cannot delegate `createAccount`
+for migration. Insufficient permission returns HTTP 403 `insufficient_scope` with
+a DPoP challenge. Invalid parameters, expiration, and unavailable signing custody
+retain the existing XRPC errors. Proofs remain consumed after these failures.
+
+As in the [reference transitional permission implementation](https://github.com/bluesky-social/atproto/blob/main/packages/oauth/oauth-scopes/src/scope-permissions-transition.ts),
+generic scope permits a method-less service token, limited to 60 seconds. Explicit
+methods may use the existing maximum one-hour lifetime. Service tokens carry no
+OAuth scope or DPoP binding; receiving services must enforce the audience, method,
+expiry and their own policy. Revoking OAuth access prevents future issuance but
+does not revoke a JWT already issued. Fine-grained RPC permissions remain pending.
+
+Tests verify the issued JWT signature and claims, method-less lifetime, separate
+chat permission and narrowed access scopes, forbidden migration/protected methods,
+parameter errors, missing signing custody, proof replay, revocation, inactive
+accounts and target binding. Existing legacy service-token tests remain enabled.

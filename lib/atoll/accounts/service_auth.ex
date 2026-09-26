@@ -46,6 +46,41 @@ defmodule Atoll.Accounts.ServiceAuth do
     end
   end
 
+  @doc """
+  Internal signing callback for OAuth.Resource.read; the caller must hold its
+  authorization locks. This function is not an authentication boundary.
+  """
+  def issue_oauth(%{did: did, status: :active, scope: scope}, params) when is_map(params) do
+    unless Repo.in_transaction?(),
+      do: raise(ArgumentError, "OAuth service signing requires an authorized transaction")
+
+    with true <- audience?(params["aud"]),
+         :ok <- method(params["lxm"]),
+         :ok <- oauth_scope(scope, params["lxm"]),
+         {:ok, expiry} <- expiration(params["exp"]),
+         now = System.system_time(:second),
+         {:ok, exp} <- bounded_expiry(expiry, params["lxm"], now),
+         {:ok, key} <- KeyVault.fetch(did),
+         {:ok, jwt} <- sign(key, did, params["aud"], params["lxm"], now, exp) do
+      {:ok, %{token: jwt}}
+    else
+      false -> {:error, :invalid_request}
+      error -> error
+    end
+  end
+
+  defp oauth_scope(scope, method) do
+    scopes = String.split(scope, " ")
+    method = if method, do: String.downcase(method)
+
+    if "transition:generic" in scopes and
+         method != "com.atproto.server.createaccount" and
+         (is_nil(method) or not String.starts_with?(method, "chat.bsky.") or
+            "transition:chat.bsky" in scopes),
+       do: :ok,
+       else: {:error, :insufficient_scope}
+  end
+
   defp app_scope("com.atproto.access", _), do: :ok
   defp app_scope(_, nil), do: {:error, :forbidden}
 

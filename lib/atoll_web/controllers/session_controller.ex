@@ -128,9 +128,29 @@ defmodule AtollWeb.SessionController do
   end
 
   def service_auth(conn, params) do
-    with {:ok, token} <- bearer(conn),
-         {:ok, result} <- Atoll.Accounts.ServiceAuth.issue(token, params) do
-      json(conn, result)
+    if AtollWeb.OAuthResource.attempt?(conn) do
+      case AtollWeb.OAuthResource.read_result(
+             conn,
+             &Atoll.Accounts.ServiceAuth.issue_oauth(&1, params),
+             required_scopes: ["transition:generic"]
+           ) do
+        {:ok, {:ok, result}} ->
+          json(conn, result)
+
+        {:ok, {:error, :insufficient_scope}} ->
+          AtollWeb.OAuthResource.error(conn, :insufficient_scope)
+
+        {:ok, error} ->
+          error
+
+        {:error, conn} ->
+          conn
+      end
+    else
+      with {:ok, token} <- bearer(conn),
+           {:ok, result} <- Atoll.Accounts.ServiceAuth.issue(token, params) do
+        json(conn, result)
+      end
     end
   end
 

@@ -1,13 +1,13 @@
 defmodule AtollWeb.OAuthResourceTest do
   use AtollWeb.ConnCase, async: false
   alias Atoll.OAuth.{Nonce, PAR, AuthorizationCodes, Session, AccessToken, Resource}
-  alias Atoll.{Repo, Repositories, SigningKey}
+  alias Atoll.{Repo, Repositories}
   alias Atoll.Accounts.Sessions
   @path "/xrpc/com.atproto.server.getSession"
   @id "https://app.example.com/metadata.json"
 
   setup %{conn: conn} do
-    for name <- [:oauth_nonce_secret, :oauth_transport_options] do
+    for name <- [:oauth_nonce_secret, :oauth_transport_options, :key_encryption_key] do
       prior = Application.fetch_env(:atoll, name)
 
       on_exit(fn ->
@@ -53,7 +53,8 @@ defmodule AtollWeb.OAuthResourceTest do
     }
 
     did = "did:plc:httptoken"
-    {:ok, _} = Repositories.create(did, SigningKey.generate())
+    Application.put_env(:atoll, :key_encryption_key, :crypto.strong_rand_bytes(32))
+    {:ok, _} = Repositories.create_managed(did)
     session_options = [secret: :crypto.strong_rand_bytes(32), audience: "did:web:pds.example.com"]
     {:ok, pair} = Sessions.create_for_account(did, session_options)
 
@@ -300,6 +301,122 @@ defmodule AtollWeb.OAuthResourceTest do
     assert read_session(%{c | conn: conn}) |> json_response(200)
     Application.delete_env(:atoll, :oauth_nonce_secret)
     assert read_session(c) |> json_response(503) == %{"error" => "temporarily_unavailable"}
+  end
+
+  test "OAuth service tokens are account-signed, audience-bound and method-bound", c do
+    params = %{
+      "aud" => "did:web:appview.example.com#bsky_appview",
+      "lxm" => "app.bsky.feed.getTimeline",
+      "exp" => Integer.to_string(System.system_time(:second) + 1800)
+    }
+
+    response = service_auth(c, params)
+    %{"token" => token} = json_response(response, 200)
+    claims = verify_service(token, c.did)
+    assert claims["iss"] == c.did
+    assert claims["aud"] == params["aud"]
+    assert claims["lxm"] == params["lxm"]
+    assert claims["exp"] == String.to_integer(params["exp"])
+    assert get_resp_header(response, "dpop-nonce") != []
+    assert get_resp_header(response, "cache-control") == ["no-store"]
+    %{"token" => another} = service_auth(c, Map.take(params, ["aud"])) |> json_response(200)
+    second = verify_service(another, c.did)
+    refute Map.has_key?(second, "lxm")
+    assert second["exp"] - second["iat"] == 60
+    refute second["jti"] == claims["jti"]
+
+    assert {:error, :invalid_token} =
+             Sessions.authenticate(token,
+               secret: :crypto.strong_rand_bytes(32),
+               audience: "did:web:pds.example.com"
+             )
+  end
+
+  test "service delegation requires current generic scope and separate chat permission", c do
+    params = %{"aud" => "did:web:chat.example.com", "lxm" => "chat.bsky.convo.listConvos"}
+    assert service_auth(c, params) |> json_response(403) == %{"error" => "insufficient_scope"}
+    assert service_auth(c, %{params | "lxm" => "CHAT.BSKY.CONVO.LISTCONVOS"}).status == 403
+    broad = "atproto transition:generic transition:chat.bsky transition:email"
+    Repo.update_all(Session, set: [scope: broad])
+    Repo.update_all(AccessToken, set: [scope: broad])
+    assert service_auth(c, params) |> json_response(200)
+    Repo.update_all(AccessToken, set: [scope: "atproto transition:generic"])
+    assert service_auth(c, params).status == 403
+    Repo.update_all(AccessToken, set: [scope: "atproto transition:email"])
+
+    assert service_auth(c, %{params | "lxm" => "app.bsky.feed.getTimeline"})
+           |> json_response(403) == %{"error" => "insufficient_scope"}
+  end
+
+  test "service parameter and custody errors keep XRPC errors and consume proofs", c do
+    params = %{"aud" => "did:web:service.example.com"}
+
+    for changes <- [
+          %{"aud" => "not-a-did"},
+          %{"lxm" => "com.atproto.identity.signPlcOperation"},
+          %{"lxm" => "com.atproto.server.getSession"}
+        ] do
+      assert %{"error" => "InvalidRequest"} =
+               service_auth(c, Map.merge(params, changes)) |> json_response(400)
+    end
+
+    assert service_auth(c, Map.put(params, "lxm", "com.atproto.server.createAccount"))
+           |> json_response(403) == %{"error" => "insufficient_scope"}
+
+    signed = service_proof(c)
+
+    assert %{"error" => "BadExpiration"} =
+             service_auth(c, Map.put(params, "exp", "1"), signed) |> json_response(400)
+
+    assert service_auth(c, params, signed) |> json_response(401) ==
+             %{"error" => "invalid_dpop_proof"}
+
+    Application.delete_env(:atoll, :key_encryption_key)
+    assert %{"error" => "ServiceUnavailable"} = service_auth(c, params) |> json_response(503)
+  end
+
+  test "service issuance rejects revoked sessions, inactive accounts and wrong proof targets",
+       c do
+    params = %{"aud" => "did:web:service.example.com"}
+
+    assert service_auth(c, params, resource_proof(c, c.tokens["access_token"]))
+           |> json_response(401) == %{"error" => "invalid_dpop_proof"}
+
+    Repo.get!(Atoll.Repositories.Head, c.did)
+    |> Ecto.Changeset.change(status: :deactivated)
+    |> Repo.update!()
+
+    assert service_auth(c, params).status == 401
+
+    Repo.get!(Atoll.Repositories.Head, c.did)
+    |> Ecto.Changeset.change(status: :active)
+    |> Repo.update!()
+
+    Repo.delete_all(Session)
+    assert service_auth(c, params) |> json_response(401) == %{"error" => "invalid_token"}
+  end
+
+  defp service_auth(c, params, signed \\ nil),
+    do:
+      c.conn
+      |> put_req_header("authorization", "DPoP " <> c.tokens["access_token"])
+      |> put_req_header("dpop", signed || service_proof(c))
+      |> get("/xrpc/com.atproto.server.getServiceAuth", params)
+
+  defp service_proof(c),
+    do:
+      resource_proof(c, c.tokens["access_token"], %{
+        "htu" => AtollWeb.Endpoint.url() <> "/xrpc/com.atproto.server.getServiceAuth"
+      })
+
+  defp verify_service(token, did) do
+    {:ok, key} = Atoll.KeyVault.fetch(did)
+    [header, claims, signature] = String.split(token, ".")
+    <<r::unsigned-big-256, s::unsigned-big-256>> = Base.url_decode64!(signature, padding: false)
+    der = :public_key.der_encode(:"ECDSA-Sig-Value", {:"ECDSA-Sig-Value", r, s})
+    curve = if key.curve == :k256, do: :secp256k1, else: :secp256r1
+    assert :crypto.verify(:ecdsa, :sha256, header <> "." <> claims, der, [key.public, curve])
+    claims |> Base.url_decode64!(padding: false) |> Jason.decode!()
   end
 
   defp read_session(c),
