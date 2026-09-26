@@ -158,7 +158,7 @@ defmodule AtollWeb.SessionControllerTest do
 
     for override <- [
           %{"password" => []},
-          %{"allowTakendown" => true},
+          %{"allowTakendown" => "true"},
           %{"authFactorToken" => "x"}
         ] do
       assert %{"error" => "InvalidRequest"} = login(conn, override) |> json_response(400)

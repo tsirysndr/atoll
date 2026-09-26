@@ -462,10 +462,18 @@ defmodule Atoll.Repositories do
   Deleted records are not sent; the new MST proves the current state. Revision block
   sets are retained indefinitely for now; compaction and streaming are pending.
   """
-  def export(did, since \\ nil) do
+  def export(did, since \\ nil, token \\ nil) do
     Repo.transaction(fn ->
       unless is_nil(since) or TID.valid?(since), do: Repo.rollback(:invalid_request)
-      {head, tree, commit} = snapshot!(did)
+
+      if not is_nil(token) do
+        case Atoll.Accounts.Sessions.authenticate_export(token, did) do
+          {:ok, _} -> :ok
+          {:error, reason} -> Repo.rollback(reason)
+        end
+      end
+
+      {head, tree, commit} = snapshot!(did, is_nil(token))
 
       known =
         case since && Repo.get_by(Revision, did: did, rev: since) do
@@ -561,8 +569,8 @@ defmodule Atoll.Repositories do
     end
   end
 
-  defp snapshot!(did) do
-    head = locked_head!(did, "FOR SHARE")
+  defp snapshot!(did, require_active \\ true) do
+    head = locked_head!(did, "FOR SHARE", require_active)
     bytes = block!(head.head)
 
     with {:ok, tree} <- MST.new(record_map(did)),

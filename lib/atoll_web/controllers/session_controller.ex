@@ -86,8 +86,8 @@ defmodule AtollWeb.SessionController do
   end
 
   def create(conn, _params) do
-    with {:ok, identifier, password, factor} <- credentials(conn.body_params),
-         {:ok, pair, handle} <- login_pair(identifier, password, factor) do
+    with {:ok, identifier, password, opts} <- credentials(conn.body_params),
+         {:ok, pair, handle} <- login_pair(identifier, password, opts) do
       result = session_response(pair)
       json(conn, if(handle, do: Map.put(result, :handle, handle), else: result))
     end
@@ -151,9 +151,14 @@ defmodule AtollWeb.SessionController do
     if (Atoll.Syntax.did?(identifier) or Atoll.Syntax.handle?(identifier) or
           match?({:ok, _}, Atoll.Accounts.EmailAddress.normalize(identifier))) and
          byte_size(password) in 8..1024 and String.valid?(password) and
-         Map.get(body, "allowTakendown", false) == false and
+         is_boolean(Map.get(body, "allowTakendown", false)) and
          valid_factor?(Map.get(body, "authFactorToken")),
-       do: {:ok, identifier, password, Map.get(body, "authFactorToken")},
+       do:
+         {:ok, identifier, password,
+          [
+            auth_factor_token: body["authFactorToken"],
+            allow_takendown: Map.get(body, "allowTakendown", false)
+          ]},
        else: {:error, :invalid_request}
   end
 
@@ -163,13 +168,13 @@ defmodule AtollWeb.SessionController do
   defp valid_factor?(token) when is_binary(token), do: byte_size(token) == 32
   defp valid_factor?(_), do: false
 
-  defp login_pair(identifier, password, factor) do
+  defp login_pair(identifier, password, opts) do
     if String.contains?(identifier, "@") do
-      with {:ok, pair} <- Sessions.create_email(identifier, password, auth_factor_token: factor),
+      with {:ok, pair} <- Sessions.create_email(identifier, password, opts),
            do: {:ok, pair, nil}
     else
       with {:ok, did, handle} <- login_identity(identifier),
-           {:ok, pair} <- Sessions.create(did, password, auth_factor_token: factor),
+           {:ok, pair} <- Sessions.create(did, password, opts),
            do: {:ok, pair, handle}
     end
   end

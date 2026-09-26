@@ -2,6 +2,10 @@ defmodule AtollWeb.BearerToken do
   @moduledoc false
   import Plug.Conn
 
+  def optional(conn) do
+    if get_req_header(conn, "authorization") == [], do: {:ok, nil}, else: get(conn)
+  end
+
   def get(conn) do
     case get_req_header(conn, "authorization") do
       [] ->

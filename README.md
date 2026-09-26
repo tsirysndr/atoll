@@ -320,7 +320,7 @@ mutation. Deletes and empty batches need no record schema, even with `validate: 
 - [x] Deactivated-account login, refresh, session inspection, repository import, blob upload, missing-blob inventory, and migration-scoped service tokens.
 - [x] Email/password login with normalized addresses and locked ownership rechecks.
 - [x] Optional email authentication factors for account-password login.
-- [ ] Taken-down account session scopes.
+- [x] Opt-in taken-down session scopes and owner-only repository/blob exports.
 - [x] App password creation, metadata listing, revocation, restricted sessions, and privileged service delegation.
 - [ ] ATProto OAuth authorization and resource server support.
 - [x] Live-session and repository ownership checks for blob uploads and single/batch record writes.
@@ -404,11 +404,11 @@ Ordinary write authorization still requires an active repository. Deactivated
 accounts may also list missing blobs and request service tokens specifically for
 `com.atproto.server.createAccount`; other service-token scopes remain blocked.
 Revocation and read-only `checkAccountStatus` allow existing sessions for any
-repository status. Taken-down and suspended accounts cannot create or refresh
-sessions. Restrictions are enforced from current database status on each request,
+repository status. Taken-down accounts can explicitly opt into export-only
+sessions as described below; refresh remains blocked during takedown. Suspended
+accounts cannot create or refresh sessions. Restrictions are enforced from current database status on each request,
 including sessions issued before deactivation. Sessions survive process restarts.
-Changing the signing key invalidates existing tokens. Key rotation with overlap
-and taken-down account session scopes remain pending. Write handlers recheck authorization inside the
+Changing the signing key invalidates existing tokens. Key rotation with overlap remains pending. Write handlers recheck authorization inside the
 write transaction; token verification alone is not write permission.
 
 Expired session rows can be removed with `mix atoll.sessions.prune --limit 500`
@@ -631,7 +631,7 @@ until expiration even if the originating session is revoked; receiving services
 must enforce audience, method, expiration, and their own authorization policy.
 Atoll does not yet accept service JWTs as local access tokens or proxy requests.
 Deactivated accounts can request only the `com.atproto.server.createAccount`
-method for migration. Taken-down sessions remain pending. App-password delegation requires an explicit method; standard app passwords cannot delegate chat methods.
+method for migration. Taken-down scopes cannot request service tokens. App-password delegation requires an explicit method; standard app passwords cannot delegate chat methods.
 
 The internal `Atoll.Accounts.ServiceTokens.authenticate/4` verifier accepts account
 service JWTs with `typ: JWT`, ES256K/ES256, and default or explicit `kid: #atproto`.
@@ -1000,8 +1000,8 @@ lowercase base32 characters. Only a purpose- and account-bound SHA-256 digest is
 stored. Log in through `createSession` using DID, verified handle, or local email
 and the app password. App sessions count toward the ordinary session limit.
 They use `com.atproto.appPass` or `com.atproto.appPassPrivileged` access scopes;
-refresh preserves the persisted scope. Every access check compares the JWT scope
-with the session row, and session creation rechecks that the app credential has
+refresh preserves the persisted scope. Every access check validates the JWT scope
+against the session row or the explicit export-only restriction, and session creation rechecks that the app credential has
 not been revoked.
 
 Both scopes permit ordinary record writes, blob uploads, session inspection,
@@ -1011,7 +1011,9 @@ requires an explicit method for app sessions, rejects migration account creation
 and permits `chat.bsky.*` methods only for privileged app passwords. Existing
 protected-method restrictions still apply. Already-issued service JWTs remain
 valid until their short expiry. Password recovery revokes all app credentials as
-well as sessions. OAuth and taken-down account scopes remain pending.
+well as sessions. Taken-down login temporarily narrows either app scope to
+export-only access; restoration refresh recovers the persisted app scope, never
+full account access. OAuth remains pending.
 
 
 ### Email authentication factors
@@ -1508,8 +1510,9 @@ an administrative override; it does not perform the owner's DID/key readiness ch
 
 Changes take the event lock before the repository row lock and commit atomically
 with an account event when public availability changes. Repeating a state change
-or editing a private reference does not duplicate events. Existing public-read,
-export, blob, write, and session checks immediately enforce takedown. Stored data
+or editing a private reference does not duplicate events. Public reads, exports,
+blobs, ordinary writes, and session-management checks enforce takedown; the owner
+export exception is described below. Stored data
 and sessions are retained, and usable sessions resume when availability is restored.
 The account owner cannot lift a takedown using activation/deactivation endpoints.
 
@@ -1655,3 +1658,45 @@ deleted accounts. Those fields are redacted from schema inspection and excluded
 from SQL parameter logging and public events. No passwords, authorization headers,
 or session tokens are stored. There is no public history endpoint or automatic
 external export.
+
+
+### Export-only sessions during takedown
+
+`com.atproto.server.createSession` accepts `allowTakendown: true`. After normal
+password or app-password verification, an account whose current status is
+`takendown` receives an access JWT with scope `com.atproto.takendown`, plus a refresh
+JWT. The response reports `active: false` and `status: "takendown"`. Without this
+explicit option, login remains blocked. Active/deactivated accounts retain their
+normal scopes. Suspension, including a suspension underneath a takedown, is not
+bypassed. Main-password email factors still require a single-use code delivered
+through the configured Cloudflare Worker.
+
+Supply the access JWT as `Authorization: Bearer ...` to these owner-export routes:
+
+- `com.atproto.sync.getRepo` (including the existing optional `since` revision).
+- `com.atproto.sync.listBlobs` (including pagination and `since`).
+- `com.atproto.sync.getBlob`.
+
+Exporting an inactive repository requires a token belonging to the requested DID.
+Existing ordinary owner access tokens also permit these exports for active,
+deactivated, or taken-down accounts. A live token can read another account only
+when that target remains active and public. Invalid, expired, revoked, and refresh
+credentials are rejected; omitting credentials preserves public availability checks. Export success
+responses are `no-store`. Head and session locks are held while reading the data,
+so availability and revocation checks remain part of the read transaction. Blob
+exports only include currently referenced owned blobs and still enforce individual
+blob takedowns. Staged/unreferenced blobs remain private to internal storage APIs.
+
+A taken-down scope grants no ordinary writes, uploads, imports, service tokens,
+account/app-password management, `getSession`, `checkAccountStatus`, or deletion-code
+requests. This restriction continues after the operator restores the account;
+existing restricted access JWTs never acquire broader privileges. Logout using
+the refresh token remains available. Refresh is blocked while taken down; after
+restoration, it rotates once and issues the original persisted full or app-password
+scope. Revoking an app password invalidates its restricted sessions too. Access
+expiry (two hours), refresh expiry (90 days), account session caps, and password
+recovery revocation apply unchanged.
+
+These exports do not reactivate the account or reopen public synchronization.
+Administrator-token export overrides remain unimplemented; operator Basic credentials
+are only accepted by the dedicated administrative routes.

@@ -49,8 +49,12 @@ defmodule AtollWeb.RepoController do
   def get_repo(conn, params) do
     with true <- Syntax.did?(params["did"]),
          true <- is_nil(params["since"]) or TID.valid?(params["since"]),
-         {:ok, archive} <- Repositories.export(params["did"], params["since"]) do
-      conn |> put_resp_content_type("application/vnd.ipld.car", nil) |> send_resp(200, archive)
+         {:ok, token} <- AtollWeb.BearerToken.optional(conn),
+         {:ok, archive} <- Repositories.export(params["did"], params["since"], token) do
+      conn
+      |> put_resp_header("cache-control", "no-store")
+      |> put_resp_content_type("application/vnd.ipld.car", nil)
+      |> send_resp(200, archive)
     else
       false -> {:error, :invalid_request}
       error -> error

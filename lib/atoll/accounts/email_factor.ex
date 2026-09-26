@@ -46,8 +46,10 @@ defmodule Atoll.Accounts.EmailFactor do
         Repo.one(from h in Head, where: h.did == ^did, lock: "FOR SHARE") ||
           Repo.rollback(:invalid_credentials)
 
-      unless head.status in [:active, :deactivated],
-        do: Repo.rollback({:repo_inactive, head.status})
+      unless head.status in [:active, :deactivated] or
+               (head.status == :takendown and head.pre_takedown_status != :suspended and
+                  opts[:allow_takendown] == true),
+             do: Repo.rollback({:repo_inactive, head.status})
 
       unless Credentials.current_digest?(did, credential_digest),
         do: Repo.rollback(:invalid_credentials)

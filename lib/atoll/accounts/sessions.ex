@@ -1,6 +1,6 @@
 defmodule Atoll.Accounts.Sessions do
   @moduledoc """
-  Password session lifecycle for active and deactivated repositories, used by the HTTP session API.
+  Password sessions, including restricted export sessions for taken-down repositories, used by the HTTP session API.
 
   Refresh rotates the refresh token once, without a retry grace period. Older
   access tokens remain valid until expiry or session revocation. Every access
@@ -46,12 +46,12 @@ defmodule Atoll.Accounts.Sessions do
 
   @doc "Internal session creation after credentials or provisioning have been authorized by the caller."
   def create_for_account(did, opts \\ []) do
-    with {:ok, limit} <- session_limit(opts),
-         id = Tokens.random_id(),
-         {:ok, pair} <- Tokens.pair(did, id, opts) do
+    with {:ok, limit} <- session_limit(opts) do
+      id = Tokens.random_id()
+
       Repo.transaction(fn ->
         # Serialize account logins before counting so parallel creates cannot exceed the cap.
-        head = active_head!(did, true, true)
+        head = active_head!(did, true, true, opts[:allow_takendown] == true)
         if Atoll.Accounts.Signup.pending?(did), do: Repo.rollback(:signup_pending)
         # Password verification happens outside locks; reject a proof made stale by recovery.
         if digest = opts[:credential_digest] do
@@ -78,6 +78,23 @@ defmodule Atoll.Accounts.Sessions do
         live = from s in Session, where: s.did == ^did and s.expires_at > ^now
         if Repo.aggregate(live, :count) >= limit, do: Repo.rollback(:session_limit_exceeded)
 
+        original_scope = Keyword.get(opts, :access_scope, "com.atproto.access")
+
+        unless original_scope in [
+                 "com.atproto.access",
+                 "com.atproto.appPass",
+                 "com.atproto.appPassPrivileged"
+               ],
+               do: Repo.rollback(:invalid_token)
+
+        scope = if head.status == :takendown, do: "com.atproto.takendown", else: original_scope
+
+        pair =
+          case Tokens.pair(did, id, Keyword.put(opts, :access_scope, scope)) do
+            {:ok, pair} -> pair
+            {:error, reason} -> Repo.rollback(reason)
+          end
+
         Repo.insert!(
           %Session{
             id: id,
@@ -90,13 +107,14 @@ defmodule Atoll.Accounts.Sessions do
           log: false
         )
 
-        response(head, pair, Keyword.get(opts, :access_scope, "com.atproto.access"))
+        response(head, pair, scope)
       end)
     end
   end
 
   def authenticate(token, opts \\ []) do
-    with {:ok, claims} <- Tokens.verify(token, :access, opts) do
+    with {:ok, claims} <- Tokens.verify(token, :access, opts),
+         :ok <- ordinary_scope(claims) do
       Repo.transaction(fn ->
         active_head!(claims["sub"])
         session!(claims, opts, false)
@@ -160,7 +178,8 @@ defmodule Atoll.Accounts.Sessions do
 
   @doc "Inspects a live session, including restricted app sessions; does not authorize account management."
   def authenticate_session(token, opts \\ []) do
-    with {:ok, claims} <- Tokens.verify(token, :access, opts) do
+    with {:ok, claims} <- Tokens.verify(token, :access, opts),
+         :ok <- ordinary_scope(claims) do
       Repo.transaction(fn ->
         head = active_head!(claims["sub"], false, true)
         session!(claims, opts, false)
@@ -168,6 +187,20 @@ defmodule Atoll.Accounts.Sessions do
       end)
     end
   end
+
+  @doc "Authorize owner exports of inactive accounts; other targets must remain public and active."
+  def authenticate_export(token, did, opts \\ []) do
+    with {:ok, claims} <- Tokens.verify(token, :access, opts) do
+      Repo.transaction(fn ->
+        owner = active_head!(claims["sub"], false, true, true)
+        session!(claims, opts, false)
+        if owner.did == did, do: owner, else: active_head!(did)
+      end)
+    end
+  end
+
+  defp ordinary_scope(%{"scope" => "com.atproto.takendown"}), do: {:error, :forbidden}
+  defp ordinary_scope(_), do: :ok
 
   defp full_scope(%{"scope" => "com.atproto.access"}), do: :ok
   defp full_scope(_), do: {:error, :forbidden}
@@ -194,8 +227,9 @@ defmodule Atoll.Accounts.Sessions do
 
     session = Repo.one(query) || Repo.rollback(:invalid_token)
 
-    if claims["scope"] != "com.atproto.refresh" and claims["scope"] != session.access_scope,
-      do: Repo.rollback(:invalid_token)
+    if claims["scope"] not in ["com.atproto.refresh", "com.atproto.takendown"] and
+         claims["scope"] != session.access_scope,
+       do: Repo.rollback(:invalid_token)
 
     now = Keyword.get(opts, :now, System.system_time(:second))
     if session.expires_at <= now, do: Repo.rollback(:expired_token)
@@ -216,7 +250,7 @@ defmodule Atoll.Accounts.Sessions do
       else: {:error, :invalid_session_limit}
   end
 
-  defp active_head!(did, update? \\ false, allow_deactivated? \\ false) do
+  defp active_head!(did, update? \\ false, allow_deactivated? \\ false, allow_takendown? \\ false) do
     query = from h in Head, where: h.did == ^did
 
     query =
@@ -228,9 +262,13 @@ defmodule Atoll.Accounts.Sessions do
       Repo.one(query) ||
         Repo.rollback(:invalid_token)
 
+    if allow_takendown? and head.status == :takendown and head.pre_takedown_status == :suspended,
+      do: Repo.rollback({:repo_inactive, :suspended})
+
     case Repositories.availability(head) do
       :ok -> head
       {:error, {:repo_inactive, :deactivated}} when allow_deactivated? -> head
+      {:error, {:repo_inactive, :takendown}} when allow_takendown? -> head
       {:error, reason} -> Repo.rollback(reason)
     end
   end

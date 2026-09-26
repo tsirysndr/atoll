@@ -97,16 +97,7 @@ defmodule Atoll.Blobs do
     with {:ok, %{codec: :raw}} <- CID.decode(cid) do
       Repo.transaction(fn ->
         active_head!(did, "FOR SHARE")
-        Takedowns.ensure_available!(did, cid)
-        blob = Repo.get_by(Blob, did: did, cid: cid) || Repo.rollback(:blob_not_found)
-
-        with {:ok, bytes} <- read_bytes(blob, storage(opts)),
-             :ok <- CID.verify(cid, bytes),
-             true <- byte_size(bytes) == blob.size do
-          %{blob: descriptor(blob), bytes: bytes}
-        else
-          _ -> Repo.rollback(:invalid_blob_storage)
-        end
+        read_staged!(did, cid, opts)
       end)
     else
       _ -> {:error, :invalid_blob_cid}
@@ -115,25 +106,35 @@ defmodule Atoll.Blobs do
 
   def get_staged(_, _, _), do: {:error, :invalid_blob_cid}
 
-  @doc "Reads only a blob referenced by a current record of an active repository."
+  defp read_staged!(did, cid, opts) do
+    Takedowns.ensure_available!(did, cid)
+    blob = Repo.get_by(Blob, did: did, cid: cid) || Repo.rollback(:blob_not_found)
+
+    with {:ok, bytes} <- read_bytes(blob, storage(opts)),
+         :ok <- CID.verify(cid, bytes),
+         true <- byte_size(bytes) == blob.size do
+      %{blob: descriptor(blob), bytes: bytes}
+    else
+      _ -> Repo.rollback(:invalid_blob_storage)
+    end
+  end
+
+  @doc "Reads referenced blobs publicly for active repositories, or for a live owner export token."
   def get_public(did, cid, opts \\ []) do
     Repo.transaction(fn ->
-      active_head!(did, "FOR SHARE")
+      export_head!(did, opts[:token])
 
       unless Repo.exists?(from b in public_query(did), where: b.cid == ^cid),
         do: Repo.rollback(:blob_not_found)
 
-      case get_staged(did, cid, opts) do
-        {:ok, result} -> result
-        {:error, reason} -> Repo.rollback(reason)
-      end
+      read_staged!(did, cid, opts)
     end)
   end
 
   @doc "Lists available referenced blobs with an exclusive CID cursor and optional reference revision."
-  def list_public(did, limit, cursor \\ nil, since \\ nil) when limit in 1..1000 do
+  def list_public(did, limit, cursor \\ nil, since \\ nil, token \\ nil) when limit in 1..1000 do
     Repo.transaction(fn ->
-      active_head!(did, "FOR SHARE")
+      export_head!(did, token)
       query = public_query(did)
       query = if cursor, do: from(b in query, where: b.cid > ^cursor), else: query
       query = if since, do: from([b, r] in query, where: r.rev > ^since), else: query
@@ -150,6 +151,15 @@ defmodule Atoll.Blobs do
         do: Map.put(result, :cursor, CID.to_base32(List.last(page))),
         else: result
     end)
+  end
+
+  defp export_head!(did, nil), do: active_head!(did, "FOR SHARE")
+
+  defp export_head!(did, token) do
+    case Atoll.Accounts.Sessions.authenticate_export(token, did) do
+      {:ok, head} -> head
+      {:error, reason} -> Repo.rollback(reason)
+    end
   end
 
   defp public_query(did) do

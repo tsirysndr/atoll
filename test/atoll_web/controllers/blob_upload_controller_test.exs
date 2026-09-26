@@ -255,6 +255,15 @@ defmodule AtollWeb.BlobUploadControllerTest do
       )
 
     assert c.conn |> get("/xrpc/com.atproto.sync.getBlob", params) |> response(200) == bytes
+    {:ok, _} = Repositories.set_status(@did, :takendown)
+    {:ok, restricted} = Sessions.create(@did, "blob upload password", allow_takendown: true)
+    assert restricted.scope == "com.atproto.takendown"
+    assert c.conn |> get("/xrpc/com.atproto.sync.getBlob", params) |> json_response(400)
+
+    assert c.conn
+           |> put_req_header("authorization", "Bearer " <> restricted.access_jwt)
+           |> get("/xrpc/com.atproto.sync.getBlob", params)
+           |> response(200) == bytes
   end
 
   defp upload(conn, token, bytes, mime \\ "application/octet-stream") do

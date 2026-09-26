@@ -16,7 +16,12 @@ defmodule Atoll.Accounts.Tokens do
          true <- Syntax.did?(did) and valid_id?(session_id),
          scope = Keyword.get(opts, :access_scope, "com.atproto.access"),
          true <-
-           scope in ["com.atproto.access", "com.atproto.appPass", "com.atproto.appPassPrivileged"] do
+           scope in [
+             "com.atproto.access",
+             "com.atproto.appPass",
+             "com.atproto.appPassPrivileged",
+             "com.atproto.takendown"
+           ] do
       now = Keyword.get(opts, :now, System.system_time(:second))
       jti = random_id()
       claims = %{"sub" => did, "aud" => audience, "iat" => now, "sid" => session_id}
@@ -103,7 +108,13 @@ defmodule Atoll.Accounts.Tokens do
   end
 
   defp valid_scope?(:access, scope),
-    do: scope in ["com.atproto.access", "com.atproto.appPass", "com.atproto.appPassPrivileged"]
+    do:
+      scope in [
+        "com.atproto.access",
+        "com.atproto.appPass",
+        "com.atproto.appPassPrivileged",
+        "com.atproto.takendown"
+      ]
 
   defp valid_scope?(:refresh, scope), do: scope == "com.atproto.refresh"
 

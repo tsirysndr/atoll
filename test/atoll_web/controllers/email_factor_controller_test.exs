@@ -189,6 +189,26 @@ defmodule AtollWeb.EmailFactorControllerTest do
            )
   end
 
+  test "taken-down login still requires and consumes the Cloudflare Worker email factor", c do
+    toggle(c, true)
+    {:ok, _} = Repositories.set_status(@did, :takendown)
+    expect_code()
+
+    assert login(c, %{allowTakendown: true}) |> json_response(400) ==
+             %{
+               "error" => "AuthFactorTokenRequired",
+               "message" => "Check your email for a login code."
+             }
+
+    assert_receive {:code, code}
+    response = login(c, %{allowTakendown: true, authFactorToken: code}) |> json_response(200)
+
+    assert {:ok, %{"scope" => "com.atproto.takendown"}} =
+             Atoll.Accounts.Tokens.verify(response["accessJwt"], :access)
+
+    assert login(c, %{allowTakendown: true, authFactorToken: code}) |> json_response(401)
+  end
+
   defp toggle(c, enabled) do
     code = update_code(c)
 
