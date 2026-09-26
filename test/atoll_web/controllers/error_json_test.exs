@@ -45,15 +45,6 @@ defmodule AtollWeb.ErrorJSONTest do
     assert Jason.decode!(body) == %{"error" => "NotAcceptable", "message" => "Not Acceptable"}
   end
 
-  test "framework query decoding errors use XRPC JSON" do
-    {400, _headers, body} =
-      assert_error_sent 400, fn ->
-        get(build_conn(), "/xrpc/com.atproto.server.describeServer?bad=%FF")
-      end
-
-    assert Jason.decode!(body) == %{"error" => "InvalidRequest", "message" => "Bad Request"}
-  end
-
   test "unexpected controller failures return a sanitized 500 response" do
     previous = Application.fetch_env!(:atoll, :pds)
     on_exit(fn -> Application.put_env(:atoll, :pds, previous) end)

@@ -18,12 +18,7 @@ defmodule AtollWeb.SyncController do
   end
 
   def get_blocks(conn, params) do
-    # XRPC arrays use repeated query keys; Plug's map retains only the last one.
-    cids =
-      conn.query_string
-      |> URI.query_decoder()
-      |> Enum.filter(fn {key, _} -> key in ["cids", "cids[]"] end)
-      |> Enum.map(&elem(&1, 1))
+    cids = params["cids"] || []
 
     with true <- Syntax.did?(params["did"]) and length(cids) in 1..100,
          {:ok, decoded} <- decode_cids(cids),

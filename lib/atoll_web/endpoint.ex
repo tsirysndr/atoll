@@ -44,6 +44,7 @@ defmodule AtollWeb.Endpoint do
   plug AtollWeb.BlobUploadPlug
   plug AtollWeb.RecordWritePlug
   plug AtollWeb.RepoImportPlug
+  plug AtollWeb.XRPCQueryPlug
 
   plug Plug.Parsers,
     parsers: [:urlencoded, :multipart, :json],

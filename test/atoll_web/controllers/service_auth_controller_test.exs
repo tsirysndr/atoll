@@ -80,7 +80,10 @@ defmodule AtollWeb.ServiceAuthControllerTest do
                query(c, %{aud: @aud, lxm: method}) |> json_response(400)
     end
 
-    for expiry <- ["bad", "0", System.system_time(:second) - 1, System.system_time(:second) + 120] do
+    assert %{"error" => "InvalidRequest"} =
+             query(c, %{aud: @aud, exp: "bad"}) |> json_response(400)
+
+    for expiry <- ["0", System.system_time(:second) - 1, System.system_time(:second) + 120] do
       assert %{"error" => "BadExpiration"} =
                query(c, %{aud: @aud, exp: expiry}) |> json_response(400)
     end
