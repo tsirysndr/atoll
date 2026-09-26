@@ -325,7 +325,7 @@ mutation. Deletes and empty batches need no record schema, even with `validate: 
 - [x] Shared configurable Cloudflare Worker email delivery client.
 - [x] `requestPlcOperationSignature` email authorization with atomic single-use challenge consumption.
 - [x] Email-authorized `signPlcOperation` with fresh verified predecessor lookup and atomic code consumption.
-- [ ] Authenticated public PLC operation submission and local identity reconciliation.
+- [x] `submitPlcOperation` with local key/service/handle constraints, durable retries, and identity-event reconciliation.
 - [x] Email confirmation requests and one-use confirmation through the Worker.
 - [x] Email updates authorized through the current confirmed address using the Worker.
 - [x] Email-based password reset through the Worker with atomic session revocation.
@@ -2794,7 +2794,7 @@ password/email changes invalidate these challenges alongside existing account co
 rechecks full-session authorization and confirmed email, verifies expiry and the
 digest, and clears the token atomically. Signing failure must roll back the same
 transaction, preserving the authorization for retry. The public `signPlcOperation` endpoint now consumes these codes;
-`submitPlcOperation` remains pending. Requesting a code does not itself sign or
+`submitPlcOperation` is available for operations matching this local account. Requesting a code does not itself sign or
 submit a PLC operation.
 
 
@@ -2825,5 +2825,38 @@ submission workflow. Directory changes after lookup can make its predecessor sta
 
 A successful response consumes the code once. If the response is lost after commit,
 request a new code after the cooldown; there is no signed-response replay cache.
-Keep the returned signed operation unchanged when submitting or retrying it. Public
-submission and local signing-key transition/recovery workflows remain pending.
+Keep the returned signed operation unchanged when submitting or retrying it. Public submission is available for operations matching the local account;
+local signing-key transition/recovery workflows remain pending.
+
+
+### Authenticated PLC submission
+
+`POST /xrpc/com.atproto.identity.submitPlcOperation` accepts a full active or
+user-deactivated account session and `{"operation": {...}}`. Its 16 KiB JSON envelope
+and 20-per-five-minute identity/login IP budget match signing. It returns empty
+HTTP 200 after directory confirmation and local reconciliation, following the
+[pinned submission Lexicon](https://github.com/bluesky-social/atproto/blob/7a857989751ae31518509d69ab7194a922064f3d/lexicons/com/atproto/identity/submitPlcOperation.json).
+
+The signed modern operation must name this PDS, the local repository signing key,
+and the profile's single `at://` handle alias. The corresponding private repository
+key must be available locally. Custom handles require fresh forward ownership;
+hosted names use the configured domains. New operations require one through five
+distinct supported rotation keys. Tombstones, arbitrary handle changes, and operations
+pointing away from this local account are rejected. This endpoint can receive an
+externally signed migration operation; it does not require the destination PDS to
+possess the identity's rotation key or another email code.
+
+Atoll verifies fresh audit evidence and predecessor authorization, durably stages
+the exact operation under the owner lock, rechecks the session before sending,
+confirms directory acceptance, and verifies fresh directory state again before
+completing the journal and emitting one identity event. Local profile, repository
+key, and active/deactivated status remain unchanged. A migrated account still needs
+explicit activation after its other migration requirements are satisfied.
+
+Retry the identical operation after ambiguous errors. A matching accepted latest
+operation is confirmed without reposting, including acceptance before local staging.
+That case derives its predecessor from the fully verified surviving audit chain;
+nullified historical forks are not accepted as ordinary updates. Pending handle
+changes must finish through their own workflow. Directory conflicts preserve the
+pending journal for reconciliation. Completed retries emit no additional event.
+No real PLC submissions were made in tests.

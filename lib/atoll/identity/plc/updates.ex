@@ -23,10 +23,11 @@ defmodule Atoll.Identity.PLC.Updates do
   end
 
   def stage(did, audit, operation) when is_map(operation) do
-    with {:ok, %{operation: previous, tombstoned: false}} <- AuditLog.verify(did, audit),
+    with {:ok, %{tombstoned: false} = state} <- AuditLog.verify(did, audit),
          true <- operation["type"] == "plc_operation",
-         {:ok, _} <- Operation.verify_update(previous, operation),
-         {:ok, cid} <- Operation.cid(operation) do
+         {:ok, cid} <- Operation.cid(operation),
+         {:ok, previous} <- predecessor(state, audit, operation, cid),
+         {:ok, _} <- Operation.verify_update(previous, operation) do
       Repo.transaction(fn ->
         lock_head!(did)
 
@@ -50,6 +51,21 @@ defmodule Atoll.Identity.PLC.Updates do
   end
 
   def stage(_, _, _), do: {:error, :invalid_plc_operation}
+
+  # An operation already accepted before local staging can be journaled from its
+  # verified surviving chain. Never trust an arbitrary historical/nullified fork.
+  defp predecessor(%{cid: cid} = state, audit, operation, cid) do
+    previous = operation["prev"]
+
+    if previous in state.active_cids do
+      entry = Enum.find(audit, &(&1["cid"] == previous))
+      {:ok, entry["operation"]}
+    else
+      {:error, :invalid_plc_operation}
+    end
+  end
+
+  defp predecessor(state, _, _, _), do: {:ok, state.operation}
 
   def submit(did, cid, opts \\ []) do
     if Repo.in_transaction?() do

@@ -158,6 +158,16 @@ defmodule Atoll.Identity.PLC.Operation do
 
   def successor(_), do: {:error, :invalid_plc_operation}
 
+  @doc "Validate modern submission structure; predecessor signature authorization is separate."
+  def validate_submission(operation) do
+    with {:ok, unsigned, _, _} <- decode(operation),
+         true <- unsigned["type"] == "plc_operation" and keys?(unsigned["rotationKeys"]) do
+      :ok
+    else
+      _ -> {:error, :invalid_plc_operation}
+    end
+  end
+
   @doc "Hashes canonical signed bytes. Structural validation alone does not authenticate the operation."
   def cid(operation) do
     with {:ok, _, _, bytes} <- decode(operation),

@@ -4,6 +4,7 @@ defmodule AtollWeb.SessionRequestPlug do
   @prefix "/xrpc/com.atproto.server."
   @procedures [
     "/xrpc/com.atproto.identity.requestPlcOperationSignature",
+    "/xrpc/com.atproto.identity.submitPlcOperation",
     "/xrpc/com.atproto.identity.signPlcOperation",
     "/xrpc/com.atproto.identity.updateHandle",
     "/xrpc/com.atproto.identity.refreshIdentity",
@@ -78,6 +79,7 @@ defmodule AtollWeb.SessionRequestPlug do
             {:identity_resolution, 60}
 
           path in [
+            "/xrpc/com.atproto.identity.submitPlcOperation",
             "/xrpc/com.atproto.identity.signPlcOperation",
             "/xrpc/com.atproto.identity.updateHandle",
             "/xrpc/com.atproto.identity.refreshIdentity",
@@ -111,6 +113,7 @@ defmodule AtollWeb.SessionRequestPlug do
 
   defp parse(conn, path)
        when path in [
+              "/xrpc/com.atproto.identity.submitPlcOperation",
               "/xrpc/com.atproto.identity.signPlcOperation",
               "/xrpc/com.atproto.identity.updateHandle",
               "/xrpc/com.atproto.identity.refreshIdentity",
@@ -131,7 +134,11 @@ defmodule AtollWeb.SessionRequestPlug do
           {:ok, "application", "json", _} ->
             Plug.Parsers.call(
               conn,
-              if(path == "/xrpc/com.atproto.identity.signPlcOperation",
+              if(
+                path in [
+                  "/xrpc/com.atproto.identity.submitPlcOperation",
+                  "/xrpc/com.atproto.identity.signPlcOperation"
+                ],
                 do: @signing_parser,
                 else: @parser
               )
