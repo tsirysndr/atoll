@@ -82,6 +82,8 @@ defmodule Atoll.Accounts.EmailUpdate do
               email_auth_factor: false,
               auth_factor_digest: nil,
               auth_factor_expires_at: nil,
+              deletion_digest: nil,
+              deletion_expires_at: nil,
               password_reset_digest: nil,
               password_reset_expires_at: nil,
               email_confirmed_at: nil,

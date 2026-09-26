@@ -13,6 +13,9 @@ defmodule Atoll.Accounts.Profile do
     field :auth_factor_digest, :binary, redact: true
     field :auth_factor_expires_at, :integer
     field :auth_factor_requested_at, :integer
+    field :deletion_digest, :binary, redact: true
+    field :deletion_expires_at, :integer
+    field :deletion_requested_at, :integer
     field :email_update_digest, :binary, redact: true
     field :email_update_expires_at, :integer
     field :email_update_requested_at, :integer

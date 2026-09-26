@@ -153,7 +153,8 @@ The same `validate: true` restriction applies to batch requests.
 - [x] Authenticated account activation and deactivation with atomic status events.
 - [x] Service-authenticated `createAccount` for migration of an existing DID.
 - [x] Authenticated recommended DID credentials for the destination signing key and service.
-- [ ] Fresh DID signup and account deletion.
+- [x] Email-authorized account deletion with credential/key removal, blob cleanup, and a deleted-account event.
+- [ ] Fresh DID signup.
 - [x] Internal DID-scoped password credentials with salted Argon2id hashes, bounded input, redacted inspection, and duplicate protection.
 - [x] Shared configurable Cloudflare Worker email delivery client.
 - [x] Email confirmation requests and one-use confirmation through the Worker.
@@ -857,3 +858,30 @@ checks that started before it was enabled. Existing sessions continue to refresh
 app-password logins bypass the email challenge but retain restricted scopes.
 Session responses with an email include `emailAuthFactor`. Automatic email retries
 and OAuth remain pending.
+
+
+### Account deletion
+
+`POST com.atproto.server.requestAccountDelete` requires a live full-account access
+token and no body. It sends a one-use deletion code through the configured Worker,
+with a 15-minute expiry and persistent one-minute request cooldown. An existing
+full session can request deletion even if the account is deactivated, suspended,
+or taken down. App-password sessions cannot request deletion.
+
+`POST com.atproto.server.deleteAccount` accepts JSON `did`, the account `password`,
+and the emailed `token`. These body credentials authorize the operation; a bearer
+token is not required. App passwords are rejected. Successful deletion atomically
+removes the repository head, indexed records and revision metadata, encrypted
+signing key, identity observation, profile, credentials, and sessions. Blob
+ownership is withdrawn and physical bytes enter the existing durable cleanup
+queue; bytes still owned by another account are retained. Run the cleanup worker
+or explicit collection to finish physical blob cleanup.
+
+Prior firehose events for the DID are removed, and a new account event reports
+`active: false, status: "deleted"`. This prevents old commits from reappearing if
+the same DID is later provisioned again. Shared repository block bytes are retained
+pending block garbage collection; backups and copies held by other services are
+outside this deletion operation. Email changes and password recovery invalidate
+outstanding deletion codes. Deletion requests use the bounded session parser;
+final deletion shares the direct-IP login attempt limit. No external PLC identity
+is tombstoned or deleted by this operation.

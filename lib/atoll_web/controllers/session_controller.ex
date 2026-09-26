@@ -55,6 +55,17 @@ defmodule AtollWeb.SessionController do
          do: send_resp(conn, 200, "")
   end
 
+  def request_account_delete(conn, _params) do
+    with {:ok, token} <- bearer(conn),
+         {:ok, _} <- Atoll.Accounts.Deletion.request(token),
+         do: send_resp(conn, 200, "")
+  end
+
+  def delete_account(conn, _params) do
+    with {:ok, _} <- Atoll.Accounts.Deletion.delete(conn.body_params),
+         do: send_resp(conn, 200, "")
+  end
+
   def create_account(conn, _params) do
     with {:ok, token} <- bearer(conn),
          {:ok, account} <- Atoll.Accounts.Provisioning.import_account(token, conn.body_params),

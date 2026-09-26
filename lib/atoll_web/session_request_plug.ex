@@ -3,6 +3,8 @@ defmodule AtollWeb.SessionRequestPlug do
   import Plug.Conn
   @prefix "/xrpc/com.atproto.server."
   @procedures [
+    @prefix <> "requestAccountDelete",
+    @prefix <> "deleteAccount",
     @prefix <> "createAppPassword",
     @prefix <> "revokeAppPassword",
     @prefix <> "requestPasswordReset",
@@ -56,7 +58,8 @@ defmodule AtollWeb.SessionRequestPlug do
              @prefix <> "createSession",
              @prefix <> "createAccount",
              @prefix <> "requestPasswordReset",
-             @prefix <> "resetPassword"
+             @prefix <> "resetPassword",
+             @prefix <> "deleteAccount"
            ],
            do: {:login, 20},
            else: {:session, 300}
@@ -87,7 +90,8 @@ defmodule AtollWeb.SessionRequestPlug do
               @prefix <> "requestPasswordReset",
               @prefix <> "resetPassword",
               @prefix <> "createAppPassword",
-              @prefix <> "revokeAppPassword"
+              @prefix <> "revokeAppPassword",
+              @prefix <> "deleteAccount"
             ] do
     case get_req_header(conn, "content-type") do
       [type] ->
