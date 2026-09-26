@@ -402,7 +402,8 @@ mutation. Deletes and empty batches need no record schema, even with `validate: 
 - [x] DPoP repository create/put/delete/applyWrites with transitional generic scope and transactional authorization rechecks.
 - [x] DPoP blob uploads with transitional generic scope, pre-body proof admission, and transactional authorization rechecks.
 - [x] DPoP service-token issuance with current generic/chat scope checks and authorization locks held through signing.
-- [ ] OAuth authorization for exports and remaining resource routes.
+- [x] DPoP authentication on public repository/blob export routes without granting inactive-account export privileges.
+- [ ] OAuth authorization for remaining resource routes.
 - [x] Localhost virtual public-client metadata, loopback callback matching, and flow integration without metadata network requests.
 - [ ] OAuth nonce challenges and proof admission integrated into remaining authorization/resource server routes.
 - [ ] ATProto OAuth authorization and resource server support.
@@ -5078,3 +5079,32 @@ Tests verify the issued JWT signature and claims, method-less lifetime, separate
 chat permission and narrowed access scopes, forbidden migration/protected methods,
 parameter errors, missing signing custody, proof replay, revocation, inactive
 accounts and target binding. Existing legacy service-token tests remain enabled.
+
+### DPoP public exports
+
+`com.atproto.sync.getRepo`, `listBlobs`, and `getBlob` accept DPoP access tokens.
+A supplied OAuth credential is validated against its live account, source session,
+OAuth session and access token, including the resource nonce, proof key, access
+hash, GET method and requested route. Invalid, expired or revoked credentials
+return a DPoP error; an opaque OAuth token cannot be used as a Bearer credential.
+The required `atproto` scope suffices because these responses contain public data.
+
+After authentication, the export uses the same public visibility checks as an
+anonymous request: only active target repositories and currently referenced blobs
+are readable. A client may read another active public repository, but cannot use
+OAuth to export an inactive account or staged/unreferenced blobs. Legacy owner
+JWT and operator Basic authorization retain their separate export behavior.
+
+OAuth authorization locks are released before the public export starts; no OAuth
+principal or privileged credential is passed into storage. Revocation after this
+check does not interrupt an already admitted public download. Repository snapshot
+locks and the existing streaming timeout still protect CAR consistency, and blob
+reads retain their repository/reference checks. The download does not hold a
+client session lock for its duration.
+
+Malformed query schemas can be rejected before proof admission by the existing
+XRPC query boundary. Once admitted, a proof cannot be replayed, including after
+a missing-blob error. Tests cover identity-only scope, raw blob responses, CAR
+roots, publication visibility, foreign active repositories, inactive targets,
+revocation, replay, target binding and Bearer downgrade rejection. The legacy
+export tests continue to exercise owner/operator and anonymous access.

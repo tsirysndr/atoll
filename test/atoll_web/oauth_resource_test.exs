@@ -396,6 +396,111 @@ defmodule AtollWeb.OAuthResourceTest do
     assert service_auth(c, params) |> json_response(401) == %{"error" => "invalid_token"}
   end
 
+  test "DPoP clients export public repositories and referenced blobs with identity-only scope",
+       c do
+    Repo.update_all(AccessToken, set: [scope: "atproto"])
+    bytes = "public media"
+    {:ok, blob} = Atoll.Blobs.stage(c.did, bytes, "text/plain")
+    cid = blob["ref"]["$link"]
+
+    assert export_request(c, "listBlobs", %{"did" => c.did}) |> json_response(200) == %{
+             "cids" => []
+           }
+
+    assert export_request(c, "getBlob", %{"did" => c.did, "cid" => cid}).status == 400
+    {:ok, key} = Atoll.KeyVault.fetch(c.did)
+    record = %{"$type" => "com.example.record", "blob" => blob}
+    {:ok, _} = Repositories.apply_writes(c.did, [{:put, "com.example.record/media", record}], key)
+
+    assert export_request(c, "listBlobs", %{"did" => c.did}) |> json_response(200) == %{
+             "cids" => [cid]
+           }
+
+    response = export_request(c, "getBlob", %{"did" => c.did, "cid" => cid})
+    assert response(response, 200) == bytes
+    assert get_resp_header(response, "dpop-nonce") != []
+    assert get_resp_header(response, "cache-control") == ["no-store"]
+    assert get_resp_header(response, "x-content-type-options") == ["nosniff"]
+    repo = export_request(c, "getRepo", %{"did" => c.did})
+    {:ok, head} = Repositories.get_head(c.did)
+    assert {:ok, %{roots: [root]}} = Atoll.CAR.decode(response(repo, 200))
+    assert root == head.head
+  end
+
+  test "export proofs cannot be replayed, retargeted or downgraded to Bearer", c do
+    params = %{"did" => c.did}
+    signed = export_proof(c, "listBlobs")
+    assert export_request(c, "listBlobs", params, signed).status == 200
+
+    assert export_request(c, "listBlobs", params, signed) |> json_response(401) ==
+             %{"error" => "invalid_dpop_proof"}
+
+    assert export_request(c, "getRepo", params, export_proof(c, "listBlobs")).status == 401
+
+    assert c.conn
+           |> put_req_header("authorization", "Bearer " <> c.tokens["access_token"])
+           |> get("/xrpc/com.atproto.sync.getRepo", params)
+           |> json_response(401) ==
+             %{"error" => "invalid_token"}
+
+    # A missing blob still consumes an admitted proof.
+    params = Map.put(params, "cid", Atoll.CID.create("absent", :raw) |> Atoll.CID.to_base32())
+    signed = export_proof(c, "getBlob")
+    assert export_request(c, "getBlob", params, signed).status == 400
+    assert export_request(c, "getBlob", params, signed).status == 401
+    Repo.delete_all(Session)
+
+    assert export_request(c, "getRepo", Map.take(params, ["did"])) |> json_response(401) == %{
+             "error" => "invalid_token"
+           }
+  end
+
+  test "OAuth export credentials never unlock inactive or unreferenced data", c do
+    other = "did:plc:otherexport"
+    {:ok, _} = Repositories.create_managed(other)
+    {:ok, blob} = Atoll.Blobs.stage(other, "staged", "text/plain")
+    assert export_request(c, "getRepo", %{"did" => other}).status == 200
+
+    assert export_request(c, "getBlob", %{"did" => other, "cid" => blob["ref"]["$link"]}).status ==
+             400
+
+    {:ok, _} = Repositories.set_status(other, :deactivated)
+
+    for method <- ["getRepo", "listBlobs", "getBlob"] do
+      params =
+        if method == "getBlob",
+          do: %{"did" => other, "cid" => blob["ref"]["$link"]},
+          else: %{"did" => other}
+
+      assert export_request(c, method, params).status == 400
+    end
+
+    {:ok, _} = Repositories.set_status(c.did, :deactivated)
+
+    for method <- ["getRepo", "listBlobs", "getBlob"] do
+      params =
+        if method == "getBlob",
+          do: %{"did" => c.did, "cid" => blob["ref"]["$link"]},
+          else: %{"did" => c.did}
+
+      assert export_request(c, method, params)
+             |> json_response(401) == %{"error" => "invalid_token"}
+    end
+  end
+
+  defp export_request(c, method, params, signed \\ nil),
+    do:
+      c.conn
+      |> put_req_header("authorization", "DPoP " <> c.tokens["access_token"])
+      |> put_req_header("dpop", signed || export_proof(c, method))
+      |> get("/xrpc/com.atproto.sync." <> method, params)
+
+  defp export_proof(c, method),
+    do:
+      resource_proof(c, c.tokens["access_token"], %{
+        "htu" => AtollWeb.Endpoint.url() <> "/xrpc/com.atproto.sync." <> method
+      })
+
   defp service_auth(c, params, signed \\ nil),
     do:
       c.conn

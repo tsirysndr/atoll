@@ -47,9 +47,12 @@ defmodule AtollWeb.RepoController do
   end
 
   def get_repo(conn, params) do
+    AtollWeb.ExportToken.authorize(conn, &get_repo(conn, params, &1))
+  end
+
+  defp get_repo(conn, params, token) do
     with true <- Syntax.did?(params["did"]),
          true <- is_nil(params["since"]) or TID.valid?(params["since"]),
-         {:ok, token} <- AtollWeb.ExportToken.optional(conn),
          {:ok, streamed} <-
            Repositories.stream_export(params["did"], params["since"], token, fn chunks ->
              conn =
