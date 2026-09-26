@@ -10,7 +10,7 @@ defmodule Atoll.Repositories.Events do
   """
   import Ecto.Query
   alias Atoll.{CBOR, Repo}
-  alias Atoll.Repositories.Event
+  alias Atoll.Repositories.{Event, EventEncoder, Head}
 
   @doc "Acquire before any repository mutation, inside its transaction."
   def lock! do
@@ -32,6 +32,34 @@ defmodule Atoll.Repositories.Events do
   end
 
   def latest_seq, do: Repo.one(from e in Event, select: max(e.seq)) || 0
+
+  @doc "Counts only enough pending rows to detect a slow consumer; sequence gaps do not count."
+  def backlog_exceeded?(cursor, limit \\ 10_000) do
+    query = from e in Event, where: e.seq > ^cursor, select: e.seq, limit: ^(limit + 1)
+    Repo.aggregate(subquery(query), :count) > limit
+  end
+
+  @doc "Build one public frame, checking current availability under a shared head lock."
+  def next_frame(cursor) do
+    Repo.transaction(fn ->
+      case list_after(cursor, 1) do
+        {:ok, []} ->
+          :idle
+
+        {:ok, [event]} ->
+          head = Repo.one(from h in Head, where: h.did == ^event.did, lock: "FOR SHARE")
+
+          if event.kind == :account or match?(%Head{status: :active}, head) do
+            case EventEncoder.encode(event) do
+              {:ok, frame} -> {:frame, event.seq, frame}
+              {:error, reason} -> Repo.rollback(reason)
+            end
+          else
+            {:skip, event.seq}
+          end
+      end
+    end)
+  end
 
   @doc "Replay up to 1000 events after an exclusive numeric cursor. Payloads are decoded CBOR."
   def list_after(cursor, limit \\ 100)

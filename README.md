@@ -119,16 +119,29 @@ Raw CID support and generic block storage are implemented; the ATProto blob API 
 - [x] `com.atproto.sync.getBlocks` for current repository blocks (1–100 CIDs; repeated `cids` query parameters).
 - [x] Export consistency checks against the signed commit, tree root, and revision.
 - [x] Internal deactivation, suspension, takedown, and reactivation; inactive repositories reject public reads, exports, writes, and imports.
-- [ ] Historical block retrieval and repository status event publication.
+- [ ] Historical block retrieval.
 - [x] Internal durable event sequencing and cursor replay, recorded atomically with repository creation, writes, imports, and status changes.
 - [ ] Event retention / compaction and higher-throughput sequencing (writes currently share a PostgreSQL transaction advisory lock to preserve commit order).
-- [ ] `com.atproto.sync.subscribeRepos` WebSocket stream with resume cursors.
+- [x] `com.atproto.sync.subscribeRepos` binary WebSocket stream with exclusive resume cursors, live delivery, and account status events.
+- [x] Invalid/future cursor errors, bounded replay backlog, idle pings, and current-availability filtering for repository data.
 - [x] Wire-format commit, sync, and account event encoding, plus CBOR stream/error framing, from immutable historical blocks.
 - [x] Commit CARs with full MSTs, changed records, prior roots, and operation metadata; oversized commits fall back to commit-only sync messages.
 - [ ] Compact inductive commit proofs (event encoding currently includes the complete MST).
-- [ ] Identity events and public event delivery, including repository availability filtering.
+- [ ] Identity events.
 - [ ] Relay discovery / crawl requests and federation interoperability tests.
 - [ ] Service authentication and request proxying to AppViews and other services.
+
+For local development, connect to
+`ws://localhost:4000/xrpc/com.atproto.sync.subscribeRepos?cursor=0`.
+Omit `cursor` to start at the current stream position; otherwise pass the last
+received sequence number to replay later events. Messages are binary frames with
+two concatenated CBOR objects (header and body), not JSON or Phoenix channels.
+Idle connections poll PostgreSQL every 500 ms and send a ping every 15 seconds.
+Connections more than 10,000 persisted events behind receive `ConsumerTooSlow`
+and close; sequence gaps do not count toward this limit. Replay skips commit and
+sync data for currently inactive repositories, but still emits account events.
+Internet deployment requires WSS termination; connection quotas, event retention,
+and federation interoperability testing remain pending.
 
 ### Operations
 
