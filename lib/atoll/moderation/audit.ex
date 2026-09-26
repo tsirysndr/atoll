@@ -4,6 +4,11 @@ defmodule Atoll.Moderation.Audit do
   alias Atoll.{Repo, Syntax}
   alias Atoll.Moderation.AuditEntry
 
+  @doc "Records operator invite actions; server-wide actions have no account DID."
+  def invite_codes!(operation, did, requested, before_state, after_state) do
+    insert!(operation, did, %{kind: "inviteCodes"}, requested, before_state, after_state)
+  end
+
   @doc "Tracks email attempts without retaining addresses, subjects or message bodies."
   def email_delivery!(params, id, before_status, after_status) do
     did = params["recipientDid"]

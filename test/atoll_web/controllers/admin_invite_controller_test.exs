@@ -170,6 +170,64 @@ defmodule AtollWeb.AdminInviteControllerTest do
     end
   end
 
+  test "operator issuance and revocation audit fingerprints, counts and no-ops", c do
+    did = "did:web:invite-audit.example.com"
+    {:ok, _} = Repositories.create(did, SigningKey.generate())
+    seq = Atoll.Repositories.Events.latest_seq()
+
+    single =
+      post_json(auth(c.conn), @single, %{useCount: 3, forAccount: did}) |> json_response(200)
+
+    code = single["code"]
+    digest = :crypto.hash(:sha256, code) |> Base.encode16(case: :lower)
+    assert post_json(auth(c.conn), @disable, %{codes: [code, code]}) |> response(200) == ""
+    assert post_json(auth(c.conn), @disable, %{accounts: [did]}) |> response(200) == ""
+    assert {:ok, %{entries: [created, disabled, repeated]}} = Atoll.Moderation.Audit.list()
+    assert created.did == did
+    assert created.operation == "com.atproto.server.createInviteCode"
+    assert created.after == %{"created" => 1, "codeDigests" => [digest]}
+    assert created.requested == %{"useCount" => 3, "forAccount" => did}
+    assert is_nil(disabled.did)
+    assert disabled.before == %{"matched" => 1, "enabled" => 1, "disabled" => 0}
+    assert disabled.after == %{"matched" => 1, "enabled" => 0, "disabled" => 1}
+    assert disabled.requested == %{"accounts" => [], "codeDigests" => [digest]}
+    assert repeated.before == repeated.after
+    assert repeated.requested["accounts"] == [did]
+    refute Jason.encode!([created, disabled, repeated]) =~ code
+    assert Atoll.Repositories.Events.latest_seq() == seq
+    assert {:ok, %{entries: [^created]}} = Atoll.Moderation.Audit.list(100, 0, did)
+  end
+
+  test "server-wide batch creation and empty revocation have bounded private history", c do
+    result = post_json(auth(c.conn), @bulk, %{codeCount: 3, useCount: 2}) |> json_response(200)
+    assert post_json(auth(c.conn), @disable, %{}) |> response(200) == ""
+    assert {:ok, %{entries: [created, empty]}} = Atoll.Moderation.Audit.list()
+    assert is_nil(created.did)
+    assert created.operation == "com.atproto.server.createInviteCodes"
+    assert created.after["created"] == 3
+    assert [%{"account" => "admin", "codeDigests" => digests}] = created.after["groups"]
+    assert length(digests) == 3
+    assert empty.before == %{"matched" => 0, "enabled" => 0, "disabled" => 0}
+    assert empty.after == empty.before
+    for code <- hd(result["codes"])["codes"], do: refute(Jason.encode!(created) =~ code)
+  end
+
+  test "failed authentication and batch rollback leave no invite audit entries", c do
+    assert post_json(c.conn, @single, %{useCount: 1}) |> json_response(401)
+    did = "did:web:invite-rollback.example.com"
+    {:ok, _} = Repositories.create(did, SigningKey.generate())
+
+    assert post_json(auth(c.conn), @bulk, %{
+             codeCount: 2,
+             useCount: 1,
+             forAccounts: [did, "did:web:absent.example.com"]
+           })
+           |> json_response(400)
+
+    assert Repo.aggregate(Invite, :count) == 0
+    assert {:ok, %{entries: []}} = Atoll.Moderation.Audit.list()
+  end
+
   defp auth(conn),
     do: put_req_header(conn, "authorization", "Basic " <> Base.encode64("admin:" <> @secret))
 

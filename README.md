@@ -705,6 +705,7 @@ events. The `[:atoll, :identity, :refresh]` telemetry event reports a count and
 - [x] Audited operator email correction with invalidation of old email challenges.
 - [x] Audited operator password replacement with session, app-password, and pending-code revocation.
 - [x] Transactional audit history for account invite enable/disable decisions and private reason changes.
+- [x] Transactional audit history for operator invite-code issuance and revocation, without redeemable codes.
 - [x] Audited operator account deletion with durable shared-safe blob cleanup.
 - [x] Operator account messages through the configurable email Worker, with attempt/outcome history.
 - [ ] Remaining administrative account controls and audit coverage for other operator actions.
@@ -1668,8 +1669,8 @@ reconstructed. Entries survive account deletion and have no automatic retention
 limit. The application only appends entries; this is not a tamper-proof log against
 database administrators. The shared Basic credential does not identify individual
 human operators. Owner lifecycle changes, direct `Repositories.set_status` calls,
-invite-code issuance/revocation, and failed authentication attempts are outside this decision
-log's current coverage.
+direct internal invite issuance/revocation, automatic invite allocation, and failed
+authentication attempts are outside this decision log's current coverage.
 
 Export one page from the trusted operator console:
 
@@ -2232,3 +2233,36 @@ this is an unknown outcome, not evidence that nothing was sent. There is no
 automatic retry or durable outbox. Each new API call gets a new message ID, so an
 operator retry after an ambiguous failure may send a duplicate. Tests use mocked
 Worker requests and send no actual email.
+
+
+### Invite-code operator audit history
+
+Successful `com.atproto.server.createInviteCode`,
+`com.atproto.server.createInviteCodes`, and `com.atproto.admin.disableInviteCodes`
+requests now append audit history in the same transaction as their changes.
+Validation failures, missing batch accounts, and failed authorization create no
+entries. Rolling back issuance or revocation also rolls back its audit entry.
+These actions emit no public repository events.
+
+Issuance records the requested use count and account attribution, the number of
+created codes, and SHA-256 fingerprints of the codes. Batch issuance groups those
+fingerprints by attributed account, within the existing 500-code bound. Revocation
+records the selected accounts and deduplicated explicit code fingerprints, plus
+matched, enabled, and disabled counts before and after. Overlapping selectors count
+a code once. Already-disabled, unknown-code, and empty selections are still recorded
+as successful decisions, including no-ops. Account-wide revocation uses aggregate
+counts; it does not copy an unbounded set of affected codes into the audit table.
+Redeemable codes are never stored in these audit entries.
+
+Migration `20260926145606` allows a null audit `did` for server-wide decisions.
+Single-code issuance attributed to an account retains that account's DID; unowned
+issuance, batch issuance, and revocation have `did: null`. Use the unfiltered
+`mix atoll.moderation.history` export to include server-wide entries; `--did` only
+selects entries attributed directly to that DID. The subject is the internal
+`{ "kind": "inviteCodes" }` audit descriptor. The migration's rollback deliberately
+fails while null-DID entries exist, rather than deleting operator history.
+
+History identifies the shared `admin` credential, not an individual human.
+Internal `Atoll.Accounts.Invites` calls and automatic account invite allocation do
+not fabricate an admin API audit entry. Existing audit retention and access rules
+apply, including retention after account deletion.
