@@ -124,10 +124,11 @@ Raw CID support and generic block storage are implemented; the ATProto blob API 
 - [ ] Event retention / compaction and higher-throughput sequencing (writes currently share a PostgreSQL transaction advisory lock to preserve commit order).
 - [x] `com.atproto.sync.subscribeRepos` binary WebSocket stream with exclusive resume cursors, live delivery, and account status events.
 - [x] Invalid/future cursor errors, bounded replay backlog, idle pings, and current-availability filtering for repository data.
-- [x] Wire-format commit, sync, and account event encoding, plus CBOR stream/error framing, from immutable historical blocks.
+- [x] Wire-format commit, sync, account, and identity event encoding, plus CBOR stream/error framing.
 - [x] Commit CARs with full MSTs, changed records, prior roots, and operation metadata; oversized commits fall back to commit-only sync messages.
 - [ ] Compact inductive commit proofs (event encoding currently includes the complete MST).
-- [ ] Identity events.
+- [x] Internal `Atoll.Identity.Updates.refresh/2`: resolves hosted identities, verifies claimed handles, and atomically records changed observations with durable identity events.
+- [ ] Automatic identity refresh scheduling and authenticated identity-management endpoints.
 - [ ] Relay discovery / crawl requests and federation interoperability tests.
 - [ ] Service authentication and request proxying to AppViews and other services.
 
@@ -139,9 +140,14 @@ two concatenated CBOR objects (header and body), not JSON or Phoenix channels.
 Idle connections poll PostgreSQL every 500 ms and send a ping every 15 seconds.
 Connections more than 10,000 persisted events behind receive `ConsumerTooSlow`
 and close; sequence gaps do not count toward this limit. Replay skips commit and
-sync data for currently inactive repositories, but still emits account events.
+sync data for currently inactive repositories, but still emits account and identity events.
 Internet deployment requires WSS termination; connection quotas, event retention,
 and federation interoperability testing remain pending.
+
+Identity refreshes announce changes in the resolved handle, signing key, or PDS
+endpoint. Unverified handles are emitted as `handle.invalid`; failed DID lookups
+preserve the previous observation. Refreshes do not rotate the repository's
+pinned signing key, move accounts, or run automatically yet.
 
 ### Operations
 

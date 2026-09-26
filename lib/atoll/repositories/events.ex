@@ -49,7 +49,7 @@ defmodule Atoll.Repositories.Events do
         {:ok, [event]} ->
           head = Repo.one(from h in Head, where: h.did == ^event.did, lock: "FOR SHARE")
 
-          if event.kind == :account or match?(%Head{status: :active}, head) do
+          if event.kind in [:account, :identity] or match?(%Head{status: :active}, head) do
             case EventEncoder.encode(event) do
               {:ok, frame} -> {:frame, event.seq, frame}
               {:error, reason} -> Repo.rollback(reason)
