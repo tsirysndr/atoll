@@ -101,6 +101,13 @@ defmodule Atoll.Identity.PLC.Registrations do
 
   @doc "Loads the retained PLC rotation key for internal identity operations."
   def rotation_key(did) do
+    case Atoll.Identity.PLC.RotationKeys.fetch(did) do
+      {:error, :key_not_found} -> registration_rotation_key(did)
+      result -> result
+    end
+  end
+
+  defp registration_rotation_key(did) do
     with {:ok, master} <- master_key() do
       case Repo.get(Registration, did, log: false) do
         nil -> {:error, :registration_not_found}

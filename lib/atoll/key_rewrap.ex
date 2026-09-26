@@ -26,7 +26,8 @@ defmodule Atoll.KeyRewrap do
               fn h, counts ->
                 head = Repo.one!(from r in Head, where: r.did == ^h.did, lock: "FOR UPDATE")
                 counts = count(counts, :repositories, KeyVault.rewrap!(head, master))
-                count(counts, :plc, Registrations.rewrap!(head.did, master))
+                counts = count(counts, :plc, Registrations.rewrap!(head.did, master))
+                count(counts, :plc, Atoll.Identity.PLC.RotationKeys.rewrap!(head.did, master))
               end
             )
 

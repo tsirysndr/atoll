@@ -302,7 +302,8 @@ mutation. Deletes and empty batches need no record schema, even with `validate: 
 - [x] `com.atproto.identity.updateHandle` for hosted/custom handles on modern PLC accounts with a retained authorized rotation key.
 - [x] did:web handle reconciliation after an owner updates their hosted DID document.
 - [x] Legacy PLC predecessor conversion and signed handle-update staging/completion.
-- [ ] Legacy-account rotation-key installation and external-signing/recovery workflows.
+- [x] Operator installation of directory-authorized PLC rotation keys for imported modern/legacy accounts.
+- [ ] Retained rotation-key replacement and recovery workflows.
 - [x] Authenticated account activation and deactivation with atomic status events.
 - [x] Service-authenticated `createAccount` for migration of an existing DID.
 - [x] Authenticated recommended DID credentials for the destination signing key and service.
@@ -2676,7 +2677,7 @@ account's full access session, validates a signed handle-only update against ver
 audit evidence and the locally hosted signing key/service, and reserves the target
 name in the same transaction as the journal entry. Other identity fields must remain
 unchanged. The new operation uses a single `at://` alias. This currently accepts
-modern and legacy PLC predecessors; legacy rotation-key installation remains pending. did:web accounts use
+modern and legacy PLC predecessors; legacy keys can be installed with the operator command below. did:web accounts use
 the separate document-reconciliation path below.
 
 Hosted names use the configured server domains. Custom names must freshly resolve
@@ -2724,8 +2725,8 @@ handle checks fresh directory state and is a no-op, with no extra directory POST
 identity event. A directory conflict leaves local state pending for reconciliation.
 
 This supports modern PLC accounts whose rotation key is retained by Atoll. Legacy
-predecessors can now be converted into modern updates, but legacy-account key
-installation and external signing/recovery remain pending. did:web owners use the reconciliation path below. Current configured directory/key availability is required;
+predecessors can now be converted into modern updates, with operator-installed
+rotation keys. Retained-key replacement and recovery remain pending. did:web owners use the reconciliation path below. Current configured directory/key availability is required;
 local confirmation history never substitutes for fresh completion checks. No live
 PLC writes are exercised by the test suite.
 
@@ -2770,8 +2771,8 @@ before trusting a predecessor. Tombstones cannot be extended.
 
 Tests cover upstream legacy fixtures and a signed legacy-to-modern handle change
 through the journal and atomic local completion. Fresh signup still creates modern
-operations. Installing retained rotation keys for imported legacy accounts and public
-external-signing workflows remain pending; no key is inferred from public history.
+operations. Retained keys for imported legacy accounts can now be installed through the operator
+command below; no private key is inferred from public history.
 
 
 ### PLC signing authorization email
@@ -2860,3 +2861,38 @@ nullified historical forks are not accepted as ordinary updates. Pending handle
 changes must finish through their own workflow. Directory conflicts preserve the
 pending journal for reconciliation. Completed retries emit no additional event.
 No real PLC submissions were made in tests.
+
+
+### Installing an imported PLC rotation key
+
+An operator with the account owner's private rotation key can install it without
+creating a signup registration record or submitting a directory operation:
+
+```sh
+mix atoll.plc.install_rotation_key did:plc:YOUR_DID /secure/path/rotation-key.json
+```
+
+The bounded JSON file contains `{"curve":"k256","privateKey":"BASE64_32_BYTES"}`;
+`p256` is also supported. Protect the file with permissions such as `chmod 600` and
+remove the temporary copy according to your key-handling policy. The command reads
+at most 4096 bytes and prints only DID and installation status. It uses fresh verified
+PLC audit evidence plus the latest-operation check to require that the supplied key
+is currently authorized, preserving legacy recovery/signing-key authority rules.
+
+Migration `20260926161910` adds a separate encrypted imported-key store. AES-256-GCM
+binds the envelope to DID, curve, public key, and the verified operation CID. The
+private scalar is never stored as plaintext in PostgreSQL; the envelope is redacted
+from struct inspection and database calls suppress parameter logging. Back up this
+table together with the master-key configuration. Account deletion cascades its row.
+
+Imported keys take precedence over a retained signup key. Missing imported rows
+fall back to signup storage; unreadable imported envelopes fail closed. An identical
+installation is idempotent. Installing a different key over an existing imported key
+or installing during a pending journaled identity update is rejected. This is a local
+operator command, not an unauthenticated HTTP key-upload route or a key-rotation API.
+
+The normal bounded master-key rewrap task now includes imported envelopes in its
+`plc` count (counts are envelopes, potentially two per account). Rewrapping preserves
+the private key and directory evidence. Later signing still verifies current directory
+authority; a once-authorized key is not assumed to remain authorized forever. No real
+account key was installed during implementation; tests used generated disposable keys.
