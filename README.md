@@ -138,6 +138,7 @@ record Lexicons or grant access to account data.
 - [x] Atomic managed repository creation and internal writes using persisted signing keys.
 - [x] Encryption master-key rotation with decryption fallback keys and atomic paginated envelope rewrapping.
 - [ ] Signing-key rotation and recovery workflows.
+- [x] Per-revision signing-key provenance for historical record and block verification.
 - [x] PostgreSQL repository heads and atomic record, tree, and commit updates with optional head compare-and-swap.
 - [x] Internal record create, put, delete, and read operations with collection/type checks (not Lexicon validation).
 - [x] Public `getRecord` and paginated `listRecords` for repository DIDs or bidirectionally verified handles and current record versions.
@@ -3238,3 +3239,25 @@ capacity for the configured concurrency as well as metadata and filesystem overh
 VM/host crashes or abrupt termination of a lease itself still require stale-file
 cleanup. Tests kill a request process and await lease termination to verify cleanup,
 and verify rejection/re-admission at the concurrency limit without sleeps.
+
+### Historical repository signing keys
+
+Each retained repository revision now stores the public signing key and curve
+used when that revision was published. Historical record-version reads and
+`getBlocks` membership checks verify the revision's commit using those stored
+values, then validate its MST and path/block membership. Current snapshot checks
+continue to use the repository head's current pinned key. No private key material
+is added to revision history.
+
+Migration `20260926171507` backfills existing revisions from their repository's
+pinned key and makes both fields required, with curve and compressed-key-length
+constraints. This relies on the pre-migration invariant that Atoll has no repository
+signing-key transition workflow and migration imports are re-signed locally.
+Out-of-band manual key changes are not reconstructed by the migration. Invalid
+historical key metadata fails verification rather than authorizing block access.
+New revisions capture their key inside the repository publication transaction.
+
+This prepares history for signing-key rotation; it does not itself rotate keys,
+change DID documents, or enable a rotation endpoint. Tests model an atomic
+cross-curve key transition and verify historical reads, historical block export,
+and rejection after key-metadata corruption.

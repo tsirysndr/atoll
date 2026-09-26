@@ -357,7 +357,7 @@ defmodule Atoll.Repositories do
     with true <- Syntax.repo_path?(path),
          {:ok, %{codec: :dag_cbor}} <- CID.decode(cid) do
       Repo.transaction(fn ->
-        head = locked_head!(did, "FOR SHARE")
+        locked_head!(did, "FOR SHARE")
 
         Takedowns.ensure_visible!(did, path)
 
@@ -372,7 +372,12 @@ defmodule Atoll.Repositories do
           |> Repo.stream(max_rows: 1)
           |> Enum.any?(fn revision ->
             with {:ok, commit} <-
-                   Commit.verify(block!(revision.head), did, head.curve, head.public_key),
+                   Commit.verify(
+                     block!(revision.head),
+                     did,
+                     revision.signing_curve,
+                     revision.signing_public_key
+                   ),
                  true <- commit["rev"] == revision.rev,
                  blocks = Map.new(revision.blocks, &{&1, block!(&1)}),
                  {:ok, tree} <- MST.load(commit["data"].cid, blocks) do
@@ -643,7 +648,12 @@ defmodule Atoll.Repositories do
         |> Enum.reduce_while(missing, fn revision, remaining ->
           # Revision indexes narrow the search but do not establish membership.
           with {:ok, commit} <-
-                 Commit.verify(block!(revision.head), head.did, head.curve, head.public_key),
+                 Commit.verify(
+                   block!(revision.head),
+                   head.did,
+                   revision.signing_curve,
+                   revision.signing_public_key
+                 ),
                true <- commit["rev"] == revision.rev,
                blocks = Map.new(revision.blocks, &{&1, block!(&1)}),
                {:ok, tree} <- MST.load(commit["data"].cid, blocks) do
@@ -729,6 +739,8 @@ defmodule Atoll.Repositories do
       did: head.did,
       rev: head.rev,
       head: head.head,
+      signing_curve: head.curve,
+      signing_public_key: head.public_key,
       blocks: Enum.uniq([head.head | cids])
     })
 

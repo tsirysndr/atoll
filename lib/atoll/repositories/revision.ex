@@ -5,6 +5,8 @@ defmodule Atoll.Repositories.Revision do
     field :did, :string, primary_key: true
     field :rev, :string, primary_key: true
     field :head, :binary
+    field :signing_curve, Ecto.Enum, values: [:k256, :p256]
+    field :signing_public_key, :binary
     field :blocks, {:array, :binary}
     timestamps(type: :utc_datetime_usec, updated_at: false)
   end
