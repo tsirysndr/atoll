@@ -363,10 +363,10 @@ locking protects shared objects when collectors overlap.
 - [ ] Revision-history compaction and scalable block-reference indexing (block sets are currently retained indefinitely).
 - [x] `getLatestCommit`, `getRepoStatus`, and paginated `listRepos` sync endpoints with persistent repository status.
 - [x] `com.atproto.sync.getRecord` compact signed existence and absence proofs.
-- [x] `com.atproto.sync.getBlocks` for current repository blocks (1–100 CIDs; repeated `cids` query parameters).
+- [x] `com.atproto.sync.getBlocks` for current and retained historical repository blocks (1–100 CIDs; repeated `cids` query parameters).
 - [x] Export consistency checks against the signed commit, tree root, and revision.
 - [x] Internal deactivation, suspension, takedown, and reactivation; inactive repositories reject public reads, exports, writes, and imports.
-- [ ] Historical block retrieval.
+- [x] Historical block retrieval with signed-commit and canonical-tree membership checks, including deleted records and prior MST nodes.
 - [x] Internal durable event sequencing and cursor replay, recorded atomically with repository creation, writes, imports, and status changes.
 - [ ] Event retention / compaction and higher-throughput sequencing (writes currently share a PostgreSQL transaction advisory lock to preserve commit order).
 - [x] `com.atproto.sync.subscribeRepos` binary WebSocket stream with exclusive resume cursors, live delivery, and account status events.
@@ -379,6 +379,15 @@ locking protects shared objects when collectors overlap.
 - [ ] Authenticated identity-management endpoints and distributed refresh coordination.
 - [ ] Relay discovery / crawl requests and federation interoperability tests.
 - [ ] Service authentication and request proxying to AppViews and other services.
+
+Historical `getBlocks` reads are limited to active repositories and return only
+requested blocks in a rootless CAR. Deleted record bytes remain publicly retrievable
+while their signed revisions are retained. Candidate revisions are selected by
+their block indexes, then their commits and canonical trees are verified before
+granting access; shared storage or index membership alone is insufficient. A
+missing or foreign CID rejects the whole request. Historical verification can
+load multiple complete retained trees, so its cost grows with repository history;
+scalable membership indexes and history compaction remain pending.
 
 For local development, connect to
 `ws://localhost:4000/xrpc/com.atproto.sync.subscribeRepos?cursor=0`.

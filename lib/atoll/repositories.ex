@@ -429,12 +429,13 @@ defmodule Atoll.Repositories do
     end)
   end
 
-  @doc "Exports requested blocks reachable from the current repository, excluding retained history."
+  @doc "Exports requested blocks proven reachable from current or retained signed repository revisions."
   def export_blocks(did, cids) when is_list(cids) and length(cids) in 1..100 do
     Repo.transaction(fn ->
       {head, tree, commit} = snapshot!(did)
       available = MapSet.new([head.head | Map.keys(tree.blocks) ++ Map.values(tree.records)])
-      unless Enum.all?(cids, &MapSet.member?(available, &1)), do: Repo.rollback(:block_not_found)
+      missing = MapSet.difference(MapSet.new(cids), available)
+      verify_historical_blocks!(head, missing)
 
       blocks =
         Enum.reduce(Enum.uniq(cids), %{}, fn cid, acc ->
@@ -453,6 +454,40 @@ defmodule Atoll.Repositories do
   end
 
   def export_blocks(_, _), do: {:error, :invalid_request}
+
+  defp verify_historical_blocks!(head, missing) do
+    if MapSet.size(missing) > 0 do
+      requested = MapSet.to_list(missing)
+
+      revisions =
+        from r in Revision,
+          where: r.did == ^head.did,
+          where: fragment("? && ?", r.blocks, type(^requested, {:array, :binary})),
+          order_by: [desc: r.rev]
+
+      remaining =
+        revisions
+        |> Repo.stream(max_rows: 1)
+        |> Enum.reduce_while(missing, fn revision, remaining ->
+          # Revision indexes narrow the search but do not establish membership.
+          with {:ok, commit} <-
+                 Commit.verify(block!(revision.head), head.did, head.curve, head.public_key),
+               true <- commit["rev"] == revision.rev,
+               blocks = Map.new(revision.blocks, &{&1, block!(&1)}),
+               {:ok, tree} <- MST.load(commit["data"].cid, blocks) do
+            reachable =
+              MapSet.new([revision.head | Map.keys(tree.blocks) ++ Map.values(tree.records)])
+
+            remaining = MapSet.difference(remaining, reachable)
+            if MapSet.size(remaining) == 0, do: {:halt, remaining}, else: {:cont, remaining}
+          else
+            _ -> Repo.rollback(:invalid_repository)
+          end
+        end)
+
+      if MapSet.size(remaining) > 0, do: Repo.rollback(:block_not_found)
+    end
+  end
 
   defp snapshot!(did) do
     head = locked_head!(did, "FOR SHARE")

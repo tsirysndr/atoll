@@ -2,7 +2,7 @@ defmodule AtollWeb.SyncProofControllerTest do
   use AtollWeb.ConnCase, async: true
   alias Atoll.{CAR, CBOR, CID, Commit, Repo, Repositories, SigningKey}
   alias Atoll.CBOR.Link
-  alias Atoll.Repositories.Record
+  alias Atoll.Repositories.{Record, Revision}
   @did "did:plc:example"
   @collection "com.example.record"
   @record "/xrpc/com.atproto.sync.getRecord"
@@ -79,7 +79,7 @@ defmodule AtollWeb.SyncProofControllerTest do
     assert blocks == Map.take(all, cids)
   end
 
-  test "does not serve foreign blocks, deleted records, or retained commits", %{
+  test "serves retained commits, tree nodes and deleted records but rejects foreign blocks", %{
     conn: conn,
     key: key,
     head: head
@@ -88,12 +88,57 @@ defmodule AtollWeb.SyncProofControllerTest do
     {:ok, _} = Repositories.apply_writes(@did, [{:delete, @collection <> "/r1"}], key)
     {:ok, foreign} = Repositories.create("did:plc:other", SigningKey.generate())
 
-    for cid <- [old.cid, head.head, foreign.head, CID.create("missing", :dag_cbor)] do
+    revision = Repo.get_by!(Revision, did: @did, rev: head.rev)
+
+    for cid <- revision.blocks do
+      bytes = conn |> get(@blocks, %{did: @did, cids: CID.to_base32(cid)}) |> response(200)
+      assert {:ok, %{roots: [], blocks: blocks}} = CAR.decode(bytes)
+      assert Map.keys(blocks) == [cid]
+      assert :ok == CID.verify(cid, blocks[cid])
+    end
+
+    assert old.cid in revision.blocks
+
+    for cid <- [foreign.head, CID.create("missing", :dag_cbor)] do
       query = URI.encode_query(%{did: @did, cids: CID.to_base32(cid)})
 
       assert %{"error" => "BlockNotFound"} =
                conn |> get(@blocks <> "?" <> query) |> json_response(400)
     end
+  end
+
+  test "does not trust injected revision membership and fails atomically for mixed requests", %{
+    conn: conn,
+    head: head
+  } do
+    {:ok, foreign} = Repositories.create("did:plc:foreign", SigningKey.generate())
+    revision = Repo.get_by!(Revision, did: @did, rev: head.rev)
+    revision |> Ecto.Changeset.change(blocks: [foreign.head | revision.blocks]) |> Repo.update!()
+
+    query =
+      URI.encode_query([
+        {"did", @did},
+        {"cids", CID.to_base32(head.head)},
+        {"cids", CID.to_base32(foreign.head)}
+      ])
+
+    assert %{"error" => "BlockNotFound"} =
+             conn |> get(@blocks <> "?" <> query) |> json_response(400)
+  end
+
+  test "rejects a retained revision with an inconsistent signed revision", %{
+    conn: conn,
+    key: key,
+    head: head
+  } do
+    revision = Repo.get_by!(Revision, did: @did, rev: head.rev)
+    {:ok, newer} = Repositories.apply_writes(@did, [{:delete, @collection <> "/r1"}], key)
+    revision |> Ecto.Changeset.change(head: newer.head) |> Repo.update!()
+
+    assert %{"error" => "InternalServerError"} =
+             conn
+             |> get(@blocks, %{did: @did, cids: CID.to_base32(head.head)})
+             |> json_response(500)
   end
 
   test "rejects malformed requests and missing repos", %{conn: conn, head: head} do
