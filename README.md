@@ -158,7 +158,7 @@ The same `validate: true` restriction applies to batch requests.
 - [x] Shared configurable Cloudflare Worker email delivery client.
 - [x] Email confirmation requests and one-use confirmation through the Worker.
 - [x] Email updates authorized through the current confirmed address using the Worker.
-- [ ] Password changes and account recovery through the Worker.
+- [x] Email-based password reset through the Worker with atomic session revocation.
 - [x] Internal password session creation, scoped HS256 JWT verification, single-use refresh rotation, and persistent revocation.
 - [x] Public DID/password session creation, refresh, inspection, and revocation endpoints, with bounded requests and per-node rate limits.
 - [x] Bidirectionally verified handle/password login with normalized handles and DID-bound sessions.
@@ -184,7 +184,8 @@ with random salts and the library's default work factors (64 MiB memory, three
 iterations, four lanes). Only test configuration reduces the work factors.
 Building this dependency requires a C compiler and `make`. Hashes are redacted
 from schema inspection, and credential insertion disables query logging.
-Email login, password changes, and recovery remain pending.
+Email login and additional authentication factors remain pending. Password recovery
+uses the email reset endpoints described below.
 
 ### Sessions
 
@@ -750,8 +751,7 @@ Session responses include `email` and `emailConfirmed` when a profile has an ema
 Delivery is synchronous after token persistence and outside database locks. A
 Worker failure returns 503, leaves the email unconfirmed, and retains the cooldown;
 a new request after one minute can issue a replacement code. A crash between
-persistence and delivery requires another request. Durable retry scheduling,
-password recovery and the external Worker deployment remain
+persistence and delivery requires another request. Durable retry scheduling and the external Worker deployment remain
 pending. No real email is sent by the tests.
 
 
@@ -770,3 +770,25 @@ but still consumes the change code. Confirm the new address using the separate
 confirmation endpoints. `emailAuthFactor: true` is rejected until authentication
 factors are implemented. Both email update endpoints require a live session;
 service tokens cannot authorize them.
+
+
+`POST com.atproto.server.requestPasswordReset` accepts JSON `email` without a
+session. For eligible active/deactivated accounts it sends a 15-minute reset code
+through the Worker. Codes contain 192 bits of randomness; only a purpose-specific
+SHA-256 digest is persisted. Requests share the 20-per-five-minute direct-IP login
+bucket, and each account has a persistent one-minute email cooldown. Unknown,
+ineligible, throttled, and provider-failed requests all return empty HTTP 200;
+missing Worker configuration returns 503 for every address. Delivery outcomes
+emit `[:atoll, :email, :password_reset]` telemetry without account identifiers.
+Synchronous delivery timing can still differ by account existence; a durable
+outbox remains pending.
+
+`POST com.atproto.server.resetPassword` accepts JSON `token` and `password` without
+a session. It validates the code, hashes the new password outside database locks,
+then rechecks the code under the account lock. Credential replacement, code
+consumption, revocation of all account sessions, and clearing outstanding email
+management codes happen atomically. Email changes invalidate outstanding recovery
+codes. A reset does not activate the account or change its email confirmation.
+Login rechecks the verified credential under its account lock to prevent an old
+password check from creating a session after recovery. Expired or consumed codes
+cannot be reused. Suspended and taken-down accounts cannot redeem reset codes.

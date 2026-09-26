@@ -56,16 +56,38 @@ defmodule Atoll.Accounts.Credentials do
 
   @doc "Verifies a password for a DID, returning no password hash or credential struct."
   def verify(did, password) do
-    if Syntax.did?(did) and valid_password?(password) do
-      valid? =
-        case Repo.get(Credential, did) do
-          nil -> Argon2.no_user_verify(argon2_type: 2)
-          credential -> Argon2.verify_pass(password, credential.password_hash)
-        end
+    case verified_digest(did, password) do
+      {:ok, _} -> {:ok, %{did: did}}
+      error -> error
+    end
+  end
 
-      if valid?, do: {:ok, %{did: did}}, else: {:error, :invalid_credentials}
+  @doc false
+  def verified_digest(did, password) do
+    if Syntax.did?(did) and valid_password?(password) do
+      case Repo.get(Credential, did) do
+        nil ->
+          Argon2.no_user_verify(argon2_type: 2)
+          {:error, :invalid_credentials}
+
+        credential ->
+          if Argon2.verify_pass(password, credential.password_hash),
+            do: {:ok, :crypto.hash(:sha256, credential.password_hash)},
+            else: {:error, :invalid_credentials}
+      end
     else
       {:error, :invalid_credentials}
+    end
+  end
+
+  @doc false
+  def current_digest?(did, expected) do
+    case Repo.get(Credential, did) do
+      nil ->
+        false
+
+      credential ->
+        Plug.Crypto.secure_compare(:crypto.hash(:sha256, credential.password_hash), expected)
     end
   end
 

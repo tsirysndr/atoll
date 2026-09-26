@@ -3,6 +3,8 @@ defmodule AtollWeb.SessionRequestPlug do
   import Plug.Conn
   @prefix "/xrpc/com.atproto.server."
   @procedures [
+    @prefix <> "requestPasswordReset",
+    @prefix <> "resetPassword",
     @prefix <> "requestEmailUpdate",
     @prefix <> "updateEmail",
     @prefix <> "requestEmailConfirmation",
@@ -47,9 +49,14 @@ defmodule AtollWeb.SessionRequestPlug do
 
     if conn.method == method do
       {bucket, limit} =
-        if path in [@prefix <> "createSession", @prefix <> "createAccount"],
-          do: {:login, 20},
-          else: {:session, 300}
+        if path in [
+             @prefix <> "createSession",
+             @prefix <> "createAccount",
+             @prefix <> "requestPasswordReset",
+             @prefix <> "resetPassword"
+           ],
+           do: {:login, 20},
+           else: {:session, 300}
 
       case Atoll.Accounts.SessionLimiter.check({bucket, conn.remote_ip}, limit) do
         :ok ->
@@ -73,7 +80,9 @@ defmodule AtollWeb.SessionRequestPlug do
               @prefix <> "createAccount",
               @prefix <> "deactivateAccount",
               @prefix <> "confirmEmail",
-              @prefix <> "updateEmail"
+              @prefix <> "updateEmail",
+              @prefix <> "requestPasswordReset",
+              @prefix <> "resetPassword"
             ] do
     case get_req_header(conn, "content-type") do
       [type] ->

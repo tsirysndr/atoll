@@ -13,7 +13,8 @@ defmodule Atoll.Accounts.Sessions do
   alias Atoll.Repositories.Head
 
   def create(did, password, opts \\ []) do
-    with {:ok, _} <- Credentials.verify(did, password), do: create_for_account(did, opts)
+    with {:ok, digest} <- Credentials.verified_digest(did, password),
+         do: create_for_account(did, Keyword.put(opts, :credential_digest, digest))
   end
 
   @doc "Internal session creation after credentials or provisioning have been authorized by the caller."
@@ -24,6 +25,11 @@ defmodule Atoll.Accounts.Sessions do
       Repo.transaction(fn ->
         # Serialize account logins before counting so parallel creates cannot exceed the cap.
         head = active_head!(did, true, true)
+        # Password verification happens outside locks; reject a proof made stale by recovery.
+        if digest = opts[:credential_digest] do
+          unless Credentials.current_digest?(did, digest), do: Repo.rollback(:invalid_credentials)
+        end
+
         now = Keyword.get(opts, :now, System.system_time(:second))
         live = from s in Session, where: s.did == ^did and s.expires_at > ^now
         if Repo.aggregate(live, :count) >= limit, do: Repo.rollback(:session_limit_exceeded)

@@ -73,6 +73,8 @@ defmodule Atoll.Accounts.EmailUpdate do
             profile
             |> Ecto.Changeset.change(
               email: email,
+              password_reset_digest: nil,
+              password_reset_expires_at: nil,
               email_confirmed_at: nil,
               email_confirmation_digest: nil,
               email_confirmation_expires_at: nil,

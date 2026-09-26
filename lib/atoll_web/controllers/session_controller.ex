@@ -27,6 +27,16 @@ defmodule AtollWeb.SessionController do
          do: send_resp(conn, 200, "")
   end
 
+  def request_password_reset(conn, _params) do
+    with {:ok, _} <- Atoll.Accounts.PasswordReset.request(conn.body_params),
+         do: send_resp(conn, 200, "")
+  end
+
+  def reset_password(conn, _params) do
+    with {:ok, _} <- Atoll.Accounts.PasswordReset.reset(conn.body_params),
+         do: send_resp(conn, 200, "")
+  end
+
   def create_account(conn, _params) do
     with {:ok, token} <- bearer(conn),
          {:ok, account} <- Atoll.Accounts.Provisioning.import_account(token, conn.body_params),

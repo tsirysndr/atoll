@@ -6,6 +6,9 @@ defmodule Atoll.Accounts.Profile do
     field :handle, :string
     field :email, :string, redact: true
     field :email_confirmed_at, :utc_datetime_usec
+    field :password_reset_digest, :binary, redact: true
+    field :password_reset_expires_at, :integer
+    field :password_reset_requested_at, :integer
     field :email_update_digest, :binary, redact: true
     field :email_update_expires_at, :integer
     field :email_update_requested_at, :integer
