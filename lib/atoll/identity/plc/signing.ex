@@ -34,8 +34,11 @@ defmodule Atoll.Identity.PLC.Signing do
 
         ^did = SignatureChallenges.consume!(token, params["token"])
 
-        if Repo.exists?(from u in Update, where: u.did == ^did and is_nil(u.completed_at)),
-          do: Repo.rollback(:plc_update_pending)
+        if Repo.exists?(
+             from u in Update,
+               where: u.did == ^did and is_nil(u.completed_at) and is_nil(u.nullified_at)
+           ),
+           do: Repo.rollback(:plc_update_pending)
 
         {:ok, local_key} = Multikey.to_did_key(head.curve, head.public_key)
 

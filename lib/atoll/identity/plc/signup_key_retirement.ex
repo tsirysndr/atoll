@@ -19,8 +19,11 @@ defmodule Atoll.Identity.PLC.SignupKeyRetirement do
       unless row.cid == expected_genesis && row.completed_at,
         do: Repo.rollback(:signup_retirement_conflict)
 
-      if Repo.exists?(from u in Update, where: u.did == ^did and is_nil(u.completed_at)),
-        do: Repo.rollback(:plc_update_pending)
+      if Repo.exists?(
+           from u in Update,
+             where: u.did == ^did and is_nil(u.completed_at) and is_nil(u.nullified_at)
+         ),
+         do: Repo.rollback(:plc_update_pending)
 
       installed = Repo.get(RotationKey, did, log: false) || Repo.rollback(:key_not_found)
       key = unwrap!(RotationKeys.fetch(did))

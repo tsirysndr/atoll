@@ -176,6 +176,8 @@ defmodule Atoll.Identity.HandleChanges do
 
         profile = Repo.get(Profile, head.did) || Repo.rollback(:account_not_found)
 
+        if journal.nullified_at, do: Repo.rollback(:plc_update_nullified)
+
         if journal.completed_at && profile.handle != handle, do: Repo.rollback(:plc_conflict)
 
         unless journal.completed_at do

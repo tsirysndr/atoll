@@ -10,7 +10,9 @@ defmodule Atoll.Identity.PLC.KeyRotation do
   def status(did) do
     case Repo.one(
            from u in Update,
-             where: u.did == ^did and is_nil(u.completed_at) and not is_nil(u.signing_public_key)
+             where:
+               u.did == ^did and is_nil(u.completed_at) and is_nil(u.nullified_at) and
+                 not is_nil(u.signing_public_key)
          ) do
       nil ->
         {:ok, %{did: did, result: :no_pending_rotation}}
@@ -67,7 +69,7 @@ defmodule Atoll.Identity.PLC.KeyRotation do
 
   def resume(did, cid, opts \\ []) do
     with false <- Repo.in_transaction?(),
-         %Update{signing_public_key: public} = row when is_binary(public) <-
+         %Update{nullified_at: nil, signing_public_key: public} = row when is_binary(public) <-
            Repo.get_by(Update, did: did, cid: cid),
          %Profile{} = profile <- Repo.get(Profile, did),
          observation = Repo.get(Observation, did),
@@ -94,6 +96,7 @@ defmodule Atoll.Identity.PLC.KeyRotation do
     Repo.transaction(fn ->
       head = lock!(row.did)
       current = Repo.get_by!(Update, did: row.did, cid: row.cid)
+      if current.nullified_at, do: Repo.rollback(:plc_update_nullified)
 
       expected =
         if current.completed_at, do: public_key(current), else: current.expected_signing_key
@@ -113,8 +116,9 @@ defmodule Atoll.Identity.PLC.KeyRotation do
       current =
         Repo.get_by(Update, did: row.did, cid: row.cid) || Repo.rollback(:plc_update_not_found)
 
-      unless current.operation == row.operation and current.confirmed_at,
-        do: Repo.rollback(:plc_conflict)
+      unless is_nil(current.nullified_at) and current.operation == row.operation and
+               current.confirmed_at,
+             do: Repo.rollback(:plc_conflict)
 
       if current.completed_at do
         fence!(head, public_key(current), handle, Repo.get(Observation, row.did))

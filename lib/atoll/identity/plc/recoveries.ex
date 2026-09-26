@@ -20,8 +20,11 @@ defmodule Atoll.Identity.PLC.Recoveries do
 
         case Repo.get_by(Update, did: did, cid: plan.cid) do
           nil ->
-            if Repo.exists?(from u in Update, where: u.did == ^did and is_nil(u.completed_at)),
-              do: Repo.rollback(:plc_update_pending)
+            if Repo.exists?(
+                 from u in Update,
+                   where: u.did == ^did and is_nil(u.completed_at) and is_nil(u.nullified_at)
+               ),
+               do: Repo.rollback(:plc_update_pending)
 
             Repo.insert!(%Update{
               did: did,
@@ -33,6 +36,9 @@ defmodule Atoll.Identity.PLC.Recoveries do
               recovery_nullified_cids: plan.nullified_cids
             })
             |> summary()
+
+          %Update{nullified_at: time} when not is_nil(time) ->
+            Repo.rollback(:plc_update_nullified)
 
           row ->
             unless row.operation == operation and row.previous == previous and
@@ -52,6 +58,9 @@ defmodule Atoll.Identity.PLC.Recoveries do
       {:error, :plc_update_inside_transaction}
     else
       case Repo.get_by(Update, did: did, cid: cid) do
+        %Update{nullified_at: time} when not is_nil(time) ->
+          {:error, :plc_update_nullified}
+
         %Update{recovery_expected_head: expected} = row when is_binary(expected) ->
           submit_row(row, opts)
 
@@ -87,6 +96,8 @@ defmodule Atoll.Identity.PLC.Recoveries do
                  current.recovery_nullified_cids == row.recovery_nullified_cids and
                  current.recovery_deadline == row.recovery_deadline,
                do: Repo.rollback(:plc_recovery_conflict)
+
+        if current.nullified_at, do: Repo.rollback(:plc_update_nullified)
 
         if current.confirmed_at do
           summary(current)

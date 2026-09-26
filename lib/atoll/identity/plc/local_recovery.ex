@@ -23,7 +23,8 @@ defmodule Atoll.Identity.PLC.LocalRecovery do
     case Repo.one(
            from u in Update,
              where:
-               u.did == ^did and is_nil(u.completed_at) and not is_nil(u.recovery_expected_head)
+               u.did == ^did and is_nil(u.completed_at) and is_nil(u.nullified_at) and
+                 not is_nil(u.recovery_expected_head)
          ) do
       nil ->
         {:ok, %{did: did, result: :no_pending_recovery}}
@@ -144,7 +145,8 @@ defmodule Atoll.Identity.PLC.LocalRecovery do
 
   def resume(did, cid, opts \\ []) do
     with false <- Repo.in_transaction?(),
-         %Update{recovery_expected_head: expected} = row when is_binary(expected) <-
+         %Update{nullified_at: nil, recovery_expected_head: expected} = row
+         when is_binary(expected) <-
            Repo.get_by(Update, did: did, cid: cid),
          %Profile{} = profile <- Repo.get(Profile, did),
          observation = Repo.get(Observation, did),
@@ -160,8 +162,9 @@ defmodule Atoll.Identity.PLC.LocalRecovery do
         current =
           Repo.get_by(Update, did: did, cid: cid) || Repo.rollback(:plc_recovery_not_found)
 
-        unless current.operation == row.operation and current.confirmed_at,
-          do: Repo.rollback(:plc_conflict)
+        unless is_nil(current.nullified_at) and current.operation == row.operation and
+                 current.confirmed_at,
+               do: Repo.rollback(:plc_conflict)
 
         fence!(
           head,

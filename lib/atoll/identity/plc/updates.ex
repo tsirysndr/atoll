@@ -32,6 +32,9 @@ defmodule Atoll.Identity.PLC.Updates do
         lock_head!(did)
 
         case Repo.get_by(Update, did: did, cid: cid) do
+          %Update{nullified_at: time} when not is_nil(time) ->
+            Repo.rollback(:plc_update_nullified)
+
           %Update{recovery_expected_head: head} when not is_nil(head) ->
             Repo.rollback(:plc_update_pending)
 
@@ -39,8 +42,11 @@ defmodule Atoll.Identity.PLC.Updates do
             summary(row)
 
           nil ->
-            if Repo.exists?(from u in Update, where: u.did == ^did and is_nil(u.completed_at)),
-              do: Repo.rollback(:plc_update_pending)
+            if Repo.exists?(
+                 from u in Update,
+                   where: u.did == ^did and is_nil(u.completed_at) and is_nil(u.nullified_at)
+               ),
+               do: Repo.rollback(:plc_update_pending)
 
             Repo.insert!(%Update{did: did, cid: cid, previous: previous, operation: operation})
             |> summary()
@@ -75,6 +81,9 @@ defmodule Atoll.Identity.PLC.Updates do
       {:error, :plc_update_inside_transaction}
     else
       case Repo.get_by(Update, did: did, cid: cid) do
+        %Update{nullified_at: time} when not is_nil(time) ->
+          {:error, :plc_update_nullified}
+
         nil ->
           {:error, :plc_update_not_found}
 
@@ -102,6 +111,8 @@ defmodule Atoll.Identity.PLC.Updates do
         unless current && current.operation == row.operation && current.previous == row.previous,
           do: Repo.rollback(:plc_update_not_found)
 
+        if current.nullified_at, do: Repo.rollback(:plc_update_nullified)
+
         if current.confirmed_at do
           summary(current)
         else
@@ -124,6 +135,7 @@ defmodule Atoll.Identity.PLC.Updates do
 
     lock_head!(did)
     row = Repo.get_by(Update, did: did, cid: cid) || Repo.rollback(:plc_update_not_found)
+    if row.nullified_at, do: Repo.rollback(:plc_update_nullified)
     unless row.confirmed_at, do: Repo.rollback(:plc_update_unconfirmed)
 
     if row.completed_at do

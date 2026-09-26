@@ -371,6 +371,127 @@ defmodule Atoll.PLCLocalRecoveryTest do
     assert Agent.get(c.directory, & &1.posts) == 1
   end
 
+  test "nullified journal reconciliation releases reservations and permits new work", c do
+    alias Atoll.Identity.PLC.{NullifiedUpdates, Updates}
+    {:ok, cid} = Operation.cid(c.bad)
+    assert {:ok, _} = Updates.stage(c.did, c.audit, c.bad)
+
+    reservation =
+      Repo.insert!(%Atoll.Identity.HandleReservation{
+        did: c.did,
+        cid: cid,
+        handle: "bad.example.com"
+      })
+
+    audit = show_nullification(c, c.bad)
+    seq = Events.latest_seq()
+    assert {:ok, %{result: :nullified}} = NullifiedUpdates.reconcile(c.did, cid, c.cid, c.opts)
+    closed = Repo.get_by!(Update, did: c.did, cid: cid)
+    assert closed.nullified_at
+    assert closed.nullified_head == c.cid
+    refute closed.completed_at
+    assert closed.operation == c.bad
+    refute Repo.get(Atoll.Identity.HandleReservation, reservation.handle)
+    assert {:ok, _} = Sessions.authenticate(c.pair.access_jwt)
+    assert Events.latest_seq() == seq
+    assert {:error, :plc_update_nullified} = Updates.submit(c.did, cid, c.opts)
+    assert {:error, :plc_update_nullified} = Updates.stage(c.did, c.audit, c.bad)
+
+    assert {:error, :plc_update_nullified} =
+             Repo.transaction(fn -> Updates.complete!(c.did, cid) end)
+
+    assert {:ok, %{result: :already_nullified}} =
+             NullifiedUpdates.reconcile(c.did, cid, c.cid, c.opts)
+
+    assert Repo.get_by!(Update, did: c.did, cid: cid).nullified_at == closed.nullified_at
+    assert length(Repo.all(Atoll.Moderation.AuditEntry)) == 1
+    {:ok, unsigned} = Operation.successor(c.recovery)
+    {:ok, next} = Operation.sign(unsigned, c.high)
+    assert {:ok, _} = Updates.stage(c.did, audit, next)
+    assert Agent.get(c.directory, & &1.posts) == 0
+  end
+
+  test "an in-flight submission cannot confirm a journal closed during its directory read", c do
+    alias Atoll.Identity.PLC.{NullifiedUpdates, Updates}
+    {:ok, cid} = Operation.cid(c.bad)
+    assert {:ok, _} = Updates.stage(c.did, c.audit, c.bad)
+    audit = show_nullification(c, c.bad)
+
+    Req.Test.stub(:atoll_nullified_evidence, fn conn ->
+      if String.ends_with?(conn.request_path, "/log/audit"),
+        do: Req.Test.json(conn, audit),
+        else: Req.Test.json(conn, c.recovery)
+    end)
+
+    Req.Test.expect(__MODULE__, fn conn ->
+      assert conn.method == "GET"
+
+      assert {:ok, _} =
+               NullifiedUpdates.reconcile(c.did, cid, c.cid,
+                 plug: {Req.Test, :atoll_nullified_evidence}
+               )
+
+      Req.Test.json(conn, c.bad)
+    end)
+
+    assert {:error, :plc_update_nullified} = Updates.submit(c.did, cid, c.opts)
+    closed = Repo.get_by!(Update, did: c.did, cid: cid)
+    assert closed.nullified_at
+    refute closed.confirmed_at
+    refute closed.completed_at
+  end
+
+  test "nullified repository-key work releases only pending custody", c do
+    {cid, key} = stage_nullified_key(c, :repository)
+    assert {:ok, ^key} = Atoll.Identity.PLC.PendingSigningKeys.fetch(c.did, cid)
+    assert {:ok, _} = Atoll.Identity.PLC.NullifiedUpdates.reconcile(c.did, cid, c.cid, c.opts)
+    closed = Repo.get_by!(Update, did: c.did, cid: cid)
+    assert closed.signing_public_key == key.public
+    refute closed.signing_envelope
+    assert {:ok, %{result: :no_pending_rotation}} = Atoll.Identity.PLC.KeyRotation.status(c.did)
+    assert {:error, _} = Atoll.Identity.PLC.KeyRotation.resume(c.did, cid, c.opts)
+    assert Repositories.get_head(c.did) == {:ok, c.head}
+    assert {:ok, old} = KeyVault.fetch(c.did)
+    assert old.public == c.head.public_key
+  end
+
+  test "nullified authority work releases custody through the operator CLI", c do
+    {cid, key} = stage_nullified_key(c, :authority)
+    assert {:ok, ^key} = Atoll.Identity.PLC.PendingAuthorityKeys.fetch(c.did, cid)
+    Application.put_env(:atoll, :plc_submission_options, Keyword.take(c.opts, [:plug]))
+
+    output =
+      ExUnit.CaptureIO.capture_io(fn ->
+        Mix.Tasks.Atoll.Plc.ReconcileNullified.run([c.did, cid, c.cid])
+      end)
+
+    assert Jason.decode!(output)["result"] == "nullified"
+    refute Repo.get_by!(Update, did: c.did, cid: cid).authority_envelope
+
+    assert {:ok, %{result: :no_pending_rotation}} =
+             Atoll.Identity.PLC.AuthorityRotation.status(c.did)
+
+    assert {:error, _} = Atoll.Identity.PLC.AuthorityRotation.resume(c.did, cid, c.opts)
+    assert Registrations.rotation_key(c.did) == {:ok, c.high}
+  end
+
+  test "nullification reconciliation rejects active, missing, stale-head, and completed work",
+       c do
+    alias Atoll.Identity.PLC.{NullifiedUpdates, Updates}
+    {:ok, cid} = Operation.cid(c.bad)
+    assert {:ok, _} = Updates.stage(c.did, c.audit, c.bad)
+    assert {:error, :plc_conflict} = NullifiedUpdates.reconcile(c.did, cid, cid, c.opts)
+    assert {:error, :plc_conflict} = NullifiedUpdates.reconcile(c.did, c.cid, cid, c.opts)
+    show_nullification(c, c.bad)
+    assert {:error, :plc_conflict} = NullifiedUpdates.reconcile(c.did, cid, cid, c.opts)
+    row = Repo.get_by!(Update, did: c.did, cid: cid)
+    refute row.nullified_at
+    row |> Ecto.Changeset.change(confirmed_at: c.now, completed_at: c.now) |> Repo.update!()
+    assert {:error, :plc_update_completed} = NullifiedUpdates.reconcile(c.did, cid, c.cid, c.opts)
+    assert Repo.all(Atoll.Moderation.AuditEntry) == []
+    assert Agent.get(c.directory, & &1.posts) == 0
+  end
+
   test "recovery installs authority when local metadata is absent and binds absence to custody",
        c do
     Repo.delete!(Repo.get!(Atoll.Identity.PLC.Registration, c.did))
@@ -803,6 +924,43 @@ defmodule Atoll.PLCLocalRecoveryTest do
         Mix.Tasks.Atoll.Plc.Recover.run(["stage", c.did, path])
       end
     end
+  end
+
+  defp show_nullification(c, operation) do
+    audit = [
+      hd(c.audit),
+      Map.put(entry(c.did, operation, DateTime.add(c.now, -30, :second)), "nullified", true),
+      entry(c.did, c.recovery, c.now)
+    ]
+
+    Agent.update(c.directory, &%{&1 | audit: audit, last: c.recovery})
+    audit
+  end
+
+  defp stage_nullified_key(c, purpose) do
+    genesis = hd(c.audit)["operation"]
+    replacement = SigningKey.generate(:p256)
+    {:ok, public} = Multikey.to_did_key(replacement.curve, replacement.public)
+    {:ok, unsigned} = Operation.successor(genesis)
+
+    {unsigned, expected, module} =
+      case purpose do
+        :repository ->
+          {put_in(unsigned, ["verificationMethods", "atproto"], public),
+           genesis["verificationMethods"]["atproto"], Atoll.Identity.PLC.PendingSigningKeys}
+
+        :authority ->
+          [old | rest] = unsigned["rotationKeys"]
+
+          {Map.put(unsigned, "rotationKeys", [public | rest]), old,
+           Atoll.Identity.PLC.PendingAuthorityKeys}
+      end
+
+    {:ok, operation} = Operation.sign(unsigned, c.low)
+    {:ok, cid} = Operation.cid(operation)
+    assert {:ok, _} = module.stage(c.did, [hd(c.audit)], operation, expected, replacement)
+    show_nullification(c, operation)
+    {cid, replacement}
   end
 
   defp combined_recovery(c, repository, authority) do

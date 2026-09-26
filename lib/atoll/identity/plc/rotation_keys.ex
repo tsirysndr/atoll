@@ -29,8 +29,11 @@ defmodule Atoll.Identity.PLC.RotationKeys do
         Repo.one(from h in Head, where: h.did == ^did, lock: "FOR UPDATE") ||
           Repo.rollback(:account_not_found)
 
-        if Repo.exists?(from u in Update, where: u.did == ^did and is_nil(u.completed_at)),
-          do: Repo.rollback(:plc_update_pending)
+        if Repo.exists?(
+             from u in Update,
+               where: u.did == ^did and is_nil(u.completed_at) and is_nil(u.nullified_at)
+           ),
+           do: Repo.rollback(:plc_update_pending)
 
         before_key = Repo.get(RotationKey, did, log: false)
 
@@ -140,6 +143,7 @@ defmodule Atoll.Identity.PLC.RotationKeys do
 
     unless head.status in [:active, :deactivated], do: Repo.rollback(:repo_inactive)
     row = Repo.get_by(Update, did: did, cid: cid) || Repo.rollback(:plc_update_not_found)
+    if row.nullified_at, do: Repo.rollback(:plc_update_nullified)
     unless row.confirmed_at, do: Repo.rollback(:plc_update_unconfirmed)
 
     unless mode == :recovery == is_binary(row.recovery_expected_head),

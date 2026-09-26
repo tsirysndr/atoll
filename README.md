@@ -152,7 +152,8 @@ record Lexicons or grant access to account data.
 - [x] Operator authority-only and combined repository/authority key recovery, including old-master-key loss.
 - [x] Explicit audited retirement of historical signup key envelopes after completed key reconciliation.
 - [x] Recovery with explicitly absent local authority metadata and supplied private custody.
-- [ ] Recovery conflict resolution for existing pending operations.
+- [x] Operator reconciliation of pending PLC operations explicitly nullified in verified directory history.
+- [ ] Recovery conflict resolution for pending operations still active or absent from directory history.
 - [x] Per-revision signing-key provenance for historical record and block verification.
 - [x] Internal atomic repository signing-key replacement with unchanged-tree commits and vault rollback.
 - [x] PostgreSQL repository heads and atomic record, tree, and commit updates with optional head compare-and-swap.
@@ -3534,7 +3535,8 @@ operation. Generic ordinary-update submission paths cannot complete recovery
 journals. Account deletion cascades the journal. The operator command below
 provides authorized staging and atomic local completion for restoring existing
 local keys, with optional repository and PLC authority key replacement. Recovery
-with conflicting pending work remains unfinished.
+with conflicting pending work remains unfinished unless the pending operation
+has been explicitly nullified, as handled by the reconciliation command below.
 
 ### Operator recovery of the current local identity
 
@@ -3573,7 +3575,8 @@ replace lost/private keys, or overwrite another pending PLC operation. Use the
 existing password-management workflow when local credentials are compromised.
 Repository-key replacement is supported by `stage-key` below; `stage-authority`
 and `stage-keys` also restore PLC authority custody. Pending-operation conflict
-reconciliation remains unfinished. Missing authority metadata is supported with
+reconciliation supports explicitly nullified history; other conflicts remain
+unfinished. Missing authority metadata is supported with
 an explicit `absent` expectation as described below.
 
 Directory acceptance and local completion cannot be atomic. Keep the journal
@@ -3670,7 +3673,8 @@ do not revoke newly created sessions or duplicate events/audits.
 
 This supports missing or unreadable repository custody; the retained PLC authority
 must still be readable and authorized by the recovery operation. Authority restoration and combined recovery are described below. Handling
-conflicting pending operations remains unfinished. Recovery still requires an authorized signing key; private
+conflicting pending operations is supported for explicitly nullified history;
+other conflicts remain unfinished. Recovery still requires an authorized signing key; private
 keys cannot be reconstructed from public keys.
 
 ### Internal recovery of PLC authority custody
@@ -3812,3 +3816,40 @@ Completion installs supplied custody, releases pending secrets, and audits the
 previously absent state atomically with the other recovery changes. Completed
 retries verify the now-installed key normally. Downgrading the schema refuses
 existing absent-authority recovery rows rather than inventing old key metadata.
+
+
+### Reconciling nullified pending PLC work
+
+A pending operation may have been accepted by the directory and then nullified
+by a higher-priority recovery before Atoll finished its local workflow. Close
+that pending work using its exact CID and the expected current directory head:
+
+```sh
+mix atoll.plc.reconcile_nullified did:plc:ACCOUNT PENDING_OPERATION_CID EXPECTED_DIRECTORY_HEAD_CID
+```
+
+The command fetches fresh bounded audit history, verifies signatures and recovery
+nullifications, and checks the latest directory endpoint against that history.
+It requires the reviewed head and an explicit nullification entry matching the
+stored signed operation. It rejects active operations, operations absent from the
+log, stale head expectations, and locally completed work. It never POSTs to the
+directory. See the [PLC recovery specification](https://web.plc.directory/spec/v0.1/did-plc).
+
+Under account locks, closure atomically records a separate nullified terminal
+state and observed directory head, erases this journal's pending private-key
+envelopes, releases only handle reservations with its DID/CID, and appends a
+public-metadata operator audit. Signed operations, public key metadata, review
+scope, and any original confirmation timestamp remain retained. Completion is
+not fabricated. The pending-operation slot becomes available for a new verified
+workflow; stage and submit cannot reopen the closed journal. In-flight submission
+confirmation and local completion also check the terminal state under lock.
+Retries fetch fresh evidence and do not duplicate the audit or closure timestamp.
+
+Installed private keys, local profile, repository, sessions, and account status
+are unchanged, and no stream event is emitted. Closing dead work does not itself
+reconcile the current directory identity or revoke compromised credentials. Run
+the appropriate identity/recovery workflow afterward. Active and deactivated
+accounts are supported. Remaining conflict handling includes operations not
+explicitly nullified in verified history and recovery supersession before remote
+acceptance. Do not delete or mark these operations completed to bypass the journal.
+Schema downgrade refuses existing nullified rows rather than reopening them.

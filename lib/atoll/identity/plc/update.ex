@@ -18,6 +18,8 @@ defmodule Atoll.Identity.PLC.Update do
     field :recovery_expected_head, :string
     field :recovery_deadline, :utc_datetime_usec
     field :recovery_nullified_cids, {:array, :string}
+    field :nullified_at, :utc_datetime_usec
+    field :nullified_head, :string
     field :confirmed_at, :utc_datetime_usec
     field :completed_at, :utc_datetime_usec
     timestamps(type: :utc_datetime_usec)

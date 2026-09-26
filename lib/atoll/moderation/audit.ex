@@ -59,6 +59,23 @@ defmodule Atoll.Moderation.Audit do
     )
   end
 
+  @doc "Records closure of directory-nullified work without erasing signed history."
+  def nullified_update!(row, head, reservations) do
+    insert!(
+      "atoll.plc.reconcileNullified",
+      row.did,
+      %{kind: "plcUpdate", did: row.did},
+      %{operationCid: row.cid, observedHead: head},
+      %{
+        pending: true,
+        repositoryCustody: not is_nil(row.signing_envelope),
+        authorityCustody: not is_nil(row.authority_envelope)
+      },
+      %{pending: false, nullified: true, releasedHandleReservations: reservations},
+      "operator"
+    )
+  end
+
   @doc "Records explicit erasure of superseded signup custody, without secret material."
   def signup_key_retirement!(registration, installed) do
     {:ok, old} =
