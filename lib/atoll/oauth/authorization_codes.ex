@@ -75,6 +75,9 @@ defmodule Atoll.OAuth.AuthorizationCodes do
       now = clock!()
       {head, claims} = unwrap!(authorize(token, Keyword.put(session_opts(opts), :now, now)))
 
+      if opts[:expected_did] && opts[:expected_did] != head.did,
+        do: Repo.rollback(:account_mismatch)
+
       request =
         Repo.one(
           from(r in PushedRequest, where: r.digest == ^snapshot.digest, lock: "FOR UPDATE"),

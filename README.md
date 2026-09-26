@@ -394,7 +394,9 @@ mutation. Deletes and empty batches need no record schema, even with `validate: 
 - [x] Internal account-authorized approval/denial with atomic pushed-request consumption and bound authorization-code issuance.
 - [x] Internal one-use authorization-code exchange into bound opaque OAuth tokens, with verified reuse revocation.
 - [x] HTTP authorization-code token exchange with DPoP nonce challenges, strict forms, rate limits, and CORS.
-- [ ] Browser authorization/consent flow.
+- [x] Browser pushed-request authorization and explicit consent with optional scope narrowing and account-hint enforcement.
+- [ ] Optional passkey enrollment, authentication, management, and recovery.
+- [ ] Optional authenticator-app (TOTP) enrollment, authentication, management, and recovery.
 - [x] Internal owner-authenticated OAuth session inventory and per-grant revocation.
 - [x] Browser account login, OAuth session inventory/revocation, and logout with encrypted cookies and CSRF protection.
 - [x] Persisted OAuth client/DPoP/session bindings and source password-session deletion cascades.
@@ -4779,7 +4781,7 @@ Rate exhaustion returns 429; unavailable configuration or storage returns 503.
 HTTP tests cover issuance, nonce retry, code-reuse revocation, proof replay,
 malformed forms, CORS, peer limits, and configured-host binding. Response and
 error shapes follow [RFC 6749 sections 5.1–5.2](https://www.rfc-editor.org/rfc/rfc6749.html#section-5.1).
-Discovery and browser consent remain pending; this route does not yet make Atoll
+Discovery remains pending; the token route and browser consent alone do not yet make Atoll
 a complete OAuth server. The refresh grant is described below.
 
 
@@ -5172,5 +5174,49 @@ choose a redirect destination; redirects stay on fixed account paths.
 HTTP tests explicitly enable CSRF protection and cover the complete login/list/
 revoke/logout flow, email and DID login, restricted credential rejection, email
 factor prompts, cookie tampering, expired browser/account sessions, HTML escaping,
-request limits, and invalid forms/methods. Browser OAuth authorization/consent and
-server discovery remain pending; this page manages existing grants.
+request limits, and invalid forms/methods. Browser OAuth consent is described below;
+server discovery remains pending.
+
+### Browser OAuth authorization and consent
+
+Clients redirect to `GET /oauth/authorize` with exactly `client_id` and
+`request_uri` from the pushed authorization response. Unknown, expired, mismatched,
+extra or duplicate front-channel parameters fail locally without redirecting to
+an untrusted destination. The existing 90-second pushed-request expiry applies
+through login and consent; an expired flow must restart from the application.
+
+The account browser stores a compact encrypted context containing the request
+reference, a client-ID hash and a random form identifier. Login preserves this
+context across cookie renewal and resumes consent at the fixed local endpoint.
+The consent page shows the full client URL and current account DID as escaped
+text, and requires an explicit Allow or Deny action. Clients always receive the
+required identity scope; users can deselect additional transitional permissions.
+Chat access depends on general application access. No automatic approval occurs.
+
+A DID login hint must match the displayed account; handle hints use fresh handle
+verification before display and again before submission. Approval is also bound
+to that DID inside the code-issuance transaction. CSRF protection, a browser-bound
+form identifier, strict form fields, live account authorization, current client
+metadata/key validation and atomic pushed-request consumption all apply. The
+callback, original state and issuer come exclusively from the stored request.
+Existing callback query parameters are preserved except OAuth response fields,
+which are replaced with the current response. Denial returns `access_denied` and
+never issues a code. Validation failures remain on the PDS.
+
+The consent page permits the registered cross-origin callback navigation by
+omitting `form-action` from its CSP; scripts, frames, external resources and base
+URL changes remain blocked. All rendered forms still target fixed local paths.
+Responses remain uncached and use `Referrer-Policy: no-referrer`.
+
+Grants are bound to the browser's password session. Explicit browser sign-out
+revokes that session and therefore the grants authorized through it; the consent
+and account pages state this behavior. Browser cookie expiry alone does not
+revoke grants. Individually revoked applications and independently created grants
+retain their existing behavior. Optional passkeys and authenticator-app TOTP,
+including enrollment and recovery, remain on the authentication roadmap.
+
+HTTP tests cover login resumption, permission narrowing, code exchange, a resource
+read, denial, logout cascades, CSRF and form tampering, hint mismatches, expired
+requests and duplicate/extra query fields. A transaction-level test verifies the
+displayed account cannot be replaced during code issuance. Visual browser review
+is still unavailable in the current tooling; discovery remains a separate task.

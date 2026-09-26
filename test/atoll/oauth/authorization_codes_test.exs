@@ -63,6 +63,17 @@ defmodule Atoll.OAuth.AuthorizationCodesTest do
     assert Repo.aggregate(PKCEUse, :count) == 1
   end
 
+  test "a browser-bound account is rechecked inside the code issuance transaction", c do
+    uri = pushed(c)
+    opts = Keyword.put(c.opts, :expected_did, "did:plc:differentaccount")
+
+    assert {:error, :account_mismatch} =
+             AuthorizationCodes.decide(c.pair.access_jwt, @id, uri, {:approve, "atproto"}, opts)
+
+    assert Repo.aggregate(AuthorizationCode, :count) == 0
+    assert {:ok, _} = PAR.get(@id, uri, c.opts)
+  end
+
   test "denial consumes the request without a code and cannot be changed into approval", c do
     uri = pushed(c)
     assert {:ok, %{error: "access_denied", state: "state", iss: @issuer}} = decide(c, uri, :deny)

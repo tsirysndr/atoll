@@ -2,7 +2,8 @@ defmodule AtollWeb.AccountBrowserPlug do
   @moduledoc "Bounded account forms and an isolated encrypted browser session before general parsers."
   @behaviour Plug
   import Plug.Conn
-  @paths ~w(/account/login /account/sessions /account/sessions/revoke /account/logout)
+
+  @paths ~w(/account/login /account/sessions /account/sessions/revoke /account/logout /oauth/authorize)
 
   def init(opts), do: opts
 
@@ -39,8 +40,8 @@ defmodule AtollWeb.AccountBrowserPlug do
     end
   end
 
-  defp methods(path) when path in ["/account/login", "/account/sessions"],
-    do: if(path == "/account/login", do: ["GET", "POST"], else: ["GET"])
+  defp methods(path) when path in ["/account/login", "/account/sessions", "/oauth/authorize"],
+    do: if(path in ["/account/login", "/oauth/authorize"], do: ["GET", "POST"], else: ["GET"])
 
   defp methods(_), do: ["POST"]
 
@@ -61,9 +62,20 @@ defmodule AtollWeb.AccountBrowserPlug do
   end
 
   defp parse(%{method: "GET"} = conn, path) do
-    if byte_size(conn.query_string) <= 1024,
-      do: dispatch(fetch_query_params(conn), path),
-      else: fail(conn, 400, "Invalid request.")
+    limit = if path == "/oauth/authorize", do: 8192, else: 1024
+
+    if byte_size(conn.query_string) <= limit do
+      if path == "/oauth/authorize" and conn.query_string != "" do
+        case Atoll.OAuth.Form.decode(conn.query_string) do
+          {:ok, params} -> dispatch(%{conn | query_params: params, params: params}, path)
+          _ -> fail(conn, 400, "Invalid request.")
+        end
+      else
+        dispatch(fetch_query_params(conn), path)
+      end
+    else
+      fail(conn, 400, "Invalid request.")
+    end
   end
 
   defp parse(conn, path) do
