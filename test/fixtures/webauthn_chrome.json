@@ -1,0 +1,37 @@
+{
+  "source": "Chrome/153.0.8010.53 CTAP2 virtual authenticator; synthetic credential, no real account",
+  "origin": "http://localhost:51565",
+  "registrationChallenge": "IWFfe2xCTGfW2DlZQpnq_3Vhh4Q2jRqVM9HZE4Jp3MU",
+  "loginChallenge": "LK2InqCBP5Xq26lU_SYBVOe8Fb2Vjp14wMC3j6VUbGk",
+  "userHandle": "NWiYXWR7FpXKReE814CEkDIrqVCbbjIOuxujGcLObjg",
+  "registration": {
+    "authenticatorAttachment": "platform",
+    "clientExtensionResults": {},
+    "id": "Dv8Nl5Fkh6yl_7Wa0QDjAQaPw9ghKOOnt7bAiOLgLh0",
+    "rawId": "Dv8Nl5Fkh6yl_7Wa0QDjAQaPw9ghKOOnt7bAiOLgLh0",
+    "response": {
+      "attestationObject": "o2NmbXRkbm9uZWdhdHRTdG10oGhhdXRoRGF0YVikSZYN5YgOjGh0NBcPZHZgW4_krrmihjLHmVzzuoMdl2NFAAAAAQECAwQFBgcIAQIDBAUGBwgAIA7_DZeRZIespf-1mtEA4wEGj8PYISjjp7e2wIji4C4dpQECAyYgASFYIO5N45DK-PTCb1D2CkbrrpK83IJNTRoas3h_TqonS7leIlgglHcTjNILHY0DZXGbOr_EWdvXjs3nh6m9MqIcgiNs_Fs",
+      "authenticatorData": "SZYN5YgOjGh0NBcPZHZgW4_krrmihjLHmVzzuoMdl2NFAAAAAQECAwQFBgcIAQIDBAUGBwgAIA7_DZeRZIespf-1mtEA4wEGj8PYISjjp7e2wIji4C4dpQECAyYgASFYIO5N45DK-PTCb1D2CkbrrpK83IJNTRoas3h_TqonS7leIlgglHcTjNILHY0DZXGbOr_EWdvXjs3nh6m9MqIcgiNs_Fs",
+      "clientDataJSON": "eyJ0eXBlIjoid2ViYXV0aG4uY3JlYXRlIiwiY2hhbGxlbmdlIjoiSVdGZmUyeENUR2ZXMkRsWlFwbnFfM1ZoaDRRMmpScVZNOUhaRTRKcDNNVSIsIm9yaWdpbiI6Imh0dHA6Ly9sb2NhbGhvc3Q6NTE1NjUiLCJjcm9zc09yaWdpbiI6ZmFsc2V9",
+      "publicKey": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE7k3jkMr49MJvUPYKRuuukrzcgk1NGhqzeH9OqidLuV6UdxOM0gsdjQNlcZs6v8RZ29eOzeeHqb0yohyCI2z8Ww",
+      "publicKeyAlgorithm": -7,
+      "transports": [
+        "internal"
+      ]
+    },
+    "type": "public-key"
+  },
+  "assertion": {
+    "authenticatorAttachment": "platform",
+    "clientExtensionResults": {},
+    "id": "Dv8Nl5Fkh6yl_7Wa0QDjAQaPw9ghKOOnt7bAiOLgLh0",
+    "rawId": "Dv8Nl5Fkh6yl_7Wa0QDjAQaPw9ghKOOnt7bAiOLgLh0",
+    "response": {
+      "authenticatorData": "SZYN5YgOjGh0NBcPZHZgW4_krrmihjLHmVzzuoMdl2MFAAAAAg",
+      "clientDataJSON": "eyJ0eXBlIjoid2ViYXV0aG4uZ2V0IiwiY2hhbGxlbmdlIjoiTEsySW5xQ0JQNVhxMjZsVV9TWUJWT2U4RmIyVmpwMTR3TUMzajZWVWJHayIsIm9yaWdpbiI6Imh0dHA6Ly9sb2NhbGhvc3Q6NTE1NjUiLCJjcm9zc09yaWdpbiI6ZmFsc2V9",
+      "signature": "MEYCIQDFrV21ZJhOBAk9UfvNjmQ6U2jzDggpkOrvMWGjUgdzYgIhALBDcOl5UQyFt69Y0XD47LnkAj8Gl1F4GoUK0wJhUVAI",
+      "userHandle": "NWiYXWR7FpXKReE814CEkDIrqVCbbjIOuxujGcLObjg"
+    },
+    "type": "public-key"
+  }
+}

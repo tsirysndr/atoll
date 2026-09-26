@@ -395,7 +395,9 @@ mutation. Deletes and empty batches need no record schema, even with `validate: 
 - [x] Internal one-use authorization-code exchange into bound opaque OAuth tokens, with verified reuse revocation.
 - [x] HTTP authorization-code token exchange with DPoP nonce challenges, strict forms, rate limits, and CORS.
 - [x] Browser pushed-request authorization and explicit consent with optional scope narrowing and account-hint enforcement.
+- [x] Internal ES256 WebAuthn registration/assertion verification with a Chrome virtual-authenticator fixture.
 - [ ] Optional passkey enrollment, authentication, management, and recovery.
+- [ ] OAuth `prompt=create` account-creation flow, including pushed-request validation and browser signup.
 - [x] Internal RFC 6238 TOTP verification, authenticator provisioning URIs, and account-bound encrypted secret envelopes.
 - [x] Internal persistent TOTP enrollment and confirmation, one-time login codes, database attempt limits, and key rotation.
 - [x] Authenticator enrollment/management UI and single-use recovery codes (optional TOTP).
@@ -5310,3 +5312,38 @@ screen markup. `mix precommit` builds assets before tests, so CI checks that the
 build succeeds. Before making a production release, run `MIX_ENV=prod mix assets.deploy` to build and digest the stylesheet. Generated assets are ignored
 by Git and must be included in the release. The pages load no third-party styles,
 scripts, fonts or QR services. CSP permits only same-origin styles.
+
+### WebAuthn verification foundation
+
+`Atoll.Accounts.WebAuthn` verifies user-verified ES256 (P-256/SHA-256) passkey
+registration with `none` attestation and discoverable-credential assertions.
+The implementation uses OTP/OpenSSL for point validation and signature checks,
+following [WebAuthn registration and assertion verification](https://www.w3.org/TR/webauthn-3/#sctn-rp-operations).
+It accepts an exact canonical HTTPS origin and uses that origin's full host as the
+RP ID; `http://localhost` with an optional port is available for local development.
+Challenges contain 32 random bytes. The verifier checks ceremony type, exact
+challenge/origin, RP hash, presence and verification flags, credential ID and
+32-byte user handle, immutable backup eligibility, and signatures over the raw
+authenticator data and client-data hash. Cross-origin frames are rejected.
+
+Nonzero signature counters must advance; all-zero counters remain supported for
+synced passkeys. The bounded WebAuthn CBOR decoder is separate from DAG-CBOR and
+accepts the integer keys needed by COSE. It rejects duplicate map keys, trailing
+bytes, oversized/deep structures, tags, indefinite lengths and unsupported types.
+Client-data JSON rejects duplicate top-level keys. This profile does not assert
+hardware provenance, accept attestation certificates, or offer other algorithms.
+
+This is not yet a public passkey login. Persistent one-use, expiring ceremonies,
+browser/session binding, owner-authorized enrollment, unique credential ownership,
+locked counter updates, management/revocation and login integration remain pending.
+Callers must supply trusted context and stored credentials; verification alone
+cannot prevent challenge replay or authorize a session.
+
+Tests include genuine `navigator.credentials.create/get` responses captured from
+a Chrome CTAP2 virtual authenticator using a fresh temporary profile and no real
+account. The checked-in fixture contains public ceremony data, not private keys.
+To regenerate it locally with Node 22+ and Chrome/Chromium, run
+`node scripts/capture_webauthn_fixture.mjs` (set `CHROME_BIN` if needed), then
+`mix test test/atoll/web_authn_test.exs`. Ordinary CI uses the fixture and does not
+need a browser. Tests also cover malformed inputs, altered signatures, wrong
+origins, user verification, backup flags, extension framing and counter reuse.
