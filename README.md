@@ -289,7 +289,8 @@ mutation. Deletes and empty batches need no record schema, even with `validate: 
 - [x] Resolver public IPv4/IPv6 address pinning, TLS hostname verification, timeouts, redirect rejection, and 256 KiB response limit.
 - [x] Bounded node-local positive DID resolution caching with forced refresh for authorization and identity changes.
 - [x] Explicit development/test localhost DID resolution and local server DID publication.
-- [ ] Independent PLC operation-log verification (currently trusts `plc.directory` over HTTPS).
+- [x] Offline PLC audit-log verification of genesis, signatures, CID links, recovery windows, and nullification flags.
+- [ ] Verified PLC audit-log fetching and resolver integration (live resolution currently trusts the directory over HTTPS).
 - [x] DNS TXT handle resolution with HTTPS fallback, normalization, ambiguity checks, and reserved-domain rejection.
 - [x] Internal bidirectional handle verification against the resolved DID document.
 - [x] Public `com.atproto.identity.resolveHandle` forward lookup (does not assert bidirectional verification).
@@ -2347,3 +2348,43 @@ multi-page scan is not a global snapshot. Automated deletion of untracked object
 remains unimplemented. Tests include real signed pagination and classification
 against disposable loopback MinIO, with confirmation that inventory preserves bytes
 and queued cleanup jobs.
+
+
+### Offline PLC audit verification
+
+Verify a saved PLC `/log/audit` JSON response against an explicitly supplied DID:
+
+```sh
+mix atoll.plc.verify did:plc:ewvi7nxzyoun6zhxrhs64oiz audit-log.json
+```
+
+The command performs no network requests or database changes. It reads at most
+8 MiB and accepts 1–1000 entries, using `Atoll.Identity.PLC.AuditLog.verify/2`.
+Output contains the DID, verified last-operation CID, tombstone status, and counts
+of active and nullified operations. Invalid, mismatched, oversized, or unreadable
+input fails without printing its contents.
+
+Verification derives the DID from the signed genesis, recomputes every operation
+CID, verifies signatures with the predecessor's authorized rotation keys, and
+reconstructs the active chain in submission order. It rejects duplicate operations,
+unknown or already-nullified predecessors, updates descending from a tombstone,
+backwards timestamps, and forged `nullified` flags. A recovery must use a strictly
+higher-priority key at the fork point than the key that signed the first displaced
+operation, arrive after the latest submission, and fall within 72 hours of that
+first displaced operation. Exactly 72 hours is accepted. Valid recovery can displace
+a tombstone; a surviving final tombstone is reported as deactivated history.
+
+Historical verification accepts the empty or repeated rotation-key lists present
+in the upstream compatibility fixtures, within the five-key bound. Empty keys
+cannot authorize a subsequent operation. Atoll's signing API still requires one
+to five distinct rotation keys when creating modern operations. Existing canonical
+signature, curve, encoding, operation-size, and structural checks remain in force.
+The new recovery fixtures use the same pinned upstream revision and MIT provenance
+recorded in `test/fixtures/plc/README.md`.
+
+This validates the supplied history, not proof that it is complete or current.
+Directory timestamps are unsigned metadata; cryptographic verification cannot
+independently establish when an operation was submitted or detect an omitted
+newer suffix. Live DID resolution still uses the configured directory's HTTPS DID
+document. Bounded audit fetching and resolver integration remain pending, as do
+local signing-key rotation and recovery workflows.

@@ -2,7 +2,8 @@ defmodule Atoll.Identity.PLC.Operation do
   @moduledoc """
   PLC operation signing and cryptographic verification. No network or persistence.
   Update verification requires an already-trusted predecessor. This module does
-  not establish audit-log ordering, nullification, or recovery-window validity.
+  not establish audit-log ordering, nullification, or recovery-window validity;
+  use Atoll.Identity.PLC.AuditLog for supplied history verification.
   """
   alias Atoll.{CBOR, CID, Multikey, SigningKey, Syntax}
   @regular ~w(type rotationKeys verificationMethods alsoKnownAs services prev)
@@ -40,6 +41,7 @@ defmodule Atoll.Identity.PLC.Operation do
   def sign(unsigned, key) when is_map(unsigned) do
     with true <- unsigned["type"] in ["plc_operation", "plc_tombstone"],
          true <- shape?(unsigned),
+         true <- unsigned["type"] != "plc_operation" or keys?(unsigned["rotationKeys"]),
          true <-
            byte_size(CBOR.encode!(Map.put(unsigned, "sig", String.duplicate("A", 86)))) <=
              @max_bytes,
@@ -57,7 +59,7 @@ defmodule Atoll.Identity.PLC.Operation do
   @doc "Verifies a signed operation against the supplied authorized rotation keys; returns the signer."
   def verify(operation, keys) do
     with {:ok, unsigned, signature, _bytes} <- decode(operation),
-         true <- keys?(keys),
+         true <- historical_keys?(keys),
          input = CBOR.encode!(unsigned),
          signer when is_binary(signer) <-
            Enum.find(keys, fn key ->
@@ -144,7 +146,7 @@ defmodule Atoll.Identity.PLC.Operation do
            "services" => services
          } = op
        ) do
-    exact?(op, @regular) and (is_nil(prev) or cid?(prev)) and keys?(keys) and
+    exact?(op, @regular) and (is_nil(prev) or cid?(prev)) and historical_keys?(keys) and
       is_map(methods) and not is_struct(methods) and
       Enum.all?(methods, fn {id, key} -> text?(id) and did_key?(key) end) and
       is_list(aliases) and Enum.all?(aliases, &text?/1) and
@@ -185,10 +187,17 @@ defmodule Atoll.Identity.PLC.Operation do
 
   defp keys?(_), do: false
 
-  defp rotation_keys(%{"type" => "create"} = op),
+  # Historical directory operations can contain empty or repeated keys. New
+  # operations signed by Atoll still require one to five distinct rotation keys.
+  defp historical_keys?(keys) when is_list(keys) and length(keys) <= 5,
+    do: Enum.all?(keys, &match?({:ok, _}, Multikey.from_did_key(&1)))
+
+  defp historical_keys?(_), do: false
+
+  def rotation_keys(%{"type" => "create"} = op),
     do: Enum.uniq([op["recoveryKey"], op["signingKey"]])
 
-  defp rotation_keys(op), do: op["rotationKeys"]
+  def rotation_keys(op), do: op["rotationKeys"]
 
   defp cid?(value) do
     with {:ok, bytes} <- CID.from_base32(value),
