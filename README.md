@@ -27,7 +27,8 @@ Checked items are implemented in this repository. Unchecked items are remaining 
 - [x] Bounded Lexicon-based subscription parameter validation with protocol error frames.
 - [x] Required, optimistic, and skipped record validation for all 19 Bluesky record Lexicons in the pinned upstream revision.
 - [x] Configurable local custom record Lexicons with bounded startup validation.
-- [ ] Authenticated Lexicon discovery/resolution.
+- [x] Exact DNS Lexicon namespace delegation with fresh DID/key/PDS resolution.
+- [ ] Authenticated Lexicon schema fetching, dependency resolution, and validation integration.
 
 XRPC routing uses the [HTTP API specification](https://atproto.com/specs/xrpc).
 Malformed paths return `400 InvalidRequest`; valid but unimplemented method NSIDs
@@ -2941,3 +2942,30 @@ include private scalars, encrypted envelopes, master keys, or key-file contents.
 They remain in the private operator audit history after account deletion. As with
 other audit entries, this is application-level history, not a tamper-proof database
 ledger or a record of directory key rotation.
+
+
+### Lexicon namespace discovery
+
+`Atoll.Lexicon.Authority.discover/2` maps an NSID namespace to its repository DID.
+For `edu.university.dept.lab.blogging.getBlogPost`, it queries exactly
+`_lexicon.blogging.lab.dept.university.edu`. It removes only the final name segment,
+reverses the authority labels, and normalizes only those labels to lowercase. The
+case-sensitive schema name is preserved in the resulting record URI:
+`at://DID/com.atproto.lexicon.schema/NSID`. This follows the
+[Lexicon publication/resolution rules](https://atproto.com/specs/lexicon#lexicon-publication-and-resolution)
+and [NSID normalization rules](https://atproto.com/specs/nsid).
+
+There is no parent-domain search or handle/HTTPS fallback. Duplicate identical DID
+claims are accepted; conflicting valid claims fail. Invalid/unrelated TXT values
+are ignored within a bounded response: at most 32 records, 16 chunks per record,
+255 bytes per chunk, 2052 bytes per joined record, and 16 KiB total. Overlong DNS
+names and reserved authority domains fail before lookup. The system DNS resolver
+has a three-second timeout; no additional application cache is used.
+
+`Authority.resolve/2` additionally forces fresh DID resolution to obtain the
+repository signing key and PDS endpoint through the existing protected resolver.
+The account handle need not match the namespace: DNS delegation establishes that
+binding. This trusts the configured/system DNS resolution path; it does not add
+DNSSEC validation. Discovering a repository does not yet authenticate a schema.
+Bounded schema retrieval, content/proof validation, dependency resolution, and
+integration with custom-record validation remain pending. Tests use mock DNS/HTTP.
