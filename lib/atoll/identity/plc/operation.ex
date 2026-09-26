@@ -111,6 +111,53 @@ defmodule Atoll.Identity.PLC.Operation do
 
   def verify_update(_, _), do: {:error, :invalid_plc_operation}
 
+  @doc "Builds a modern unsigned successor from an already trusted modern or legacy predecessor."
+  def successor(previous) when is_map(previous) do
+    with true <- previous["type"] in ["plc_operation", "create"],
+         {:ok, cid} <- cid(previous) do
+      fields =
+        case previous["type"] do
+          "plc_operation" ->
+            Map.delete(previous, "sig")
+
+          "create" ->
+            handle = previous["handle"]
+
+            alias_uri =
+              if String.starts_with?(handle, "at://"),
+                do: handle,
+                else:
+                  "at://" <>
+                    (handle
+                     |> String.replace_prefix("https://", "")
+                     |> String.replace_prefix("http://", ""))
+
+            service = previous["service"]
+
+            endpoint =
+              if String.starts_with?(service, ["https://", "http://"]),
+                do: service,
+                else: "https://" <> service
+
+            %{
+              "type" => "plc_operation",
+              "rotationKeys" => rotation_keys(previous),
+              "verificationMethods" => %{"atproto" => previous["signingKey"]},
+              "alsoKnownAs" => [alias_uri],
+              "services" => %{
+                "atproto_pds" => %{"type" => "AtprotoPersonalDataServer", "endpoint" => endpoint}
+              }
+            }
+        end
+
+      {:ok, Map.put(fields, "prev", cid)}
+    else
+      _ -> {:error, :invalid_plc_operation}
+    end
+  end
+
+  def successor(_), do: {:error, :invalid_plc_operation}
+
   @doc "Hashes canonical signed bytes. Structural validation alone does not authenticate the operation."
   def cid(operation) do
     with {:ok, _, _, bytes} <- decode(operation),

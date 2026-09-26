@@ -187,6 +187,70 @@ defmodule Atoll.HandleChangesTest do
     assert HandleChanges.claimed?("bob.example.com")
   end
 
+  test "legacy predecessors can stage and complete a modern handle-only update", ctx do
+    key = SigningKey.generate()
+    {:ok, signing} = Multikey.to_did_key(key.curve, key.public)
+    {:ok, recovery} = Multikey.to_did_key(ctx.rotation.curve, ctx.rotation.public)
+
+    unsigned = %{
+      "type" => "create",
+      "signingKey" => signing,
+      "recoveryKey" => recovery,
+      "handle" => "legacy.example.com",
+      "service" => "pds.example.com",
+      "prev" => nil
+    }
+
+    {:ok, signature} = SigningKey.sign(ctx.rotation, Atoll.CBOR.encode!(unsigned))
+    previous = Map.put(unsigned, "sig", Base.url_encode64(signature, padding: false))
+    {:ok, did} = Operation.genesis_did(previous)
+    {:ok, previous_cid} = Operation.cid(previous)
+    {:ok, _} = Repositories.create(did, key)
+    Repo.insert!(%Profile{did: did, handle: "legacy.example.com"})
+    {:ok, pair} = Sessions.create_for_account(did)
+
+    audit = [
+      %{
+        "did" => did,
+        "cid" => previous_cid,
+        "operation" => previous,
+        "nullified" => false,
+        "createdAt" => "2026-01-01T00:00:00Z"
+      }
+    ]
+
+    {:ok, next} = Operation.successor(previous)
+    next = Map.put(next, "alsoKnownAs", ["at://newlegacy.example.com"])
+    {:ok, op} = Operation.sign(next, ctx.rotation)
+    assert {:ok, row} = HandleChanges.stage(pair.access_jwt, "newlegacy.example.com", audit, op)
+    assert Repo.get_by!(Update, did: did, cid: row.cid).previous == previous
+    assert op["rotationKeys"] == [recovery, signing]
+    Req.Test.expect(__MODULE__, &Req.Test.json(&1, op))
+
+    assert {:ok, _} =
+             Atoll.Identity.PLC.Updates.submit(did, row.cid, plug: {Req.Test, __MODULE__})
+
+    audit =
+      audit ++
+        [
+          %{
+            "did" => did,
+            "cid" => row.cid,
+            "operation" => op,
+            "nullified" => false,
+            "createdAt" => "2026-01-02T00:00:00Z"
+          }
+        ]
+
+    Req.Test.expect(__MODULE__, &Req.Test.json(&1, audit))
+    Req.Test.expect(__MODULE__, &Req.Test.json(&1, op))
+
+    assert {:ok, %{handle: "newlegacy.example.com"}} =
+             HandleChanges.complete(pair.access_jwt, row.cid, plug: {Req.Test, __MODULE__})
+
+    assert Repo.get!(Profile, did).handle == "newlegacy.example.com"
+  end
+
   defp account(handle) do
     key = SigningKey.generate()
     rotation = SigningKey.generate()

@@ -49,12 +49,9 @@ defmodule Atoll.Identity.HandleChanges do
   defp new_update(token, head, handle, opts) do
     with {:ok, %{entries: audit, state: state}} <-
            Client.fetch_audit(head.did, Keyword.take(opts, [:plug])),
-         :ok <- forward_claim(handle, head.did, opts) do
-      unsigned =
-        state.operation
-        |> Map.delete("sig")
-        |> Map.put("prev", state.cid)
-        |> Map.put("alsoKnownAs", ["at://" <> handle])
+         :ok <- forward_claim(handle, head.did, opts),
+         {:ok, successor} <- Operation.successor(state.operation) do
+      unsigned = Map.put(successor, "alsoKnownAs", ["at://" <> handle])
 
       with :ok <- handle_only(state, unsigned, handle, head) do
         if state.operation["alsoKnownAs"] == ["at://" <> handle] and
@@ -250,18 +247,18 @@ defmodule Atoll.Identity.HandleChanges do
        when is_map(operation) do
     {:ok, key} = Multikey.to_did_key(head.curve, head.public_key)
 
-    expected =
-      previous
-      |> Map.delete("sig")
-      |> Map.put("prev", cid)
-      |> Map.put("alsoKnownAs", ["at://" <> handle])
+    with {:ok, successor} <- Operation.successor(previous),
+         true <- successor["prev"] == cid do
+      expected = Map.put(successor, "alsoKnownAs", ["at://" <> handle])
 
-    if previous["type"] == "plc_operation" and
-         get_in(previous, ["verificationMethods", "atproto"]) == key and
-         get_in(previous, ["services", "atproto_pds", "endpoint"]) == AtollWeb.Endpoint.url() and
-         Map.delete(operation, "sig") == expected,
-       do: :ok,
-       else: {:error, :invalid_handle_update}
+      if get_in(successor, ["verificationMethods", "atproto"]) == key and
+           get_in(successor, ["services", "atproto_pds", "endpoint"]) == AtollWeb.Endpoint.url() and
+           Map.delete(operation, "sig") == expected,
+         do: :ok,
+         else: {:error, :invalid_handle_update}
+    else
+      _ -> {:error, :invalid_handle_update}
+    end
   end
 
   defp handle_only(_, _, _, _), do: {:error, :invalid_handle_update}

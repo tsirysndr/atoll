@@ -25,6 +25,31 @@ defmodule Atoll.PLCOperationTest do
     end
   end
 
+  test "successors normalize legacy fields without changing predecessor identity or key priority" do
+    for file <- ["log_bskyapp.json", "log_legacy_dholms.json"] do
+      [entry | _] = fixture(file)
+      previous = entry["operation"]
+      assert {:ok, next} = Operation.successor(previous)
+      assert next["type"] == "plc_operation"
+      assert next["prev"] == entry["cid"]
+      refute Map.has_key?(next, "sig")
+      assert next["rotationKeys"] == Operation.rotation_keys(previous)
+      assert {:ok, cid} = Operation.cid(previous)
+      assert cid == entry["cid"]
+
+      if previous["type"] == "create" do
+        assert next["verificationMethods"] == %{"atproto" => previous["signingKey"]}
+        assert next["services"]["atproto_pds"]["endpoint"] =~ "https://"
+        assert next["alsoKnownAs"] == ["at://" <> previous["handle"]]
+      else
+        assert next == previous |> Map.delete("sig") |> Map.put("prev", entry["cid"])
+      end
+    end
+
+    assert {:error, :invalid_plc_operation} = Operation.successor(%{"type" => "plc_tombstone"})
+    assert {:error, :invalid_plc_operation} = Operation.successor(nil)
+  end
+
   test "rejects upstream noncanonical encodings, DER signatures, and both high-S curves" do
     for file <- ~w(log_invalid_sig_b64_newline.json log_invalid_sig_b64_padding_bits.json
                   log_invalid_sig_b64_padding_chars.json log_invalid_sig_der.json
