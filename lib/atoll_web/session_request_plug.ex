@@ -19,6 +19,7 @@ defmodule AtollWeb.SessionRequestPlug do
     @prefix <> "requestEmailConfirmation",
     @prefix <> "confirmEmail",
     @prefix <> "createAccount",
+    @prefix <> "reserveSigningKey",
     @prefix <> "createSession",
     @prefix <> "refreshSession",
     @prefix <> "deleteSession",
@@ -85,6 +86,7 @@ defmodule AtollWeb.SessionRequestPlug do
             "/xrpc/com.atproto.identity.refreshIdentity",
             @prefix <> "createSession",
             @prefix <> "createAccount",
+            @prefix <> "reserveSigningKey",
             @prefix <> "requestPasswordReset",
             @prefix <> "resetPassword",
             @prefix <> "deleteAccount"
@@ -119,6 +121,7 @@ defmodule AtollWeb.SessionRequestPlug do
               "/xrpc/com.atproto.identity.refreshIdentity",
               @prefix <> "createSession",
               @prefix <> "createAccount",
+              @prefix <> "reserveSigningKey",
               @prefix <> "deactivateAccount",
               @prefix <> "confirmEmail",
               @prefix <> "updateEmail",

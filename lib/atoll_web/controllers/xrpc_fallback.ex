@@ -198,6 +198,10 @@ defmodule AtollWeb.XRPCFallback do
   def call(conn, {:error, reason}) when reason in [:key_vault_unconfigured, :key_not_found],
     do: error(conn, 503, "ServiceUnavailable", "Repository signing key is unavailable.")
 
+  def call(conn, {:error, reason})
+      when reason in [:signing_key_reservations_full, :invalid_reservation_limit],
+      do: error(conn, 503, "ServiceUnavailable", "Signing-key reservations are unavailable.")
+
   def call(conn, {:error, :record_request_too_large}),
     do: error(conn, 413, "InvalidRequest", "Record request body exceeds 2 MiB.")
 

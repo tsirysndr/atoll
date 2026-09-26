@@ -3,6 +3,11 @@ defmodule AtollWeb.SessionController do
   alias Atoll.Accounts.Sessions
   action_fallback AtollWeb.SessionFallback
 
+  def reserve_signing_key(conn, _) do
+    with {:ok, result} <- Atoll.Accounts.SigningKeyReservations.request(conn.body_params),
+         do: json(conn, result)
+  end
+
   def invite_codes(conn, params) do
     with {:ok, token} <- bearer(conn),
          {:ok, result} <- Atoll.Accounts.InviteListing.account(token, params),

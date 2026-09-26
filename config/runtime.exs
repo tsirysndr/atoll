@@ -1,6 +1,12 @@
 import Config
 
 config :atoll,
+       :reserved_signing_key_limit,
+       Atoll.Accounts.SigningKeyReservations.limit_from_env!(
+         System.get_env("ATOLL_RESERVED_SIGNING_KEY_LIMIT")
+       )
+
+config :atoll,
        :import_concurrency,
        Atoll.CAR.StageLease.limit_from_env!(System.get_env("ATOLL_IMPORT_CONCURRENCY"))
 

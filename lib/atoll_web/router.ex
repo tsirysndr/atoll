@@ -60,6 +60,7 @@ defmodule AtollWeb.Router do
     post "/com.atproto.server.deleteAccount", SessionController, :delete_account
     post "/com.atproto.server.createSession", SessionController, :create
     post "/com.atproto.server.createAccount", SessionController, :create_account
+    post "/com.atproto.server.reserveSigningKey", SessionController, :reserve_signing_key
     get "/com.atproto.server.getSession", SessionController, :show
     get "/com.atproto.server.checkAccountStatus", SessionController, :status
     get "/com.atproto.server.getServiceAuth", SessionController, :service_auth

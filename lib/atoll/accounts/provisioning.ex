@@ -35,7 +35,15 @@ defmodule Atoll.Accounts.Provisioning do
         if input.email && Repo.get_by(Profile, email: input.email),
           do: Repo.rollback(:email_not_available)
 
-        unwrap!(Repositories.create_managed(input.did))
+        case Atoll.Accounts.SigningKeyReservations.claim_for_did!(input.did) do
+          nil ->
+            unwrap!(Repositories.create_managed(input.did))
+
+          key ->
+            unwrap!(Repositories.create(input.did, key))
+            unwrap!(Atoll.KeyVault.store(input.did, key))
+        end
+
         unwrap!(Repositories.set_status(input.did, :deactivated))
 
         changeset =

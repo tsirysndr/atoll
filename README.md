@@ -172,7 +172,8 @@ record Lexicons or grant access to account data.
 - [x] Authenticated `com.atproto.repo.importRepo` for existing repositories, with bounded uploads and atomic replacement.
 - [x] Existing-DID migration provisioning with source-key verification and destination-key signing.
 - [x] Internal durable encrypted signing-key reservations, transactional claims, and bounded master-key rewrapping.
-- [ ] Public `reserveSigningKey` endpoint and reserved-key selection during account creation.
+- [x] Public `reserveSigningKey` endpoint and DID-bound reserved-key selection during migration account creation.
+- [ ] Anonymous reserved-key selection through signed `plcOp` account creation.
 - [x] Chunked repository exports with lazy record-body reads.
 - [x] Streamed HTTP imports with private staging and atomic publication.
 - [ ] Bounded-memory repository metadata traversal.
@@ -897,8 +898,9 @@ temporary-disk capacity and clean stale files operationally.
 
 For migration, `createAccount` requires an existing DID, a bidirectionally verified
 handle, a password, and a one-use service JWT for this PDS and the createAccount
-method. Email is optional. It creates a deactivated account and a new encrypted
-signing key. `getRecommendedDidCredentials` returns that key and this PDS endpoint;
+method. Email is optional. It creates a deactivated account and installs the signing
+key reserved for that DID, or generates a new encrypted key when none was reserved.
+`getRecommendedDidCredentials` returns that key and this PDS endpoint;
 Migration PLC rotation keys and authenticated update submission remain pending. Before activation,
 imports may use the source key pinned during provisioning: Atoll verifies the CAR,
 re-signs its tree with the destination key, and tracks source revisions to reject
@@ -2232,9 +2234,26 @@ key capable of decrypting it has been lost. No rotation is scheduled automatical
 ### Reserved signing-key custody
 
 The internal `Atoll.Accounts.SigningKeyReservations` coordinator persists secp256k1
-keys before a repository exists. This is preparation for `reserveSigningKey`;
-the public endpoint and account-creation integration are not implemented yet.
-It does not submit DID operations, create accounts, or authorize migration.
+keys before a repository exists. `POST /xrpc/com.atproto.server.reserveSigningKey`
+accepts JSON `{}` or `{"did":"did:plc:..."}` without authentication and returns
+`{"signingKey":"did:key:..."}`. It requires JSON, limits bodies to 4 KiB, returns
+`no-store`, and shares the login/createAccount budget of 20 requests per IP per
+five minutes. Reservation does not submit DID operations, create accounts, or
+authorize migration.
+
+Reserve with a DID before migration. After service-JWT authorization and handle
+verification, `createAccount` atomically consumes that DID's reservation, installs
+the exact key, and creates the deactivated account. The source signing key remains
+pinned for repository import. Installation or session-creation failure rolls back
+the reservation claim and service-token consumption. An unreadable reservation
+fails instead of silently substituting a different key. Accounts without a
+DID-bound reservation retain the existing generated-key migration flow.
+
+Anonymous reservations return distinct public keys and retain encrypted custody,
+but their selection through signed `plcOp` account creation is not implemented yet;
+use the DID-bound form for the supported migration flow. Publishing a DID update
+before account provisioning can invalidate the source service JWT, so provision
+and transfer the account before changing its public signing key and PDS service.
 
 `reserve/1` accepts an optional DID and returns only the public `did:key`. Repeating
 a DID reservation returns the same usable key; reservations without a DID create
@@ -2244,8 +2263,8 @@ public key bound as authenticated data. Active and previous encryption master
 keys follow the same custody policy as repository keys.
 
 Creation is serialized through the database event lock and capped at 10,000
-reservations. Internal application configuration `:reserved_signing_key_limit`
-can lower this cap to 1–10,000. Existing DID reservations remain readable at the
+reservations. `ATOLL_RESERVED_SIGNING_KEY_LIMIT` (application configuration
+`:reserved_signing_key_limit`) can lower this cap to 1–10,000. Existing DID reservations remain readable at the
 cap. Reservations do not expire automatically because a public DID might already
 reference one; exhaustion rejects new reservations rather than deleting custody.
 

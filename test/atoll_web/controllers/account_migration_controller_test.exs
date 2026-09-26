@@ -18,6 +18,7 @@ defmodule AtollWeb.AccountMigrationControllerTest do
   alias Atoll.Accounts.{Credentials, Profile, ServiceTokenUse, Sessions}
   @did "did:web:migrant.example.com"
   @handle "migrant.example.com"
+  @reserve "/xrpc/com.atproto.server.reserveSigningKey"
   @create "/xrpc/com.atproto.server.createAccount"
   @import "/xrpc/com.atproto.repo.importRepo"
   @recommended "/xrpc/com.atproto.identity.getRecommendedDidCredentials"
@@ -30,12 +31,14 @@ defmodule AtollWeb.AccountMigrationControllerTest do
           :session_signing_key,
           :key_encryption_key,
           :identity_resolution_options,
+          :reserved_signing_key_limit,
           :invite_code_required
         ],
         &{&1, Application.fetch_env(:atoll, &1)}
       )
 
     Application.put_env(:atoll, :invite_code_required, false)
+    Application.put_env(:atoll, :reserved_signing_key_limit, 10_000)
 
     endpoint = Application.fetch_env!(:atoll, AtollWeb.Endpoint)
 
@@ -78,12 +81,17 @@ defmodule AtollWeb.AccountMigrationControllerTest do
   end
 
   test "migrates an existing DID across signing keys and activates after the DID update", c do
+    reserved = reserve(c, %{did: @did}) |> json_response(200)
+    assert reserve(c, %{did: @did}) |> json_response(200) == reserved
     pair = create(c) |> json_response(200)
     assert pair["did"] == @did
     assert pair["handle"] == @handle
     assert pair["active"] == false
     assert {:ok, _} = Credentials.verify(@did, @password)
     assert {:ok, %{status: :deactivated} = initial} = Repositories.get_head(@did)
+    assert {:ok, destination} = Multikey.from_did_key(reserved["signingKey"])
+    assert initial.public_key == destination.public
+    refute Repo.get(Atoll.Accounts.ReservedSigningKey, reserved["signingKey"])
     refute initial.public_key == c.source.public
     profile = Repo.get!(Profile, @did)
     assert profile.email == "owner@example.com"
@@ -124,6 +132,78 @@ defmodule AtollWeb.AccountMigrationControllerTest do
     assert {:ok, _} = Commit.verify(blocks[root], @did, new_key.curve, new_key.public)
     assert upload(auth, archive) |> json_response(400)
     assert {:ok, %{did: @did}} = Sessions.authenticate(pair["accessJwt"])
+  end
+
+  test "public reservations validate inputs, enforce capacity and preserve DID retries", c do
+    Application.put_env(:atoll, :reserved_signing_key_limit, 2)
+    first = reserve(c, %{did: @did})
+    assert get_resp_header(first, "cache-control") == ["no-store"]
+    bound = json_response(first, 200)
+    anonymous = reserve(c, %{}) |> json_response(200)
+    refute anonymous == bound
+    assert Map.keys(anonymous) == ["signingKey"]
+    assert reserve(c, %{}) |> json_response(503)
+    assert reserve(c, %{did: @did}) |> json_response(200) == bound
+    assert c.conn |> get(@reserve) |> response(405)
+
+    assert c.conn
+           |> put_req_header("content-type", "text/plain")
+           |> post(@reserve, "{}")
+           |> response(415)
+
+    for body <- [%{did: nil}, %{did: "invalid"}, %{extra: true}] do
+      assert reserve(c, body) |> json_response(400)
+    end
+
+    assert c.conn
+           |> put_req_header("content-type", "application/json")
+           |> post(@reserve, String.duplicate("x", 4097))
+           |> response(413)
+
+    assert Repo.aggregate(Atoll.Accounts.ReservedSigningKey, :count) == 2
+    assert Repo.aggregate(Atoll.Repositories.Head, :count) == 0
+  end
+
+  test "reservation is not migration authorization and failed installation preserves custody",
+       c do
+    public = reserve(c, %{did: @did}) |> json_response(200) |> Map.fetch!("signingKey")
+    assert create(c, %{}, service_token(SigningKey.generate())) |> json_response(401)
+    assert Repo.get(Atoll.Accounts.ReservedSigningKey, public)
+    token = service_token(c.source)
+    Application.delete_env(:atoll, :session_signing_key)
+    assert create(c, %{}, token) |> json_response(503)
+    assert Repo.get(Atoll.Accounts.ReservedSigningKey, public)
+    refute Repo.get(Atoll.Repositories.Head, @did)
+    assert Repo.aggregate(ServiceTokenUse, :count) == 0
+    Application.put_env(:atoll, :session_signing_key, :binary.copy(<<28>>, 32))
+    assert create(c, %{}, token) |> json_response(200)
+    refute Repo.get(Atoll.Accounts.ReservedSigningKey, public)
+    assert reserve(c, %{did: @did}) |> json_response(400)
+  end
+
+  test "reserved custody failure never silently substitutes another destination key", c do
+    public = reserve(c, %{did: @did}) |> json_response(200) |> Map.fetch!("signingKey")
+    Application.put_env(:atoll, :key_encryption_key, :crypto.strong_rand_bytes(32))
+    assert reserve(c, %{did: @did}) |> json_response(503)
+    assert create(c) |> json_response(503)
+    assert Repo.get(Atoll.Accounts.ReservedSigningKey, public)
+    refute Repo.get(Atoll.Repositories.Head, @did)
+    assert Repo.aggregate(ServiceTokenUse, :count) == 0
+  end
+
+  test "encoded reservation paths share the pre-parser login request budget", c do
+    for _ <- 1..20 do
+      assert :ok = Atoll.Accounts.SessionLimiter.check({:login, c.conn.remote_ip}, 20)
+    end
+
+    conn =
+      c.conn
+      |> put_req_header("content-type", "application/json")
+      |> post("/xrpc/com.atproto.server.%72eserveSigningKey", "{")
+
+    assert json_response(conn, 429)["error"] == "RateLimitExceeded"
+    assert get_resp_header(conn, "retry-after") != []
+    assert Repo.aggregate(Atoll.Accounts.ReservedSigningKey, :count) == 0
   end
 
   test "migration requires an invitation when configured and failed provisioning preserves it",
@@ -228,6 +308,12 @@ defmodule AtollWeb.AccountMigrationControllerTest do
   end
 
   defp input, do: %{did: @did, handle: @handle, email: "Owner@Example.COM", password: @password}
+
+  defp reserve(c, params) do
+    c.conn
+    |> put_req_header("content-type", "application/json")
+    |> post(@reserve, Jason.encode!(params))
+  end
 
   defp create(c, changes \\ %{}, token \\ nil),
     do:

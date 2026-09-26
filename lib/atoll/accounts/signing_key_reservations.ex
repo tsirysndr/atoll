@@ -10,6 +10,41 @@ defmodule Atoll.Accounts.SigningKeyReservations do
   alias Atoll.Accounts.ReservedSigningKey
   alias Atoll.Repositories.{Events, Head}
 
+  def limit_from_env!(nil), do: 10_000
+
+  def limit_from_env!(value) when is_binary(value) and byte_size(value) <= 5 do
+    case Integer.parse(value) do
+      {limit, ""} when limit in 1..10_000 -> limit
+      _ -> invalid_limit!()
+    end
+  end
+
+  def limit_from_env!(_), do: invalid_limit!()
+
+  defp invalid_limit!,
+    do: raise(ArgumentError, "ATOLL_RESERVED_SIGNING_KEY_LIMIT must be 1..10000")
+
+  def request(params) when is_map(params) do
+    if Map.keys(params) -- ["did"] == [] and
+         (not Map.has_key?(params, "did") or Syntax.did?(params["did"])),
+       do: reserve(params["did"]),
+       else: {:error, :invalid_request}
+  end
+
+  def request(_), do: {:error, :invalid_request}
+
+  @doc "Selects a DID-bound reservation after migration authorization, or returns nil."
+  def claim_for_did!(did) do
+    unless Repo.in_transaction?(), do: raise(ArgumentError, "key claim requires a transaction")
+    unless Syntax.did?(did), do: Repo.rollback(:invalid_request)
+    Events.lock!()
+
+    case Repo.get_by(ReservedSigningKey, did: did) do
+      nil -> nil
+      row -> claim!(did, row.public_key)
+    end
+  end
+
   def reserve(did \\ nil) do
     with true <- is_nil(did) or Syntax.did?(did),
          {:ok, master} <- MasterKeys.active() do

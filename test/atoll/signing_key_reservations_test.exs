@@ -5,6 +5,15 @@ defmodule Atoll.SigningKeyReservationsTest do
   @did "did:web:reserved.example.com"
   @other "did:web:other-reserved.example.com"
 
+  test "reservation capacity configuration is bounded and defaults to ten thousand" do
+    assert SigningKeyReservations.limit_from_env!(nil) == 10_000
+    assert SigningKeyReservations.limit_from_env!("100") == 100
+
+    for value <- ["0", "10001", "1.5", "", "oops"] do
+      assert_raise ArgumentError, fn -> SigningKeyReservations.limit_from_env!(value) end
+    end
+  end
+
   setup do
     settings = [:key_encryption_key, :previous_key_encryption_keys, :reserved_signing_key_limit]
     prior = Map.new(settings, &{&1, Application.fetch_env(:atoll, &1)})
