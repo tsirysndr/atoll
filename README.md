@@ -154,6 +154,7 @@ record Lexicons or grant access to account data.
 - [x] Authenticated `com.atproto.repo.importRepo` for existing repositories, with bounded uploads and atomic replacement.
 - [x] Existing-DID migration provisioning with source-key verification and destination-key signing.
 - [ ] Streaming large transfers.
+- [x] Lazy CARv1 encoding with per-block validation and upstream cancellation cleanup.
 
 `com.atproto.repo.getRecord` returns the current record unless `cid` selects a
 retained version, including versions of subsequently deleted records. Historical
@@ -3058,3 +3059,22 @@ resolves identity nor proves that the commit is the latest. Network Lexicon
 retrieval invokes this verifier and requires its record CID to match the JSON
 response. The structure follows the
 [repository specification](https://atproto.com/specs/repository).
+
+### Streaming CAR encoding
+
+`Atoll.CAR.encode_stream/2` returns `{:ok, enumerable}` of binary CARv1 chunks:
+first the header, then one framed section per supplied `{cid, bytes}` block. It
+preserves source order (including duplicate sections), so a caller can place the
+commit first without sorting or collecting the archive. CID hashes and the 2 MiB
+section limit are checked before each block is emitted. The header retains the
+buffered codec's limits; the streamed archive has no aggregate 64 MiB cap.
+
+The source must be lazy to keep memory bounded. Consumer cancellation or a block
+validation exception releases an upstream `Stream.resource`, including resources
+owned by a database stream. Invalid roots fail before enumeration. Invalid blocks
+raise `ArgumentError` during enumeration; callers must abort the transfer because
+earlier chunks may already have been sent. They must also provide snapshot
+consistency, authorization, and transfer-duration limits. Tests consume a stream
+larger than 64 MiB without collecting it and check resource cleanup on cancellation
+and validation failure. Public export endpoints and CAR decoding still use their
+existing buffered paths; HTTP/database streaming integration remains pending.

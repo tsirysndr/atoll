@@ -1,14 +1,14 @@
 defmodule Atoll.CAR do
   @moduledoc """
-  In-memory CARv1 transport for Atoll's SHA-256 CIDv1 blocks.
+  CARv1 transport for Atoll's SHA-256 CIDv1 blocks, with buffered and streaming encoders.
 
   This codec verifies block hashes, not repository signatures or DAG completeness.
   Empty roots, missing root blocks, and repeated blocks are accepted for partial
   archives. Repeated sections are counted toward the block limit and deduplicated.
   Encoding sorts blocks by binary CID for reproducible output.
 
-  Limits are local resource policies, not protocol limits. Large repository
-  transfers will need a streaming interface. No database writes occur here.
+  Limits are local resource policies, not protocol limits. Streaming encoding
+  has no aggregate archive limit; decoding remains buffered. No database writes occur here.
   """
   alias Atoll.{CBOR, CID, Varint}
   alias Atoll.CBOR.Link
@@ -62,6 +62,39 @@ defmodule Atoll.CAR do
   end
 
   def encode(_, _), do: {:error, :invalid_car}
+
+  @doc """
+  Lazily encodes CARv1 chunks in the supplied enumerable's order.
+
+  Only the header and one block are buffered. Unlike encode/2 there is no total
+  archive-size limit. Header/block limits and CID checks still apply. Duplicate
+  sections are allowed. Invalid blocks raise ArgumentError during enumeration;
+  callers must abort the transfer, since earlier chunks may already be sent.
+  Enumeration cancellation closes the upstream enumerable (including DB streams).
+  """
+  def encode_stream(roots, blocks) when is_list(roots) do
+    if length(roots) <= div(@max_header, 40) and Enum.all?(roots, &valid_cid?/1) and
+         Enumerable.impl_for(blocks) != nil do
+      header = CBOR.encode!(%{"version" => 1, "roots" => Enum.map(roots, &%Link{cid: &1})})
+
+      chunks = Stream.map(blocks, &stream_block!/1)
+      {:ok, Stream.concat([frame(header)], chunks)}
+    else
+      {:error, :invalid_car}
+    end
+  end
+
+  def encode_stream(_, _), do: {:error, :invalid_car}
+
+  defp stream_block!({cid, data}) when is_binary(cid) and is_binary(data) do
+    unless valid_cid?(cid) and byte_size(cid) + byte_size(data) <= @max_block and
+             CID.verify(cid, data) == :ok,
+           do: raise(ArgumentError, "Invalid CAR stream block")
+
+    frame(cid <> data)
+  end
+
+  defp stream_block!(_), do: raise(ArgumentError, "Invalid CAR stream block")
 
   @spec decode(term()) ::
           {:ok, %{roots: [binary()], blocks: %{binary() => binary()}}}

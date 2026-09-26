@@ -1,5 +1,7 @@
 defmodule Atoll.BlockCleanupTest do
-  use Atoll.DataCase, async: true
+  # Cleanup deliberately times out on the global mutation lock after one second.
+  # These success-path tests must not contend with unrelated async repository writes.
+  use Atoll.DataCase, async: false
   alias Atoll.{CID, Repositories, SigningKey, Storage}
   alias Atoll.Repositories.{Event, Events, Head, Revision}
   alias Atoll.Storage.{Block, Cleanup}
