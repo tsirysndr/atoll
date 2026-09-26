@@ -1,10 +1,20 @@
 defmodule Atoll.Identity.PLC.LocalRecovery do
-  @moduledoc "Operator recovery of the current local identity using an externally signed PLC fork."
+  @moduledoc "Operator reconciliation of signed PLC recovery with optional repository-key restoration."
   import Ecto.Query
-  alias Atoll.{CBOR, KeyVault, Multikey, Repo}
+  alias Atoll.{CBOR, KeyVault, Multikey, Repo, Repositories, SigningKey}
   alias Atoll.Accounts.{Profile, Signup}
   alias Atoll.Identity.{Handle, HandleReservation, Observation}
-  alias Atoll.Identity.PLC.{Client, Operation, Recoveries, Registrations, Update, Updates}
+
+  alias Atoll.Identity.PLC.{
+    Client,
+    Operation,
+    PendingSigningKeys,
+    Recoveries,
+    Registrations,
+    Update,
+    Updates
+  }
+
   alias Atoll.Repositories.{Events, Head}
 
   def status(did) do
@@ -49,6 +59,36 @@ defmodule Atoll.Identity.PLC.LocalRecovery do
     end
   end
 
+  def stage_key(did, operation, expected, key, opts \\ [])
+
+  def stage_key(did, operation, expected, %SigningKey{} = key, opts) do
+    with false <- Repo.in_transaction?(),
+         :ok <- Operation.validate_submission(operation),
+         {:ok, _} <- Multikey.from_did_key(expected),
+         {:ok, derived} <- SigningKey.from_private(key.curve, key.private),
+         true <- derived.public == key.public,
+         {:ok, public} <- Multikey.to_did_key(key.curve, key.public),
+         %Profile{} = profile <- Repo.get(Profile, did),
+         observation = Repo.get(Observation, did),
+         {:ok, %{entries: audit}} <- Client.fetch_audit(did, Keyword.take(opts, [:plug])),
+         :ok <- forward(did, profile.handle, opts) do
+      Repo.transaction(fn ->
+        head = lock!(did)
+        fence!(head, operation, profile.handle, observation, {expected, public})
+        unwrap!(PendingSigningKeys.stage_recovery(did, audit, operation, expected, key))
+        {:ok, cid} = Operation.cid(operation)
+        %{did: did, cid: cid, repository_key: public, result: :staged}
+      end)
+    else
+      true -> {:error, :plc_update_inside_transaction}
+      false -> {:error, :invalid_key}
+      nil -> {:error, :account_not_found}
+      error -> error
+    end
+  end
+
+  def stage_key(_, _, _, _, _), do: {:error, :invalid_key}
+
   def resume(did, cid, opts \\ []) do
     with false <- Repo.in_transaction?(),
          %Update{recovery_expected_head: expected} = row when is_binary(expected) <-
@@ -74,11 +114,21 @@ defmodule Atoll.Identity.PLC.LocalRecovery do
           head,
           current.operation,
           profile.handle,
-          if(current.completed_at, do: Repo.get(Observation, did), else: observation)
+          if(current.completed_at, do: Repo.get(Observation, did), else: observation),
+          key_context!(current)
         )
 
         unless current.completed_at do
           counts = Atoll.Accounts.CredentialRevocation.revoke!(did)
+          Events.append!(:identity, head, %{"handle" => profile.handle})
+
+          updated =
+            if current.signing_public_key do
+              key = unwrap!(PendingSigningKeys.fetch(did, cid))
+              unwrap!(Repositories.recover_signing_key(did, key, head.head))
+            else
+              head
+            end
 
           fingerprint =
             :crypto.hash(
@@ -87,8 +137,8 @@ defmodule Atoll.Identity.PLC.LocalRecovery do
                 "handle" => profile.handle,
                 "claimedHandle" => profile.handle,
                 "pds" => AtollWeb.Endpoint.url(),
-                "curve" => Atom.to_string(head.curve),
-                "key" => %CBOR.Bytes{data: head.public_key}
+                "curve" => Atom.to_string(updated.curve),
+                "key" => %CBOR.Bytes{data: updated.public_key}
               })
             )
 
@@ -97,8 +147,8 @@ defmodule Atoll.Identity.PLC.LocalRecovery do
             conflict_target: [:did]
           )
 
-          Events.append!(:identity, head, %{"handle" => profile.handle})
           Updates.complete!(did, cid)
+          if current.signing_public_key, do: PendingSigningKeys.release!(did, cid)
           Atoll.Moderation.Audit.recovery!(current, counts)
         end
 
@@ -117,18 +167,37 @@ defmodule Atoll.Identity.PLC.LocalRecovery do
     Repo.transaction(fn ->
       head = lock!(row.did)
 
-      if row.signing_public_key || row.authority_public_key,
-        do: Repo.rollback(:unsupported_recovery_key_change)
-
-      fence!(head, row.operation, handle, observation)
+      fence!(head, row.operation, handle, observation, key_context!(row))
       :ok
     end)
   end
 
-  defp fence!(head, operation, handle, observation) do
+  defp key_context!(row) do
+    if row.authority_public_key, do: Repo.rollback(:unsupported_recovery_key_change)
+
+    if row.signing_public_key && is_nil(row.completed_at) do
+      key = unwrap!(PendingSigningKeys.fetch(row.did, row.cid))
+      {:ok, public} = Multikey.to_did_key(key.curve, key.public)
+      {row.expected_signing_key, public}
+    end
+  end
+
+  defp fence!(head, operation, handle, observation, key_context \\ nil) do
     unless head.status in [:active, :deactivated], do: Repo.rollback(:repo_inactive)
     check!(Operation.validate_submission(operation))
-    {:ok, key} = Multikey.to_did_key(head.curve, head.public_key)
+    {:ok, current_key} = Multikey.to_did_key(head.curve, head.public_key)
+
+    key =
+      case key_context do
+        nil ->
+          unwrap!(KeyVault.fetch(head.did))
+          current_key
+
+        {expected, replacement} ->
+          unless current_key == expected, do: Repo.rollback(:stale_signing_key)
+          replacement
+      end
+
     authority = unwrap!(Registrations.rotation_key(head.did))
     {:ok, authority_id} = Multikey.to_did_key(authority.curve, authority.public)
 
@@ -140,8 +209,6 @@ defmodule Atoll.Identity.PLC.LocalRecovery do
              operation["alsoKnownAs"] == ["at://" <> handle] and
              authority_id in operation["rotationKeys"],
            do: Repo.rollback(:invalid_local_recovery)
-
-    unwrap!(KeyVault.fetch(head.did))
 
     unless match?(%Profile{handle: ^handle}, Repo.get(Profile, head.did)) and
              Repo.get(Observation, head.did) == observation,

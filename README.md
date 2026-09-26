@@ -147,7 +147,8 @@ record Lexicons or grant access to account data.
 - [x] Operator recovery of the current local identity from signed forks, with credential revocation and resumable completion.
 - [x] Internal atomic repository key restoration with missing, corrupt, or lost-master-key custody.
 - [x] Durable encrypted repository-key custody for signed recovery forks, including same-key repair.
-- [ ] Operator recovery with replacement private keys, pending-operation conflict resolution, and lost-key recovery.
+- [x] Operator recovery with supplied repository private keys, including unreadable-vault repair and atomic commit publication.
+- [ ] Recovery with replacement PLC authority keys, pending-operation conflict resolution, and lost-authority-key recovery.
 - [x] Per-revision signing-key provenance for historical record and block verification.
 - [x] Internal atomic repository signing-key replacement with unchanged-tree commits and vault rollback.
 - [x] PostgreSQL repository heads and atomic record, tree, and commit updates with optional head compare-and-swap.
@@ -3527,8 +3528,8 @@ acceptance. Expiry, rejection, conflicts and timeouts retain the exact staged
 operation. Generic ordinary-update submission paths cannot complete recovery
 journals. Account deletion cascades the journal. The operator command below
 provides authorized staging and atomic local completion for restoring existing
-readable local keys. Recovery with replacement keys and conflicting pending work
-remains unfinished.
+readable local keys, with optional repository-key replacement. Recovery with
+replacement PLC authority keys and conflicting pending work remains unfinished.
 
 ### Operator recovery of the current local identity
 
@@ -3565,8 +3566,9 @@ keys are still trusted and readable. It does not repair compromised account
 passwords/email, revoke service tokens already accepted by external services,
 replace lost/private keys, or overwrite another pending PLC operation. Use the
 existing password-management workflow when local credentials are compromised.
-Recovery requiring new key custody and pending-operation conflict reconciliation
-remains unfinished.
+Repository-key replacement is supported by `stage-key` below. Recovery requiring
+new PLC authority custody and pending-operation conflict reconciliation remains
+unfinished.
 
 Directory acceptance and local completion cannot be atomic. Keep the journal
 after any interruption, and use `status` to recover its CID before retrying
@@ -3579,8 +3581,9 @@ restaging or expanding its recovery scope. No email is sent by this command.
 for recovery when the prior repository vault envelope is missing, corrupt, or
 unreadable under the available master keys. Its caller must independently
 authorize recovery and freshly establish that the DID document authorizes the
-supplied replacement key. No existing HTTP endpoint or recovery command invokes
-this primitive yet; ordinary rotation still requires readable old custody.
+supplied replacement key. The `stage-key` recovery workflow below invokes this
+primitive after fresh directory confirmation; ordinary rotation still requires
+readable old custody.
 
 Restoration requires the expected current head and a valid private/public key
 pair. Under normal event/account locks it verifies the current commit signature,
@@ -3600,8 +3603,7 @@ retry preserves its envelope. Master-key rewrapping remains a separate operation
 
 This cannot reconstruct private material from a public key. The caller must
 provide the authorized private key and an active encryption master key. Durable
-replacement-key custody is described below; operator recovery orchestration for
-this primitive remains unfinished.
+replacement-key custody and the operator recovery workflow are described below.
 
 ### Repository-key custody during recovery
 
@@ -3624,5 +3626,44 @@ After fresh verified directory acceptance, callers can restore the repository
 key, complete the recovery journal and release pending custody in one transaction.
 Failed publication retains the confirmed journal and encrypted key for retry;
 release requires matching readable installed custody and completed journal state.
-No operator command accepts a recovery private-key file yet. This increment
-provides durable custody for the remaining operator replacement-key workflow.
+The `stage-key` command below accepts a recovery private-key file and uses this
+custody through submission and local completion.
+
+### Operator recovery with a supplied repository key
+
+Use `stage-key` when the signed recovery authorizes a replacement repository key,
+or when the original private key is available but its vault envelope is missing
+or unreadable:
+
+```sh
+mix atoll.plc.recover stage-key did:plc:ACCOUNT signed-recovery.json /secure/repository-key.json EXPECTED_CURRENT_DID_KEY
+mix atoll.plc.recover resume did:plc:ACCOUNT STAGED_OPERATION_CID
+```
+
+The private-key JSON file must contain exactly `curve` (`k256` or `p256`) and
+`privateKey` (standard base64 for 32 private-key bytes), within 4 KiB. Restrict
+file permissions to the operator. The expected public did:key refers to the
+current local repository key, even if its private vault envelope is unreadable.
+The signed recovery must authorize the supplied public key and preserve the
+local handle/PDS service while retaining a readable local PLC authority.
+
+Staging verifies the key pair, fresh recovery evidence, forward handle claim and
+expected local public key before atomically storing the operation and encrypted
+key. Output contains public metadata only. Resume needs the staged CID, not the
+private file; keep your secure backup until recovery is verified. Active
+encryption-master-key configuration is required for pending and installed custody.
+
+After verified acceptance, local completion revokes credentials, emits the
+identity event, restores custody and publishes a new unchanged-tree commit plus
+a sync event when the repository key changes. It updates the identity observation,
+completes the journal, removes pending private-key custody and records public key
+identifiers in the recovery audit, all in one transaction. Same-key repair emits
+only the identity event. Quota or verification failure rolls back local changes
+and retains the encrypted key and confirmed journal for retry. Completed retries
+do not revoke newly created sessions or duplicate events/audits.
+
+This supports missing or unreadable repository custody; the retained PLC authority
+must still be readable and authorized by the recovery operation. Replacing or
+restoring lost PLC authority custody and handling conflicting pending operations
+remain unfinished. Recovery still requires an authorized signing key; private
+keys cannot be reconstructed from public keys.

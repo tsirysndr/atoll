@@ -35,9 +35,13 @@ defmodule Atoll.Moderation.Audit do
       row.did,
       %{kind: "plcRecovery", did: row.did},
       %{operationCid: row.cid, nullifiedCids: row.recovery_nullified_cids},
-      %{directoryHead: row.recovery_expected_head},
+      %{directoryHead: row.recovery_expected_head, repositoryKey: row.expected_signing_key},
       %{
         directoryHead: row.cid,
+        repositoryKey:
+          if(row.signing_public_key,
+            do: elem(Atoll.Multikey.to_did_key(row.signing_curve, row.signing_public_key), 1)
+          ),
         revokedSessions: counts.sessions,
         revokedAppPasswords: counts.app_passwords
       },

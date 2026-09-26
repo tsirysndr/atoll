@@ -3,11 +3,12 @@ defmodule Mix.Tasks.Atoll.Plc.Recover do
   @shortdoc "Stage or resume a signed recovery restoring the current local identity"
   @moduledoc """
       mix atoll.plc.recover stage DID SIGNED_OPERATION_JSON_FILE
+      mix atoll.plc.recover stage-key DID SIGNED_OPERATION_JSON_FILE PRIVATE_KEY_JSON_FILE EXPECTED_CURRENT_DID_KEY
       mix atoll.plc.recover status DID
       mix atoll.plc.recover resume DID OPERATION_CID
 
-  The signed recovery must restore the current local repository key, service,
-  handle, and retained PLC authority. Completion revokes sessions, app passwords,
+  The signed recovery must match the local service, handle and retained PLC
+  authority. stage-key permits a supplied repository key; stage preserves it. Completion revokes sessions, app passwords,
   and pending account challenges. Account password and email are unchanged.
   """
   def run(args) do
@@ -16,6 +17,14 @@ defmodule Mix.Tasks.Atoll.Plc.Recover do
         ["stage", "did:plc:" <> _ = did, path] ->
           operation = read_operation!(path)
           fn opts -> Atoll.Identity.PLC.LocalRecovery.stage(did, operation, opts) end
+
+        ["stage-key", "did:plc:" <> _ = did, path, key_path, expected] ->
+          operation = read_operation!(path)
+          key = read_key!(key_path)
+
+          fn opts ->
+            Atoll.Identity.PLC.LocalRecovery.stage_key(did, operation, expected, key, opts)
+          end
 
         ["status", "did:plc:" <> _ = did] ->
           fn _ -> Atoll.Identity.PLC.LocalRecovery.status(did) end
@@ -45,6 +54,21 @@ defmodule Mix.Tasks.Atoll.Plc.Recover do
         Mix.raise(
           "PLC recovery failed; inspect the pending journal and identity authority. Retry the same CID after resolving the failure; never delete an ambiguously submitted operation."
         )
+    end
+  end
+
+  defp read_key!(path) do
+    with {:ok, bytes} when is_binary(bytes) and byte_size(bytes) <= 4096 <-
+           File.open(path, [:read, :binary], &IO.binread(&1, 4097)),
+         {:ok, %Jason.OrderedObject{values: fields}} when length(fields) == 2 <-
+           Jason.decode(bytes, objects: :ordered_objects),
+         %{"curve" => curve, "privateKey" => private} when is_binary(private) <- Map.new(fields),
+         curve when curve in [:k256, :p256] <- %{"k256" => :k256, "p256" => :p256}[curve],
+         {:ok, <<_::binary-size(32)>> = private} <- Base.decode64(private),
+         {:ok, key} <- Atoll.SigningKey.from_private(curve, private) do
+      key
+    else
+      _ -> Mix.raise("Invalid or unreadable recovery private-key file (maximum 4 KiB).")
     end
   end
 

@@ -10,7 +10,8 @@ defmodule Atoll.PLCLocalRecoveryTest do
           :key_encryption_key,
           :session_signing_key,
           :identity_resolution_options,
-          :plc_submission_options
+          :plc_submission_options,
+          :repository_quota
         ] do
       prior = Application.fetch_env(:atoll, name)
 
@@ -86,6 +87,7 @@ defmodule Atoll.PLCLocalRecoveryTest do
            %{
              audit: audit,
              last: bad,
+             operation: recovery,
              posts: 0,
              ambiguous: false,
              unavailable: false,
@@ -103,7 +105,7 @@ defmodule Atoll.PLCLocalRecoveryTest do
 
         conn.method == "POST" ->
           {:ok, bytes, conn} = Plug.Conn.read_body(conn)
-          assert Jason.decode!(bytes) == recovery
+          assert Jason.decode!(bytes) == state.operation
           Agent.update(directory, &%{&1 | posts: &1.posts + 1})
 
           if state.reject do
@@ -113,11 +115,11 @@ defmodule Atoll.PLCLocalRecoveryTest do
 
             audit =
               [first | Enum.map(removed, &Map.put(&1, "nullified", true))] ++
-                [entry(genesis.did, recovery, DateTime.utc_now())]
+                [entry(genesis.did, state.operation, DateTime.utc_now())]
 
             Agent.update(
               directory,
-              &%{&1 | audit: audit, last: recovery, unavailable: state.ambiguous}
+              &%{&1 | audit: audit, last: state.operation, unavailable: state.ambiguous}
             )
 
             if state.ambiguous,
@@ -251,6 +253,126 @@ defmodule Atoll.PLCLocalRecoveryTest do
     assert {:ok, %{status: :deactivated}} = Repositories.get_head(c.did)
   end
 
+  test "replacement-key recovery repairs unreadable custody and publishes identity then sync",
+       c do
+    new = SigningKey.generate(:p256)
+    {op, cid, expected} = key_recovery(c, new)
+    {:ok, wrong_expected} = Multikey.to_did_key(new.curve, new.public)
+
+    assert {:error, :stale_signing_key} =
+             LocalRecovery.stage_key(c.did, op, wrong_expected, new, c.opts)
+
+    assert {:error, :invalid_key} =
+             LocalRecovery.stage_key(
+               c.did,
+               op,
+               expected,
+               %{new | public: c.head.public_key},
+               c.opts
+             )
+
+    assert Repo.aggregate(Update, :count) == 0
+
+    Repo.get!(Atoll.Repositories.EncryptedKey, c.did)
+    |> Ecto.Changeset.change(envelope: :binary.copy(<<0>>, 61))
+    |> Repo.update!(log: false)
+
+    seq = Events.latest_seq()
+    assert {:ok, %{cid: ^cid}} = LocalRecovery.stage_key(c.did, op, expected, new, c.opts)
+    assert {:error, :key_decryption_failed} = KeyVault.fetch(c.did)
+    assert {:ok, _} = LocalRecovery.resume(c.did, cid, c.opts)
+    assert KeyVault.fetch(c.did) == {:ok, new}
+    assert {:error, :key_not_found} = Atoll.Identity.PLC.PendingSigningKeys.fetch(c.did, cid)
+    assert {:ok, [%{kind: :identity}, %{kind: :sync}]} = Events.list_after(seq)
+    {:ok, updated} = Repositories.get_head(c.did)
+    assert updated.rev > c.head.rev
+    {:ok, bytes} = Atoll.Storage.get_block(updated.head)
+    assert {:ok, _} = Atoll.Commit.verify(bytes, c.did, new.curve, new.public)
+    audit = Repo.one!(Atoll.Moderation.AuditEntry)
+    assert audit.before_state["repositoryKey"] == expected
+    {:ok, public} = Multikey.to_did_key(new.curve, new.public)
+    assert audit.after_state["repositoryKey"] == public
+    {:ok, fresh} = Sessions.create_for_account(c.did)
+    assert {:ok, _} = LocalRecovery.resume(c.did, cid, c.opts)
+    assert {:ok, _} = Sessions.authenticate(fresh.access_jwt)
+    assert Agent.get(c.directory, & &1.posts) == 1
+  end
+
+  test "quota rollback preserves credentials, events and pending recovery key", c do
+    new = SigningKey.generate(:p256)
+    {op, cid, expected} = key_recovery(c, new)
+    old = KeyVault.fetch(c.did)
+    {:ok, _} = LocalRecovery.stage_key(c.did, op, expected, new, c.opts)
+    seq = Events.latest_seq()
+    Application.put_env(:atoll, :repository_quota, max_bytes: 0)
+    assert {:error, :repository_quota_exceeded} = LocalRecovery.resume(c.did, cid, c.opts)
+    assert Events.latest_seq() == seq
+    assert KeyVault.fetch(c.did) == old
+    assert {:ok, _} = Sessions.authenticate(c.pair.access_jwt)
+    assert Repo.aggregate(AppPassword, :count) == 1
+    assert Repo.aggregate(Atoll.Moderation.AuditEntry, :count) == 0
+    assert {:ok, ^new} = Atoll.Identity.PLC.PendingSigningKeys.fetch(c.did, cid)
+    Application.delete_env(:atoll, :repository_quota)
+    assert {:ok, _} = LocalRecovery.resume(c.did, cid, c.opts)
+    assert Agent.get(c.directory, & &1.posts) == 1
+  end
+
+  test "original-key recovery repairs missing vault without a new commit", c do
+    {:ok, original} = KeyVault.fetch(c.did)
+    {op, cid, expected} = key_recovery(c, original)
+    Repo.delete!(Repo.get!(Atoll.Repositories.EncryptedKey, c.did))
+    seq = Events.latest_seq()
+    assert {:ok, _} = LocalRecovery.stage_key(c.did, op, expected, original, c.opts)
+    assert {:ok, _} = LocalRecovery.resume(c.did, cid, c.opts)
+    assert KeyVault.fetch(c.did) == {:ok, original}
+    assert Repositories.get_head(c.did) == {:ok, c.head}
+    assert {:ok, [%{kind: :identity}]} = Events.list_after(seq)
+  end
+
+  test "stage-key CLI bounds and redacts private input", c do
+    new = SigningKey.generate(:p256)
+    {op, cid, expected} = key_recovery(c, new)
+
+    base =
+      Path.join(System.tmp_dir!(), "atoll-recovery-key-#{System.unique_integer([:positive])}")
+
+    op_path = base <> ".operation.json"
+    key_path = base <> ".key.json"
+
+    on_exit(fn ->
+      File.rm(op_path)
+      File.rm(key_path)
+    end)
+
+    File.write!(op_path, Jason.encode!(op))
+    File.write!(key_path, Jason.encode!(%{curve: "p256", privateKey: Base.encode64(new.private)}))
+    File.chmod!(key_path, 0o600)
+    Application.put_env(:atoll, :identity_resolution_options, Keyword.drop(c.opts, [:plug]))
+    Application.put_env(:atoll, :plc_submission_options, Keyword.take(c.opts, [:plug]))
+
+    output =
+      ExUnit.CaptureIO.capture_io(fn ->
+        Mix.Tasks.Atoll.Plc.Recover.run(["stage-key", c.did, op_path, key_path, expected])
+      end)
+
+    assert Jason.decode!(output)["cid"] == cid
+    refute output =~ Base.encode64(new.private)
+    File.rm!(key_path)
+
+    output =
+      ExUnit.CaptureIO.capture_io(fn ->
+        Mix.Tasks.Atoll.Plc.Recover.run(["resume", c.did, cid])
+      end)
+
+    assert Jason.decode!(output)["result"] == "completed"
+    assert KeyVault.fetch(c.did) == {:ok, new}
+    File.write!(key_path, String.duplicate("x", 4097))
+
+    assert_raise Mix.Error, ~r/Invalid or unreadable recovery private-key file/, fn ->
+      Mix.Tasks.Atoll.Plc.Recover.run(["stage-key", c.did, op_path, key_path, expected])
+    end
+  end
+
   test "CLI reads bounded unique-key JSON and prints public journal state", c do
     path =
       Path.join(System.tmp_dir!(), "atoll-recovery-#{System.unique_integer([:positive])}.json")
@@ -289,6 +411,21 @@ defmodule Atoll.PLCLocalRecoveryTest do
         Mix.Tasks.Atoll.Plc.Recover.run(["stage", c.did, path])
       end
     end
+  end
+
+  defp key_recovery(c, key) do
+    {:ok, public} = Multikey.to_did_key(key.curve, key.public)
+    {:ok, expected} = Multikey.to_did_key(c.head.curve, c.head.public_key)
+
+    {:ok, op} =
+      c.recovery
+      |> Map.delete("sig")
+      |> put_in(["verificationMethods", "atproto"], public)
+      |> Operation.sign(c.high)
+
+    {:ok, cid} = Operation.cid(op)
+    Agent.update(c.directory, &%{&1 | operation: op})
+    {op, cid, expected}
   end
 
   defp entry(did, op, time) do
