@@ -62,8 +62,8 @@ record Lexicons or grant access to account data.
 
 ### Repositories and records
 
-- [ ] Merkle Search Tree construction, lookup, insertion, and deletion.
-- [ ] Deterministic MST serialization and root CID compatibility tests.
+- [x] Merkle Search Tree construction, lookup, insertion, and deletion (rebuilds on mutation).
+- [x] Deterministic MST serialization and reference root CID compatibility tests.
 - [ ] Repository signing keys, commit signing, and signature verification.
 - [ ] Repository heads and atomic record, tree, and commit updates.
 - [ ] Record reads and listing (`getRecord`, `listRecords`).
