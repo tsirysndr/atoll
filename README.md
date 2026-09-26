@@ -29,7 +29,8 @@ Checked items are implemented in this repository. Unchecked items are remaining 
 - [x] Configurable local custom record Lexicons with bounded startup validation.
 - [x] Exact DNS Lexicon namespace delegation with fresh DID/key/PDS resolution.
 - [x] Bounded Lexicon schema retrieval from the delegated HTTPS PDS with URI/CID checks.
-- [ ] Lexicon dependency resolution and validation integration.
+- [x] Bounded remote record-Lexicon dependency catalogs with schema/reference validation.
+- [ ] Network Lexicon integration with record-write validation.
 
 XRPC routing uses the [HTTP API specification](https://atproto.com/specs/xrpc).
 Malformed paths return `400 InvalidRequest`; valid but unimplemented method NSIDs
@@ -2984,6 +2985,24 @@ matching `id`, and nonempty named definitions. Its canonical DAG-CBOR SHA-256 CI
 must match the response CID. Success returns the document and its DID/URI/CID
 provenance without installing it. This trusts DNS, DID resolution, and the named
 PDS's authenticated HTTPS response; CID integrity is not a signed repository
-inclusion proof or a freshness guarantee. Full schema-language checking,
-dependency resolution, signed inclusion proofs, and integration with record
-validation remain pending. The existing operator-loaded catalog is unchanged.
+inclusion proof or a freshness guarantee. Signed inclusion proofs and integration
+with record validation remain pending. The existing operator-loaded catalog is unchanged.
+
+`Atoll.Lexicon.Catalog.resolve/2` follows external references through the same
+independent discovery/fetch process for each namespace. It supports the record
+schema language accepted by the operator catalog loader, strips the publication
+`$type` envelope, and validates all definitions and reference targets before
+returning a catalog. Missing dependencies, unsupported definitions, invalid union
+targets, and unresolved fragments reject the whole result. Cycles are permitted;
+each namespace is fetched at most once. Bundled schemas take precedence and are
+never fetched remotely or replaced.
+
+One resolution permits at most 16 remote documents and 1 MiB of aggregate
+re-encoded schema JSON, in addition to the fetcher's per-response limit. A
+30-second elapsed-time budget is checked between fetches and before accepting
+the completed catalog. An in-flight DNS/HTTP operation retains its individual
+timeout, so this is not a hard 30-second cancellation deadline. Results contain
+the validated catalog plus DID/URI/CID provenance for each remote document; no
+global configuration, cache, or database state changes. These catalogs are not
+yet used by repository writes. Transport/clock options are trusted test hooks,
+never request parameters.

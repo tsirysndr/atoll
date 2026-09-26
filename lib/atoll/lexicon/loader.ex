@@ -72,6 +72,23 @@ defmodule Atoll.Lexicon.Loader do
 
   def validate!(_), do: invalid!("expected at most 128 documents")
 
+  @doc "Validate a supported document's shape and list its external namespace dependencies."
+  def dependencies(document) do
+    if document?(document) do
+      dependencies =
+        document
+        |> references()
+        |> Enum.map(fn {ref, _} -> ref |> String.split("#") |> hd() end)
+        |> Enum.reject(&(&1 in ["", document["id"]]))
+        |> Enum.uniq()
+        |> Enum.sort()
+
+      {:ok, dependencies}
+    else
+      {:error, :invalid_lexicon_schema}
+    end
+  end
+
   defp validate_references!([], _, _), do: :ok
 
   defp validate_references!([{id, ref, union?} | rest], catalog, seen) do
