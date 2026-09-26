@@ -70,6 +70,12 @@ relay_schedule = Atoll.Relays.schedule_from_env!(System.get_env(), config_env() 
 config :atoll, :relay_crawl_enabled, relay_schedule.enabled
 config :atoll, :relay_crawl_interval_seconds, relay_schedule.interval_seconds
 
+retention =
+  Atoll.Repositories.EventRetention.config_from_env!(System.get_env(), config_env() == :test)
+
+config :atoll, :event_retention_enabled, retention.enabled
+config :atoll, :event_retention_seconds, retention.seconds
+
 config :atoll, :email_worker, Atoll.Email.Config.parse!(System.get_env())
 
 server = Atoll.ServerConfig.parse!(System.get_env(), config_env() == :prod)

@@ -80,9 +80,23 @@ defmodule Atoll.Application do
         []
       end
 
+    retention_children =
+      if Application.get_env(:atoll, :event_retention_enabled, false) do
+        [
+          Supervisor.child_spec(
+            {Task.Supervisor, name: Atoll.Repositories.RetentionTaskSupervisor},
+            id: Atoll.Repositories.RetentionTaskSupervisor
+          ),
+          {Atoll.Repositories.EventRetentionWorker, []}
+        ]
+      else
+        []
+      end
+
     Supervisor.start_link(
       children ++
-        refresh_children ++ cleanup_children ++ account_cleanup_children ++ relay_children,
+        refresh_children ++
+        cleanup_children ++ account_cleanup_children ++ relay_children ++ retention_children,
       opts
     )
   end

@@ -4,6 +4,27 @@ defmodule Atoll.Repositories.EventRetention do
   alias Atoll.Repo
   alias Atoll.Repositories.{Event, Events}
 
+  def config_from_env!(env, test? \\ false) do
+    enabled =
+      case Map.get(env, "ATOLL_EVENT_RETENTION_ENABLED", "false") do
+        "true" -> true
+        "false" -> false
+        _ -> raise ArgumentError, "ATOLL_EVENT_RETENTION_ENABLED must be true or false"
+      end
+
+    seconds =
+      case Integer.parse(Map.get(env, "ATOLL_EVENT_RETENTION_SECONDS", "604800")) do
+        {value, ""} when value in 3600..31_536_000 ->
+          value
+
+        _ ->
+          raise ArgumentError,
+                "ATOLL_EVENT_RETENTION_SECONDS must be an integer from 3600 to 31536000"
+      end
+
+    %{enabled: enabled and not test?, seconds: seconds}
+  end
+
   def bounds do
     %{rows: [[floor, latest]]} =
       Repo.query!("""

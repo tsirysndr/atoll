@@ -602,6 +602,7 @@ locking protects shared objects when collectors overlap.
 - [x] Historical block retrieval with signed-commit and canonical-tree membership checks, including deleted records and prior MST nodes.
 - [x] Internal durable event sequencing and cursor replay, recorded atomically with repository creation, writes, imports, and status changes.
 - [x] Bounded operator event retention with a durable replay floor and `OutdatedCursor` stream notices.
+- [x] Opt-in supervised event-retention scheduling with bounded batches, timeouts, and outcome telemetry.
 - [ ] Higher-throughput sequencing (writes currently share a PostgreSQL transaction advisory lock to preserve commit order).
 - [x] `com.atproto.sync.subscribeRepos` binary WebSocket stream with exclusive resume cursors, live delivery, and account status events.
 - [x] Invalid/future cursor errors, bounded replay backlog, idle pings, and current-availability filtering for repository data.
@@ -675,7 +676,7 @@ Idle connections poll PostgreSQL every 500 ms and send a ping every 15 seconds.
 Connections more than 10,000 persisted events behind receive `ConsumerTooSlow`
 and close; sequence gaps do not count toward this limit. Replay skips commit and
 sync data for currently inactive repositories, but still emits account and identity events.
-Internet deployment requires WSS termination; connection quotas, automatic retention scheduling,
+Internet deployment requires WSS termination; connection quotas,
 and federation interoperability testing remain pending.
 
 Identity refreshes announce changes in the resolved handle, signing key, or PDS
@@ -2436,7 +2437,8 @@ bounds, and cache isolation; they do not mutate any external DID.
 
 ### Event retention and expired replay cursors
 
-Event history remains retained by default. To explicitly prune one bounded batch:
+Event history remains retained by default unless automatic retention is enabled.
+To explicitly prune one bounded batch:
 
 ```sh
 mix atoll.events.prune --limit 1000 --retention-seconds 604800
@@ -2445,8 +2447,7 @@ mix atoll.events.prune --limit 1000 --retention-seconds 604800
 The default retention is seven days; supported values range from one hour to one
 year. Batch limits are 1–1000. The command deletes only an expired prefix in sequence
 order and stops at the first newer event, even if later events have older timestamps.
-It uses the database clock. Repeat the command to clear an expired backlog; there
-is no automatic retention scheduler in this increment. JSON output includes
+It uses the database clock. Repeat the command to clear an expired backlog; automatic scheduling is also available as described below. JSON output includes
 `deleted` and a string `cursorFloor`, preserving the full integer value.
 
 Deletion and the replay boundary commit in one transaction under the existing event
@@ -2473,3 +2474,39 @@ Preserve this table alongside events when backing up or restoring the database.
 Tests cover bounded/non-monotonic timestamp pruning, atomic rollback, empty streams,
 and real loopback WebSocket notice ordering. No existing development event history
 was pruned while implementing this feature.
+
+
+### Automatic event retention
+
+To enable periodic pruning, configure both the opt-in switch and retention policy:
+
+```sh
+export ATOLL_EVENT_RETENTION_ENABLED=true
+export ATOLL_EVENT_RETENTION_SECONDS=604800
+```
+
+Scheduling defaults to disabled. Retention defaults to seven days and must be
+between 3600 and 31536000 seconds, including when scheduling is disabled. Invalid
+settings fail startup. Application configuration uses `:event_retention_enabled`
+and `:event_retention_seconds`. The runtime disables the scheduler in tests.
+
+The supervised worker waits one minute before its first run, prunes at most 1000
+expired events, then waits one minute after completion before the next batch.
+It uses the same atomic prefix deletion and durable replay boundary as the operator
+command. It does not loop immediately through a backlog or prune repository blocks.
+Consumers overtaken by retention receive the existing `OutdatedCursor` notice.
+
+Each batch runs in a supervised task with a 15-second deadline. Failed, crashed,
+or timed-out tasks allow a later batch; active batches do not overlap within a
+worker. Shutdown terminates the active task. PostgreSQL transactions protect the
+boundary and deletion together, including rollback if a task is killed before
+commit. A task killed after commit but before reporting may have completed work;
+subsequent batches safely continue from the persisted boundary.
+
+`[:atoll, :events, :retention]` telemetry reports `runs: 1` with result `completed`,
+`failed`, or `timeout`. Completed runs additionally report `deleted` and `floor`.
+Failure and timeout measurements do not claim a deletion count. Database locking
+serializes concurrent pruning across instances, without leader election. Configure
+the same retention policy on every node; a shorter policy on any enabled node can
+prune history earlier. Aggregate pruning throughput grows with enabled instances.
+No retention worker was enabled against development data during implementation.
