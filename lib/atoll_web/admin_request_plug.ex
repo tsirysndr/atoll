@@ -7,6 +7,7 @@ defmodule AtollWeb.AdminRequestPlug do
     "/xrpc/com.atproto.server.createInviteCodes",
     "/xrpc/com.atproto.admin.disableInviteCodes"
   ]
+  @query "/xrpc/com.atproto.admin.getInviteCodes"
   @parser Plug.Parsers.init(
             parsers: [:json],
             json_decoder: Jason,
@@ -19,17 +20,19 @@ defmodule AtollWeb.AdminRequestPlug do
   def call(conn, _) do
     path = "/" <> Enum.map_join(conn.path_info, "/", &URI.decode/1)
 
-    if path in @paths do
+    if path in @paths or path == @query do
       conn =
         conn
         |> put_resp_header("cache-control", "no-store")
         |> put_resp_header("pragma", "no-cache")
 
-      if conn.method == "POST" do
+      method = if path == @query, do: "GET", else: "POST"
+
+      if conn.method == method do
         case Atoll.Accounts.SessionLimiter.check({:admin, conn.remote_ip}, 60) do
           :ok ->
             conn = AtollWeb.AdminAuth.call(conn, [])
-            if conn.halted, do: conn, else: parse(conn)
+            if conn.halted, do: conn, else: parse(conn, method)
 
           {:error, seconds} ->
             conn
@@ -38,15 +41,28 @@ defmodule AtollWeb.AdminRequestPlug do
         end
       else
         conn
-        |> put_resp_header("allow", "POST")
-        |> error(405, "MethodNotAllowed", "Expected POST.")
+        |> put_resp_header("allow", method)
+        |> error(405, "MethodNotAllowed", "Unsupported administrative method.")
       end
     else
       conn
     end
   end
 
-  defp parse(conn) do
+  defp parse(conn, "GET") do
+    case read_body(conn, length: 16_384, read_length: 16_384, read_timeout: 5000) do
+      {:ok, "", conn} ->
+        %{conn | body_params: %{}}
+
+      {:more, _, conn} ->
+        error(conn, 413, "InvalidRequest", "Administrative request is too large.")
+
+      _ ->
+        error(conn, 400, "InvalidRequest", "This query has no request body.")
+    end
+  end
+
+  defp parse(conn, "POST") do
     case get_req_header(conn, "content-type") do
       [type] ->
         case Plug.Conn.Utils.media_type(type) do

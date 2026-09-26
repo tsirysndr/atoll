@@ -3,6 +3,12 @@ defmodule AtollWeb.SessionController do
   alias Atoll.Accounts.Sessions
   action_fallback AtollWeb.SessionFallback
 
+  def invite_codes(conn, params) do
+    with {:ok, token} <- bearer(conn),
+         {:ok, result} <- Atoll.Accounts.InviteListing.account(token, params),
+         do: json(conn, result)
+  end
+
   def request_email_confirmation(conn, _params) do
     with {:ok, token} <- bearer(conn),
          {:ok, _} <- Atoll.Accounts.EmailConfirmation.request(token),

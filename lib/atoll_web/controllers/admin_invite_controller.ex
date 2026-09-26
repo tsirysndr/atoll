@@ -4,6 +4,10 @@ defmodule AtollWeb.AdminInviteController do
   plug AtollWeb.AdminAuth
   action_fallback AtollWeb.XRPCFallback
 
+  def index(conn, params) do
+    with {:ok, result} <- Atoll.Accounts.InviteListing.admin(params), do: json(conn, result)
+  end
+
   def create(conn, _) do
     case conn.body_params do
       %{"useCount" => count} = params ->

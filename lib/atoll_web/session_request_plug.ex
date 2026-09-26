@@ -21,6 +21,7 @@ defmodule AtollWeb.SessionRequestPlug do
     @prefix <> "deactivateAccount"
   ]
   @queries [
+    @prefix <> "getAccountInviteCodes",
     @prefix <> "listAppPasswords",
     @prefix <> "getSession",
     @prefix <> "checkAccountStatus",

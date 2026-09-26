@@ -34,6 +34,7 @@ config :phoenix, :filter_parameters, [
   "inviteCode",
   "code",
   "codes",
+  "cursor",
   "password",
   "identifier",
   "email",

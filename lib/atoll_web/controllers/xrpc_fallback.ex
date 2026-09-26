@@ -1,8 +1,17 @@
 defmodule AtollWeb.XRPCFallback do
   use AtollWeb, :controller
 
+  def call(conn, {:error, :invite_listing_too_large}),
+    do:
+      error(
+        conn,
+        400,
+        "InvalidRequest",
+        "Invite history is too large; use administrator pagination."
+      )
+
   def call(conn, {:error, :admin_busy}),
-    do: error(conn, 503, "ServiceUnavailable", "Administrative update is busy; retry later.")
+    do: error(conn, 503, "ServiceUnavailable", "Invite service is busy; retry later.")
 
   def call(conn, {:error, :invalid_invite_code}),
     do: error(conn, 400, "InvalidInviteCode", "A valid, available invite code is required.")

@@ -164,7 +164,8 @@ The same `validate: true` restriction applies to batch requests.
 - [x] Hosted handle resolution through `/.well-known/atproto-did`.
 - [x] Configurable invite-required signup and migration, limited uses, durable redemption and local operator issuance.
 - [x] Separately authenticated HTTP invite issuance, bulk issuance, and disabling by code/account.
-- [ ] Admin/account invite listings, automatic invite allocation, custom-domain signup, phone verification, and abandoned signup reservation cleanup.
+- [x] Cursor-paginated admin invite listings and full-session account-owned invite listings.
+- [ ] Automatic invite allocation, custom-domain signup, phone verification, and abandoned signup reservation cleanup.
 - [x] Internal DID-scoped password credentials with salted Argon2id hashes, bounded input, redacted inspection, and duplicate protection.
 - [x] Shared configurable Cloudflare Worker email delivery client.
 - [x] Email confirmation requests and one-use confirmation through the Worker.
@@ -1170,7 +1171,7 @@ mix atoll.invites.create --uses 1
 The task prints JSON containing the code and use count. `--uses` accepts 1–10000;
 `--for-account DID` optionally attributes the invitation to an existing local
 account. This attribution does not authenticate the holder: the code is a bearer
-invitation. Codes contain 192 random bits, are stored for later account listings,
+invitation. Codes contain 192 random bits, are stored for account listings,
 and are redacted in schema inspection and request parameter logs. Treat the task's
 output as a secret to share with intended invitees. No invitations have been issued
 outside rollback-isolated tests by this implementation work.
@@ -1185,7 +1186,7 @@ operator API that blocks new reservations without cancelling existing ones.
 
 Migration redemption also rolls back with failed provisioning and service-token
 consumption. HTTP issuance/disabling uses the separate operator authentication
-below. Invite listings and automatic allocation remain pending; the Mix task and
+below. Automatic allocation remains pending; the Mix task and
 internal APIs are trusted operator operations.
 
 
@@ -1219,4 +1220,38 @@ bucket allows 60 admin attempts per five minutes, including failed authenticatio
 forwarded client addresses do not change it. Account-wide disabling has a
 one-second lock timeout and five-second statement timeout, rolling back on timeout.
 Invite codes are filtered from request-parameter logs. General account moderation,
-admin invite listings, and other administrative methods remain pending.
+and other administrative methods remain pending.
+
+
+### Invite-code listings
+
+`GET com.atproto.admin.getInviteCodes` uses operator Basic authentication. It accepts
+`sort=recent` (default) or `sort=usage`, `limit=1..500` (default 100), and an opaque
+`cursor`. Recent order uses creation time descending, with code as a deterministic
+tie-breaker. Usage order sorts by redemption count first. Cursors are tied to their
+sort mode. Pagination is a live view: new redemptions can move codes between usage
+pages. Cursor values are filtered from request logs because they contain code data.
+
+Pages include complete redemption histories, with at most 10,000 use records total;
+a page may contain fewer codes than its requested limit to stay within this bound.
+Continue through its returned cursor. The original code use allowance appears as
+`available`, matching the protocol; subtract `uses.length` to calculate remaining
+uses. Each use contains `usedBy` and `usedAt`. Codes also include `disabled`,
+`forAccount`, `createdBy`, and `createdAt`. Current codes are operator-issued, so
+`createdBy` is `admin`; unowned codes also have `forAccount: "admin"`.
+
+`GET com.atproto.server.getAccountInviteCodes` requires a full account session;
+app-password sessions are rejected. It returns only codes attributed to that DID.
+`includeUsed=false` excludes exhausted codes; the default includes them. Disabled
+codes remain visible with their disabled flag. `createAvailable` accepts a boolean,
+but currently creates nothing because automatic invite allocation is not configured.
+This unpaginated protocol method allows at most 1,000 codes and 10,000 use records;
+larger results return an error directing operators to admin pagination, never a
+silently truncated list.
+
+Both queries reject request bodies and unknown/malformed parameters, use no-store
+responses, and retain their respective admin/session rate limits. Listing reads
+serialize with invite mutations to keep counters and histories consistent, with
+one-second lock and five-second statement timeouts. Database indexes support the
+recent, usage and account-owned orderings. Histories include redemptions by deleted
+accounts because deletion does not refund invitations.
