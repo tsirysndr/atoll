@@ -594,7 +594,7 @@ locking protects shared objects when collectors overlap.
 - [x] Full repository export via `com.atproto.sync.getRepo` (in-memory, 64 MiB archive limit).
 - [x] Incremental repository exports using `since`, backed by per-repository revision block sets; unknown revisions return a full snapshot.
 - [x] Transactional per-repository block reference counts for quota/status inventory and garbage-collection lookups.
-- [ ] Revision-history compaction (revision block sets are currently retained indefinitely).
+- [x] Bounded operator revision-history compaction preserving current heads and retained replay dependencies.
 - [x] `getLatestCommit`, `getRepoStatus`, and paginated `listRepos` sync endpoints with persistent repository status.
 - [x] `com.atproto.sync.getRecord` compact signed existence and absence proofs.
 - [x] `com.atproto.sync.getBlocks` for current and retained historical repository blocks (1–100 CIDs; repeated `cids` query parameters).
@@ -630,7 +630,7 @@ their block indexes, then their commits and canonical trees are verified before
 granting access; shared storage or index membership alone is insufficient. A
 missing or foreign CID rejects the whole request. Historical verification can
 load multiple complete retained trees, so its cost grows with repository history;
-scalable membership indexes and history compaction remain pending.
+more scalable signed-tree membership verification remains pending.
 
 `GET /xrpc/com.atproto.server.getServiceAuth` normally requires an active account's access
 token and a stored repository signing key. Supply `aud` as a DID or DID with a
@@ -1118,7 +1118,8 @@ allowing unique blocks to expire while other accounts protect shared blocks.
 Raw blob bytes are deliberately handled by the separate blob cleanup queue.
 Standalone internal `Storage.put_node` writes have no ownership until attached to
 a repository; callers must not rely on unowned blocks surviving beyond the grace
-period. Revision compaction and normalized reference indexing remain pending.
+period. Operator revision compaction can release old ownership; normalized
+reference counts track the remaining revisions.
 
 
 ### Repository storage quotas
@@ -1138,10 +1139,9 @@ after limits are lowered. Limits do not retroactively remove existing data.
 
 Retained history consumes quota: deleting or replacing records does not release
 its old blocks and creates a new commit. At the limit, even record deletions can
-be rejected; raise the limit or delete the account until history compaction is
-available. Unowned blocks and raw blob bytes do not count toward repository quota.
-Usage currently scans and deduplicates retained revision inventories; incremental
-accounting is future performance work. Internal inventory is available through
+be rejected; compact eligible history or raise the limit. Unowned blocks and raw blob bytes do not count toward repository quota.
+Usage scans the normalized distinct-CID reference index and stored block sizes;
+constant-time byte accounting remains future performance work. Internal inventory is available through
 `Atoll.Repositories.Quota.usage/1`.
 
 
@@ -2531,7 +2531,7 @@ still reads the sizes of distinct stored blocks; it is not a constant-time count
 Revision arrays remain available for export and signed-tree membership verification.
 The derived index does not authorize public block access and does not replace
 cryptographic proof checks. No revisions are compacted or blocks deleted by this
-migration. Future compaction must also protect blocks needed by retained stream
+migration. Revision compaction preserves revisions needed by retained stream
 events before removing revision ownership.
 
 The migration locks revision writes while backfilling and installing the trigger;
@@ -2541,3 +2541,39 @@ index directly or disable its trigger. Downgrading drops the derived index and
 trigger while retaining the authoritative revision arrays. This improves ownership
 lookups and inventory scaling; full-history arrays and rebuilding the complete MST
 on writes remain scalability limitations.
+
+
+### Revision-history compaction
+
+Run an explicit bounded batch for one repository:
+
+```sh
+mix atoll.revisions.prune did:plc:YOUR_DID --limit 100 --retention-seconds 604800
+```
+
+This irreversibly removes up to 100 eligible historical revision inventories.
+Retention defaults to seven days and accepts one hour through one year. The current
+head is always preserved. Retained commit events pin both their commit revision
+and predecessor revision; sync events pin their commit revision. Event retention
+must release these pins before compaction can reclaim that history. No automatic
+revision-compaction scheduler is enabled.
+
+The command prints `pruned`, `indexed`, and `incomplete`. For rolling upgrades,
+it first indexes up to 1000 events missing dependencies. If indexing is incomplete,
+it commits only that indexing work and removes no revisions; repeat the command.
+Events and their dependency rows are immutable application data; do not edit or
+partially remove dependency rows manually. Deleting an event cascades its pins.
+
+Migration `20260926153249` backfills event dependencies while blocking event writes;
+plan a migration window for large histories. Existing revisions receive the migration
+time as their conservative age baseline. New revisions record their insertion time.
+Compaction holds the repository head lock and global event mutation lock, with
+one-second lock and five-second SQL statement timeouts. Failed batches roll back.
+
+Reference counts and quota usage update transactionally. Physical block deletion
+is a separate `atoll.blocks.prune` operation after its own grace period; shared
+owners remain protected. Historical reads lose access through compacted revisions,
+and exports with a compacted `since` revision fall back to a full current snapshot.
+Current exports and retained replay frames remain valid. Back up dependency rows
+alongside events and revisions. This does not reduce the full-tree rebuild cost of
+writes or eliminate complete block arrays for retained revisions.

@@ -460,7 +460,7 @@ defmodule Atoll.Repositories do
   Exports a consistent snapshot or the current blocks absent from a retained revision.
   Unknown revisions fall back to a full export. The current commit is always included.
   Deleted records are not sent; the new MST proves the current state. Revision block
-  sets are retained indefinitely for now; compaction and streaming are pending.
+  sets remain until operator compaction; streaming remains pending.
   """
   def export(did, since \\ nil, token \\ nil) do
     Repo.transaction(fn ->

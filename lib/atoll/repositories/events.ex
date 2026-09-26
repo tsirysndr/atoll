@@ -23,12 +23,15 @@ defmodule Atoll.Repositories.Events do
   def append!(kind, head, payload) do
     lock!()
 
-    Repo.insert!(%Event{
-      did: head.did,
-      kind: kind,
-      payload: CBOR.encode!(payload),
-      time: DateTime.utc_now()
-    })
+    event =
+      Repo.insert!(%Event{
+        did: head.did,
+        kind: kind,
+        payload: CBOR.encode!(payload),
+        time: DateTime.utc_now()
+      })
+
+    Atoll.Repositories.EventDependencies.track!(event, payload)
   end
 
   def latest_seq, do: EventRetention.bounds().latest
