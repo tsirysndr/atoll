@@ -20,17 +20,20 @@ defmodule Atoll.BlobsMinioTest do
     ]
 
     assert {:ok, %{status: 200}} = s3_request(:put, endpoint <> "/" <> bucket, "", config)
-    assert {:ok, _} = Repositories.create(@did, SigningKey.generate())
+    key = SigningKey.generate()
+    assert {:ok, _} = Repositories.create(@did, key)
 
     %{
       config: config,
+      key: key,
       opts: [storage: [backend: :s3, s3: config]],
       bucket_url: endpoint <> "/" <> bucket
     }
   end
 
   test "real signed uploads and downloads preserve empty, binary and maximum-sized blobs", %{
-    opts: opts
+    opts: opts,
+    key: key
   } do
     for bytes <- ["", <<0, 255, 1, 128>>, :crypto.strong_rand_bytes(5 * 1024 * 1024)] do
       cid = CID.create(bytes, :raw)
@@ -39,6 +42,11 @@ defmodule Atoll.BlobsMinioTest do
       assert Storage.get_block(cid) == {:error, :not_found}
       assert Repo.get_by!(Blob, did: @did, cid: cid).backend == :s3
       assert Blobs.stage(@did, bytes, "text/plain", opts) == {:ok, descriptor}
+      assert Blobs.get_public(@did, cid, opts) == {:error, :blob_not_found}
+      path = "com.example.record/" <> CID.to_base32(cid)
+      record = %{"$type" => "com.example.record", "attachment" => descriptor}
+      assert {:ok, _} = Repositories.apply_writes(@did, [{:put, path, record}], key)
+      assert {:ok, %{bytes: ^bytes}} = Blobs.get_public(@did, cid, opts)
     end
   end
 

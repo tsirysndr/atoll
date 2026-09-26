@@ -106,11 +106,16 @@ record Lexicons or grant access to account data.
 - [x] PostgreSQL and S3-compatible byte storage, with per-blob backend metadata and verified reads.
 - [x] Docker MinIO integration tests for signed storage operations, access isolation, and failure handling.
 - [ ] Authenticated blob upload endpoint and media-content validation.
-- [ ] Record references and promotion of staged blobs to public availability.
-- [ ] Blob retrieval and listing.
+- [x] Atomic nested record-reference tracking, ownership/metadata checks on writes, and withdrawal when the last reference is removed.
+- [x] Public `com.atproto.sync.getBlob` and paginated `listBlobs`, with `since` filtering, repository status checks, and restrictive content headers.
 - [ ] Blob lifecycle management and cleanup.
 
-Staged blobs are internal only. Public ATProto blob endpoints remain pending.
+Staged blobs are private until referenced by a current record with matching
+metadata. Imports may reference missing blobs; matching uploads make those blobs
+available. Removing the last reference removes account ownership and public
+access, while physical byte cleanup remains pending. Existing records predating
+the reference-index migration need to be rewritten or imported in a newer
+snapshot before their blobs become public. Authenticated uploads remain pending.
 
 ### Blob storage configuration
 

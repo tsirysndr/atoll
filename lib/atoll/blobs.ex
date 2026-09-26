@@ -3,14 +3,14 @@ defmodule Atoll.Blobs do
   Internal account-scoped blob staging, not an authorization boundary.
 
   Bytes are content-addressed in PostgreSQL or S3-compatible object storage. Ownership and
-  MIME metadata belong to each repository. All blobs are currently staged:
-  none may be served publicly until record-reference tracking is implemented.
+  MIME metadata belong to each repository. Public access requires a current
+  record reference with matching metadata and an active repository.
   MIME validation checks syntax only, not file contents. The local size limit is
   5 MiB per blob; streaming, quotas, expiration and garbage collection are pending.
   """
   import Ecto.Query
   alias Atoll.{CID, Repo, Repositories, Storage}
-  alias Atoll.Blobs.{Blob, S3}
+  alias Atoll.Blobs.{Blob, Reference, S3}
   alias Atoll.Repositories.{Events, Head}
   @max_size 5 * 1024 * 1024
 
@@ -19,7 +19,7 @@ defmodule Atoll.Blobs do
 
   def stage(did, bytes, content_type, opts) when is_binary(did) and is_binary(bytes) do
     with :ok <- size(bytes, Keyword.get(opts, :content_length)),
-         {:ok, mime} <- mime(content_type),
+         {:ok, mime} <- normalize_mime(content_type),
          {:ok, _} <- Repositories.get_active_head(did),
          cid = CID.create(bytes, :raw),
          {:ok, backend} <- prepare_backend(did, cid, bytes, storage(opts)) do
@@ -39,7 +39,10 @@ defmodule Atoll.Blobs do
               size: byte_size(bytes),
               staged_at: DateTime.utc_now()
             }
-          ], on_conflict: :nothing, conflict_target: [:did, :cid])
+          ],
+          on_conflict: :nothing,
+          conflict_target: [:did, :cid]
+        )
 
         # The first MIME declaration for this account/CID remains authoritative.
         descriptor(Repo.get_by!(Blob, did: did, cid: cid))
@@ -72,6 +75,50 @@ defmodule Atoll.Blobs do
   end
 
   def get_staged(_, _, _), do: {:error, :invalid_blob_cid}
+
+  @doc "Reads only a blob referenced by a current record of an active repository."
+  def get_public(did, cid, opts \\ []) do
+    Repo.transaction(fn ->
+      active_head!(did, "FOR SHARE")
+
+      unless Repo.exists?(from b in public_query(did), where: b.cid == ^cid),
+        do: Repo.rollback(:blob_not_found)
+
+      case get_staged(did, cid, opts) do
+        {:ok, result} -> result
+        {:error, reason} -> Repo.rollback(reason)
+      end
+    end)
+  end
+
+  @doc "Lists available referenced blobs with an exclusive CID cursor and optional reference revision."
+  def list_public(did, limit, cursor \\ nil, since \\ nil) when limit in 1..1000 do
+    Repo.transaction(fn ->
+      active_head!(did, "FOR SHARE")
+      query = public_query(did)
+      query = if cursor, do: from(b in query, where: b.cid > ^cursor), else: query
+      query = if since, do: from([b, r] in query, where: r.rev > ^since), else: query
+
+      rows =
+        Repo.all(
+          from b in query, select: b.cid, distinct: true, order_by: b.cid, limit: ^(limit + 1)
+        )
+
+      page = Enum.take(rows, limit)
+      result = %{cids: Enum.map(page, &CID.to_base32/1)}
+
+      if length(rows) > limit,
+        do: Map.put(result, :cursor, CID.to_base32(List.last(page))),
+        else: result
+    end)
+  end
+
+  defp public_query(did) do
+    from b in Blob,
+      join: r in Reference,
+      on: r.did == b.did and r.cid == b.cid and r.mime_type == b.mime_type and r.size == b.size,
+      where: b.did == ^did
+  end
 
   defp storage(opts),
     do:
@@ -123,7 +170,8 @@ defmodule Atoll.Blobs do
     end
   end
 
-  defp mime(value) when is_binary(value) and byte_size(value) <= 255 do
+  @doc false
+  def normalize_mime(value) when is_binary(value) and byte_size(value) <= 255 do
     # Accept a concrete media type only; parameters and wildcard ranges are not blob metadata.
     if Regex.match?(
          ~r/\A[a-zA-Z0-9][a-zA-Z0-9!#$&^_.+-]*\/[a-zA-Z0-9][a-zA-Z0-9!#$&^_.+-]*\z/,
@@ -131,7 +179,7 @@ defmodule Atoll.Blobs do
        ), do: {:ok, String.downcase(value)}, else: {:error, :invalid_mime_type}
   end
 
-  defp mime(_), do: {:error, :invalid_mime_type}
+  def normalize_mime(_), do: {:error, :invalid_mime_type}
 
   defp active_head!(did, lock) do
     query = from h in Head, where: h.did == ^did

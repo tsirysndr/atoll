@@ -30,11 +30,13 @@ defmodule AtollWeb.Router do
     get "/com.atproto.sync.getLatestCommit", SyncController, :latest_commit
     get "/com.atproto.sync.getRepoStatus", SyncController, :repo_status
     get "/com.atproto.sync.listRepos", SyncController, :list_repos
+    get "/com.atproto.sync.listBlobs", BlobController, :list_blobs
   end
 
   scope "/xrpc", AtollWeb do
     get "/com.atproto.sync.getRepo", RepoController, :get_repo
     get "/com.atproto.sync.getRecord", SyncController, :get_record
     get "/com.atproto.sync.getBlocks", SyncController, :get_blocks
+    get "/com.atproto.sync.getBlob", BlobController, :get_blob
   end
 end

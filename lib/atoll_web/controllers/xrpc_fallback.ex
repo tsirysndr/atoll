@@ -19,6 +19,9 @@ defmodule AtollWeb.XRPCFallback do
   def call(conn, {:error, :record_not_found}),
     do: error(conn, 400, "RecordNotFound", "Record not found.")
 
+  def call(conn, {:error, :blob_not_found}),
+    do: error(conn, 400, "BlobNotFound", "Blob is not available in the current repository.")
+
   def call(conn, {:error, :unverified_handle}),
     do: error(conn, 400, "InvalidRequest", "Unable to verify repository handle.")
 

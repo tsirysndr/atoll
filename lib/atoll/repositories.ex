@@ -63,6 +63,7 @@ defmodule Atoll.Repositories do
             Repo.rollback(:stale_revision)
 
           true ->
+            Atoll.Blobs.References.import!(did, snapshot.records, snapshot.blocks, snapshot.rev)
             Enum.each(snapshot.blocks, fn {cid, bytes} -> :ok = Storage.put_block(cid, bytes) end)
             Repo.delete_all(from r in Record, where: r.did == ^did)
 
@@ -128,6 +129,7 @@ defmodule Atoll.Repositories do
         updated = Enum.reduce(prepared, previous_records, &apply_operation!/2)
         {:ok, tree} = MST.new(updated)
         {:ok, rev} = TID.next(head.rev)
+        Atoll.Blobs.References.apply_writes!(did, prepared, rev)
         commit = persist_commit!(did, tree, rev, key)
         Enum.each(prepared, &persist_record!(did, &1))
         updated_head = head |> Ecto.Changeset.change(head: commit.cid, rev: rev) |> Repo.update!()
