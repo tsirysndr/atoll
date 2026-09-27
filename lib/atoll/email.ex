@@ -20,8 +20,8 @@ defmodule Atoll.Email do
         retry: false,
         decode_body: false,
         connect_options: [timeout: 3_000],
+        pool_timeout: 3_000,
         receive_timeout: 5_000,
-        finch: [pool_timeout: 3_000, request_timeout: 10_000],
         into: fn {:data, _data}, acc -> {:cont, acc} end
       ]
 
