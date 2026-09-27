@@ -806,6 +806,7 @@ locking protects shared objects when collectors overlap.
 - [x] Opt-in supervised event-retention scheduling with bounded batches, timeouts, and outcome telemetry.
 - [ ] Higher-throughput sequencing (writes currently share a PostgreSQL transaction advisory lock to preserve commit order).
 - [x] `com.atproto.sync.subscribeRepos` binary WebSocket stream with exclusive resume cursors, live delivery, and account status events.
+- [x] Configurable per-node and per-IP live firehose quotas with monitored ownership, pending-upgrade expiry and fail-closed restarts.
 - [x] Invalid/future cursor errors, bounded replay backlog, idle pings, and current-availability filtering for repository data.
 - [x] Wire-format commit, sync, account, and identity event encoding, plus CBOR stream/error framing.
 - [x] Commit CARs with compact MST boundaries, changed records, prior roots, and operation metadata; oversized commits fall back to commit-only sync messages.
@@ -966,8 +967,30 @@ Idle connections poll PostgreSQL every 500 ms and send a ping every 15 seconds.
 Connections more than 10,000 persisted events behind receive `ConsumerTooSlow`
 and close; sequence gaps do not count toward this limit. Replay skips commit and
 sync data for currently inactive repositories, but still emits account and identity events.
-Internet deployment requires WSS termination; connection quotas,
-and federation interoperability testing remain pending.
+Internet deployment requires WSS termination; federation interoperability testing
+remains pending.
+
+Firehose admission defaults to 1024 simultaneous connections per node and 16 per
+client IP. Configure `:firehose_max_connections` and
+`:firehose_max_connections_per_ip`, or set `ATOLL_FIREHOSE_MAX_CONNECTIONS` and
+`ATOLL_FIREHOSE_MAX_CONNECTIONS_PER_IP`. Each accepts 1–100000; unset environment
+variables preserve application configuration, invalid environment values reject
+startup, and invalid application values fail admission with HTTP 503. Limits are
+checked on each new admission; lowering them does not evict existing connections.
+These are live-connection quotas, separate from XRPC request budgets. They remain
+node-local regardless of the selected memory/PostgreSQL/Redis request-rate backend.
+Scale the node limits to the deployment and its load balancer.
+
+Pending upgrades count toward both limits and expire after 30 seconds if the
+socket never claims them. Failed handshakes release their slots, and process
+monitors reclaim slots after disconnects or crashes. At capacity, the handshake
+returns HTTP 429 `RateLimitExceeded` with `Retry-After: 1`; retry with backoff.
+Quota-manager unavailability returns HTTP 503. Active sockets monitor the manager
+and close with service-restart semantics if it exits, rather than continuing
+without tracked capacity. A stale or expired upgrade reservation closes with
+WebSocket code 1013. Peer identity uses the existing trusted-proxy IP policy;
+untrusted forwarding headers do not grant a different quota. These controls do
+not replace TCP connection limits or WSS termination at the ingress.
 
 Identity refreshes announce changes in the resolved handle, signing key, or PDS
 endpoint. Unverified handles are emitted as `handle.invalid`; failed DID lookups

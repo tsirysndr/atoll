@@ -70,6 +70,75 @@ defmodule AtollWeb.RepoStreamTransportTest do
     :gen_tcp.close(oldest)
   end
 
+  test "live connection quotas reject upgrades until the socket releases its slot", %{port: port} do
+    previous = Application.fetch_env!(:atoll, :firehose_max_connections_per_ip)
+    Application.put_env(:atoll, :firehose_max_connections_per_ip, 1)
+    on_exit(fn -> Application.put_env(:atoll, :firehose_max_connections_per_ip, previous) end)
+    socket = connect(port, "0")
+    state = :sys.get_state(AtollWeb.StreamConnections)
+    [%{owner: owner}] = Map.values(state.entries)
+    monitor = Process.monitor(owner)
+
+    {:ok, rejected} =
+      :gen_tcp.connect({127, 0, 0, 1}, port, [:binary, active: false, packet: :http_bin], 2000)
+
+    on_exit(fn -> :gen_tcp.close(rejected) end)
+
+    :ok =
+      :gen_tcp.send(
+        rejected,
+        "GET /xrpc/com.atproto.sync.subscribeRepos HTTP/1.1\r\nHost: localhost\r\nX-Forwarded-For: 8.8.8.8\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n"
+      )
+
+    assert {:ok, {:http_response, {1, 1}, 429, _}} = :gen_tcp.recv(rejected, 0, 2000)
+    headers = receive_headers(rejected, [])
+
+    assert Enum.any?(headers, fn {name, value} ->
+             String.downcase(to_string(name)) == "retry-after" and value == "1"
+           end)
+
+    :gen_tcp.close(socket)
+    assert_receive {:DOWN, ^monitor, :process, ^owner, _}, 2000
+    assert :sys.get_state(AtollWeb.StreamConnections).entries == %{}
+    resumed = connect(port, "0")
+    :gen_tcp.close(resumed)
+  end
+
+  test "firehose environment limits override configuration only when explicitly set" do
+    variables = [
+      {"ATOLL_FIREHOSE_MAX_CONNECTIONS", :firehose_max_connections},
+      {"ATOLL_FIREHOSE_MAX_CONNECTIONS_PER_IP", :firehose_max_connections_per_ip}
+    ]
+
+    for {variable, _} <- variables do
+      previous = System.get_env(variable)
+
+      on_exit(fn ->
+        if previous, do: System.put_env(variable, previous), else: System.delete_env(variable)
+      end)
+
+      System.delete_env(variable)
+    end
+
+    config = Config.Reader.read!("config/runtime.exs", env: :test, target: :host)
+
+    for {variable, key} <- variables do
+      refute Keyword.has_key?(config[:atoll], key)
+      System.put_env(variable, "7")
+
+      assert Config.Reader.read!("config/runtime.exs", env: :test, target: :host)[:atoll][key] ==
+               7
+
+      System.put_env(variable, "0")
+
+      assert_raise ArgumentError, fn ->
+        Config.Reader.read!("config/runtime.exs", env: :test, target: :host)
+      end
+
+      System.delete_env(variable)
+    end
+  end
+
   defp connect(port, cursor) do
     {:ok, socket} =
       :gen_tcp.connect({127, 0, 0, 1}, port, [:binary, active: false, packet: :http_bin], 2000)

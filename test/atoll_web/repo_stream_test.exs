@@ -19,9 +19,15 @@ defmodule AtollWeb.RepoStreamTest do
   test "upgrade preserves cursor and rejects malformed handshakes", %{conn: conn} do
     response = conn |> handshake() |> get(@path <> "?cursor=0")
     assert response.state == :upgraded
-    assert_receive {_, :upgrade, {:websocket, {Socket, {:ok, 0}, _}}}
+    assert_receive {_, :upgrade, {:websocket, {Socket, %{cursor: {:ok, 0}, lease: lease}, _}}}
+    AtollWeb.StreamConnections.release(lease)
     bad = conn |> put_req_header("upgrade", "websocket") |> get(@path)
     assert json_response(bad, 400)["error"] == "InvalidRequest"
+    owner = self()
+
+    refute Enum.any?(:sys.get_state(AtollWeb.StreamConnections).entries, fn {_, entry} ->
+             entry.owner == owner
+           end)
   end
 
   test "invalid and duplicate cursors are rejected inside the upgraded stream", %{conn: conn} do
@@ -40,10 +46,26 @@ defmodule AtollWeb.RepoStreamTest do
           Enum.map_join(1..257, "&", &"key#{&1}=value")
         ] do
       assert (conn |> handshake() |> get(@path <> "?" <> query)).state == :upgraded
-      assert_receive {_, :upgrade, {:websocket, {Socket, {:error, :invalid_cursor} = cursor, _}}}
-      assert {:stop, :normal, 1000, {:binary, frame}, _} = Socket.init(cursor)
+
+      assert_receive {_, :upgrade,
+                      {:websocket, {Socket, %{cursor: {:error, :invalid_cursor}} = cursor, _}}}
+
+      assert {:stop, :normal, 1000, {:binary, frame}, state} = Socket.init(cursor)
+      Socket.terminate(:normal, state)
       assert error_body(frame)["error"] == "InvalidRequest"
     end
+  end
+
+  test "streams stop after their quota manager exits" do
+    manager = start_supervised!({AtollWeb.StreamConnections, name: nil})
+    {:ok, lease} = AtollWeb.StreamConnections.reserve(:test, manager)
+    {:ok, state} = Socket.init(%{cursor: {:ok, nil}, lease: lease})
+    monitor = state.quota_monitor
+    stop_supervised!(AtollWeb.StreamConnections)
+    assert_receive {:DOWN, ^monitor, :process, ^manager, _} = message
+    assert {:stop, {:shutdown, :restart}, ^state} = Socket.handle_info(message, state)
+    Socket.terminate(:shutdown, state)
+    assert {:stop, :normal, 1013, %{}} = Socket.init(%{cursor: {:ok, nil}, lease: lease})
   end
 
   test "replay is exclusive and live polling sees subsequent commits" do

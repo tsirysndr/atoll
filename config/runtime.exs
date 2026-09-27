@@ -358,3 +358,12 @@ end
 if value = System.get_env("ATOLL_METRICS_ENABLED") do
   config :atoll, :metrics_enabled, Atoll.Metrics.enabled_from_env!(value)
 end
+
+for {variable, key} <- [
+      {"ATOLL_FIREHOSE_MAX_CONNECTIONS", :firehose_max_connections},
+      {"ATOLL_FIREHOSE_MAX_CONNECTIONS_PER_IP", :firehose_max_connections_per_ip}
+    ] do
+  if value = System.get_env(variable) do
+    config :atoll, key, AtollWeb.StreamConnections.limit_from_env!(value)
+  end
+end

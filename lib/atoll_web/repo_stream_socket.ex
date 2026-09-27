@@ -8,6 +8,24 @@ defmodule AtollWeb.RepoStreamSocket do
   alias Atoll.Repositories.{EventEncoder, EventRetention, Events}
 
   @impl true
+  def init(%{cursor: cursor, lease: {manager, _} = lease}) do
+    monitor = Process.monitor(manager)
+
+    if AtollWeb.StreamConnections.claim(lease) == :ok do
+      result = init(cursor)
+      last = tuple_size(result) - 1
+
+      put_elem(
+        result,
+        last,
+        Map.merge(elem(result, last), %{lease: lease, quota_monitor: monitor})
+      )
+    else
+      Process.demonitor(monitor, [:flush])
+      {:stop, :normal, 1013, %{}}
+    end
+  end
+
   def init({:error, :invalid_cursor}), do: stop("InvalidRequest", "Invalid cursor", %{})
 
   def init({:ok, cursor}) do
@@ -29,6 +47,9 @@ defmodule AtollWeb.RepoStreamSocket do
   def handle_in(_, state), do: {:ok, state}
 
   @impl true
+  def handle_info({:DOWN, monitor, :process, _, _}, %{quota_monitor: monitor} = state),
+    do: {:stop, {:shutdown, :restart}, state}
+
   def handle_info(:drain, state) do
     floor = EventRetention.bounds().floor
     if state.cursor < floor, do: outdated(state, floor), else: drain(state)
@@ -73,6 +94,8 @@ defmodule AtollWeb.RepoStreamSocket do
   @impl true
   def terminate(_, state) do
     if timer = state[:timer], do: Process.cancel_timer(timer)
+    if monitor = state[:quota_monitor], do: Process.demonitor(monitor, [:flush])
+    if lease = state[:lease], do: AtollWeb.StreamConnections.release(lease)
     :ok
   end
 

@@ -15,6 +15,7 @@ defmodule Atoll.Application do
        strategy: :one_for_one,
        max_children: Application.get_env(:atoll, :import_concurrency, 16)},
       Atoll.Accounts.SessionLimiter,
+      AtollWeb.StreamConnections,
       {Atoll.Identity.Cache,
        name: Atoll.Identity.Cache,
        ttl_ms: Application.get_env(:atoll, :did_cache_ttl_seconds, 60) * 1000},

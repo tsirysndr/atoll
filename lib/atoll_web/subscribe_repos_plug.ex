@@ -22,18 +22,33 @@ defmodule AtollWeb.SubscribeReposPlug do
         conn |> put_resp_header("upgrade", "websocket") |> error(426, "UpgradeRequired")
 
       true ->
-        cursor = parse_cursor(conn.query_string)
+        case AtollWeb.StreamConnections.reserve(conn.remote_ip) do
+          {:ok, lease} ->
+            upgrade(conn, parse_cursor(conn.query_string), lease)
 
-        conn
-        |> WebSockAdapter.upgrade(AtollWeb.RepoStreamSocket, cursor,
-          timeout: 60_000,
-          max_frame_size: 65_536,
-          compress: false
-        )
-        |> halt()
+          {:error, :full} ->
+            conn |> put_resp_header("retry-after", "1") |> error(429, "RateLimitExceeded")
+
+          {:error, :unavailable} ->
+            conn |> put_resp_header("retry-after", "1") |> error(503, "ServiceUnavailable")
+        end
     end
   rescue
     WebSockAdapter.UpgradeError -> error(conn, 400, "InvalidRequest")
+  end
+
+  defp upgrade(conn, cursor, lease) do
+    conn
+    |> WebSockAdapter.upgrade(AtollWeb.RepoStreamSocket, %{cursor: cursor, lease: lease},
+      timeout: 60_000,
+      max_frame_size: 65_536,
+      compress: false
+    )
+    |> halt()
+  rescue
+    error ->
+      AtollWeb.StreamConnections.release(lease)
+      reraise error, __STACKTRACE__
   end
 
   defp parse_cursor(query) do
@@ -54,6 +69,7 @@ defmodule AtollWeb.SubscribeReposPlug do
 
   defp error(conn, status, name) do
     conn
+    |> put_resp_header("cache-control", "no-store")
     |> put_resp_content_type("application/json")
     |> send_resp(status, Jason.encode!(%{error: name}))
     |> halt()
