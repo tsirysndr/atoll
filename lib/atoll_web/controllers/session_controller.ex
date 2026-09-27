@@ -121,9 +121,17 @@ defmodule AtollWeb.SessionController do
   end
 
   def status(conn, _params) do
-    with {:ok, token} <- bearer(conn),
-         {:ok, status} <- Atoll.Accounts.Status.get(token) do
-      json(conn, status)
+    if AtollWeb.OAuthResource.attempt?(conn) do
+      AtollWeb.OAuthResource.read_with_resolution(
+        conn,
+        &Atoll.Accounts.Status.resolve/1,
+        &Atoll.Accounts.Status.oauth_inventory/2
+      )
+    else
+      with {:ok, token} <- bearer(conn),
+           {:ok, status} <- Atoll.Accounts.Status.get(token) do
+        json(conn, status)
+      end
     end
   end
 

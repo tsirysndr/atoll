@@ -428,6 +428,7 @@ mutation. Deletes and empty batches need no record schema, even with `validate: 
 - [x] DPoP blob uploads with transitional generic scope, pre-body proof admission, and transactional authorization rechecks.
 - [x] DPoP service-token issuance with current generic/chat scope checks and authorization locks held through signing.
 - [x] DPoP authentication on public repository/blob export routes without granting inactive-account export privileges.
+- [x] DPoP account-status and missing-blob inventory, scoped to the authenticated account with authorization rechecks.
 - [ ] OAuth authorization for remaining resource routes.
 - [x] Localhost virtual public-client metadata, loopback callback matching, and flow integration without metadata network requests.
 - [ ] OAuth nonce challenges and proof admission integrated into remaining authorization/resource server routes.
@@ -966,12 +967,14 @@ once with a referencing `recordUri`. Uploading the matching bytes and MIME type
 removes that blob from the results. Metadata mismatches remain listed. This is
 an inventory of current database references, not a physical storage integrity
 scan; missing or corrupted backend objects require separate operational checks.
-It accepts active or deactivated accounts and shares the session endpoint's
+Legacy access JWTs accept active or deactivated accounts; DPoP OAuth access tokens
+require an active account. Both share the session endpoint's
 300-request per-IP, per-five-minute limit. Pagination reflects current state
 rather than a snapshot across requests.
 
-`GET /xrpc/com.atproto.server.checkAccountStatus` accepts an existing access token,
-including for inactive accounts, and reports activation, current commit/revision,
+`GET /xrpc/com.atproto.server.checkAccountStatus` accepts a legacy access JWT
+(including for inactive accounts) or a DPoP OAuth access token for an active account,
+and reports activation, current commit/revision,
 stored blocks referenced by retained repository revisions, current record count,
 distinct referenced blob CIDs, and account-owned blob count (including staged
 uploads). Counts describe database inventory, not backend byte integrity.
@@ -4943,9 +4946,9 @@ rate-limit errors, configured-origin binding, and rollback persistence. An
 independent-connection test verifies all four row locks remain held through the
 read and that later reads fail after session deletion. Resource
 challenges follow [RFC 9449 sections 7 and 9](https://www.rfc-editor.org/rfc/rfc9449.html#section-7).
-Repository record writes are integrated as described below. Blob writes, service
-authorization, exports, and other resource routes still need OAuth integration
-and endpoint-specific scope enforcement.
+Repository writes, blob uploads, service authorization, exports and account
+inventory are integrated as described below. Other resource routes and
+fine-grained permissions still need endpoint-specific OAuth authorization.
 
 
 ### Periodic confidential-client key checks
@@ -5171,6 +5174,38 @@ a missing-blob error. Tests cover identity-only scope, raw blob responses, CAR
 roots, publication visibility, foreign active repositories, inactive targets,
 revocation, replay, target binding and Bearer downgrade rejection. The legacy
 export tests continue to exercise owner/operator and anonymous access.
+
+### DPoP account inventory
+
+`GET /xrpc/com.atproto.repo.listMissingBlobs` and
+`GET /xrpc/com.atproto.server.checkAccountStatus` accept OAuth access tokens with
+the base `atproto` scope. The inventory always belongs to the authenticated DID;
+query parameters cannot select another account. Both routes validate the DPoP
+resource nonce, key, access-token hash, method and target and consume the proof
+before inventory reads. Responses retain no-store, CORS and resource nonce headers.
+The existing aggregate XRPC and session-query budgets apply.
+
+Missing-blob results use the same account ownership, metadata matching, takedown
+exclusion, deduplication and exclusive CID pagination as legacy sessions. Account,
+source session, OAuth grant and access-token locks remain held through the query.
+
+Account status first validates proof and current authorization, resolves the DID
+with no authorization locks held, then reacquires all four locks and rechecks
+account status, token/grant/source-session expiry, bindings and scopes before
+reading inventory. Revocation or expiry during remote resolution prevents the
+response; the already admitted proof stays consumed. DID resolution failure still
+returns `validDid: false`, as with legacy sessions. Only active accounts can use
+these OAuth routes; legacy migration/status access retains its existing policy.
+
+Tests cover identity-only scopes, cross-account isolation, missing-blob pagination
+and metadata/takedown filtering, status counts, failed DID resolution, replay,
+nonce challenges, target binding, Bearer downgrade rejection and revocation.
+Expiry, account changes and scope changes during resolution are rechecked. An
+independent-connection test confirms locks are released during resolution and held
+through the final read. The supported OAuth inventory policy follows the reference
+PDS implementations of
+[listMissingBlobs](https://github.com/bluesky-social/atproto/blob/main/packages/pds/src/api/com/atproto/repo/listMissingBlobs.ts)
+and [checkAccountStatus](https://github.com/bluesky-social/atproto/blob/main/packages/pds/src/api/com/atproto/server/checkAccountStatus.ts).
 
 ### Owner management of OAuth sessions
 

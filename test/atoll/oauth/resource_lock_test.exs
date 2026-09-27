@@ -5,6 +5,14 @@ defmodule Atoll.OAuth.ResourceLockTest do
   alias Atoll.Accounts.Session, as: AccountSession
 
   test "authorization rows remain locked through a read and deletion prevents later reads" do
+    assert_read_locks(:direct)
+  end
+
+  test "resolved reads release authorization locks for resolution and reacquire them for inventory" do
+    assert_read_locks(:resolved)
+  end
+
+  defp assert_read_locks(mode) do
     did = "did:plc:resourcelock#{System.unique_integer([:positive])}"
     key = Atoll.SigningKey.generate()
     {:ok, tree} = Atoll.MST.new()
@@ -94,7 +102,9 @@ defmodule Atoll.OAuth.ResourceLockTest do
     task =
       Task.Supervisor.async_nolink(supervisor, fn ->
         Ecto.Adapters.SQL.Sandbox.unboxed_run(Repo, fn ->
-          Resource.read(
+          read(
+            mode,
+            parent,
             token,
             [signed],
             url,
@@ -111,6 +121,28 @@ defmodule Atoll.OAuth.ResourceLockTest do
           )
         end)
       end)
+
+    if mode == :resolved do
+      assert_receive {:resolving, resolver}, 5000
+
+      try do
+        Ecto.Adapters.SQL.Sandbox.unboxed_run(Repo, fn ->
+          Repo.transaction(fn ->
+            for {sql, value} <- [
+                  {"SELECT did FROM repositories WHERE did = $1 FOR UPDATE NOWAIT", did},
+                  {"SELECT id FROM account_sessions WHERE id = $1 FOR UPDATE NOWAIT", source_id},
+                  {"SELECT id FROM oauth_sessions WHERE id = $1 FOR UPDATE NOWAIT", session_id},
+                  {"SELECT digest FROM oauth_access_tokens WHERE digest = $1 FOR UPDATE NOWAIT",
+                   digest}
+                ] do
+              assert %{num_rows: 1} = Repo.query!(sql, [value], log: false)
+            end
+          end)
+        end)
+      after
+        send(resolver, :finish_resolve)
+      end
+    end
 
     assert_receive {:reading, reader}, 5000
 
@@ -143,6 +175,32 @@ defmodule Atoll.OAuth.ResourceLockTest do
       assert {:error, :invalid_token} =
                Resource.read(token, [signed], url, fn _ -> flunk("revoked read") end, opts)
     end)
+  end
+
+  defp read(:direct, _parent, token, headers, url, reader, opts),
+    do: Resource.read(token, headers, url, reader, opts)
+
+  defp read(:resolved, parent, token, headers, url, reader, opts) do
+    Resource.read_with_resolution(
+      token,
+      headers,
+      url,
+      fn principal ->
+        refute Repo.in_transaction?()
+        send(parent, {:resolving, self()})
+
+        receive do
+          :finish_resolve -> principal.did
+        after
+          5000 -> flunk("resolution was not released")
+        end
+      end,
+      fn principal, resolved_did ->
+        assert principal.did == resolved_did
+        reader.(principal)
+      end,
+      opts
+    )
   end
 
   defp random, do: Base.url_encode64(:crypto.strong_rand_bytes(32), padding: false)

@@ -21,11 +21,24 @@ defmodule AtollWeb.BlobController do
   def upload(_conn, _params), do: {:error, :auth_required}
 
   def list_missing(conn, params) do
-    with {:ok, token} <- AtollWeb.BearerToken.get(conn),
-         {:ok, limit} <- limit(params["limit"]),
-         {:ok, cursor} <- cursor(params["cursor"]),
-         {:ok, result} <- Atoll.Blobs.Missing.list(token, limit, cursor) do
-      json(conn, result)
+    if AtollWeb.OAuthResource.attempt?(conn) do
+      case AtollWeb.OAuthResource.read_result(conn, fn principal ->
+             with {:ok, limit} <- limit(params["limit"]),
+                  {:ok, cursor} <- cursor(params["cursor"]) do
+               {:ok, Atoll.Blobs.Missing.inventory(principal.did, limit, cursor)}
+             end
+           end) do
+        {:ok, {:ok, result}} -> json(conn, result)
+        {:ok, error} -> error
+        {:error, conn} -> conn
+      end
+    else
+      with {:ok, token} <- AtollWeb.BearerToken.get(conn),
+           {:ok, limit} <- limit(params["limit"]),
+           {:ok, cursor} <- cursor(params["cursor"]),
+           {:ok, result} <- Atoll.Blobs.Missing.list(token, limit, cursor) do
+        json(conn, result)
+      end
     end
   end
 

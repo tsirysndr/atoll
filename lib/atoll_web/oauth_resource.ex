@@ -57,6 +57,24 @@ defmodule AtollWeb.OAuthResource do
     end
   end
 
+  @doc "Resolve external data between initial proof admission and a final locked resource read."
+  def read_with_resolution(conn, resolver, reader, opts \\ []) do
+    with {:ok, token} <- token(get_req_header(conn, "authorization")),
+         {:ok, result} <-
+           Resource.read_with_resolution(
+             token,
+             get_req_header(conn, "dpop"),
+             AtollWeb.Endpoint.url() <> conn.request_path,
+             resolver,
+             reader,
+             opts
+           ) do
+      conn |> put_resp_content_type("application/json") |> send_resp(200, Jason.encode!(result))
+    else
+      {:error, reason} -> failure(conn, reason)
+    end
+  end
+
   def prepare_write(conn) do
     with {:ok, token} <- token(get_req_header(conn, "authorization")),
          do:

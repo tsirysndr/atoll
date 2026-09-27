@@ -6,8 +6,13 @@ defmodule AtollWeb.OAuthResourceTest do
   @path "/xrpc/com.atproto.server.getSession"
   @id "https://app.example.com/metadata.json"
 
-  setup %{conn: conn} do
-    for name <- [:oauth_nonce_secret, :oauth_transport_options, :key_encryption_key] do
+  setup %{conn: conn} = context do
+    for name <- [
+          :oauth_nonce_secret,
+          :oauth_transport_options,
+          :key_encryption_key,
+          :identity_resolution_options
+        ] do
       prior = Application.fetch_env(:atoll, name)
 
       on_exit(fn ->
@@ -16,6 +21,20 @@ defmodule AtollWeb.OAuthResourceTest do
           :error -> Application.delete_env(:atoll, name)
         end
       end)
+    end
+
+    if context[:oauth_inventory] do
+      endpoint = Application.fetch_env!(:atoll, AtollWeb.Endpoint)
+
+      AtollWeb.Endpoint.config_change(
+        [
+          {AtollWeb.Endpoint,
+           Keyword.put(endpoint, :url, scheme: "https", host: "pds.example.com", port: 443)}
+        ],
+        []
+      )
+
+      on_exit(fn -> AtollWeb.Endpoint.config_change([{AtollWeb.Endpoint, endpoint}], []) end)
     end
 
     Application.put_env(:atoll, :oauth_nonce_secret, :crypto.strong_rand_bytes(32))
@@ -52,7 +71,7 @@ defmodule AtollWeb.OAuthResourceTest do
       "code_challenge" => :crypto.hash(:sha256, verifier) |> Base.url_encode64(padding: false)
     }
 
-    did = "did:plc:httptoken"
+    did = "did:plc:aaaaaaaaaaaaaaaaaaaaaaaa"
     Application.put_env(:atoll, :key_encryption_key, :crypto.strong_rand_bytes(32))
     {:ok, _} = Repositories.create_managed(did)
     session_options = [secret: :crypto.strong_rand_bytes(32), audience: "did:web:pds.example.com"]
@@ -517,6 +536,245 @@ defmodule AtollWeb.OAuthResourceTest do
 
     assert {:ok, _} = Sessions.authenticate(c.owner_pair.access_jwt, c.owner_opts)
   end
+
+  @tag :oauth_inventory
+  test "OAuth missing-blob inventory is account scoped, paginated and available with atproto scope",
+       c do
+    Repo.update_all(AccessToken, set: [scope: "atproto"])
+    other = "did:plc:otherinventory"
+    {:ok, _} = Repositories.create_managed(other)
+    missing_reference(c.did, "a", "first")
+    missing_reference(c.did, "duplicate", "first")
+    missing_reference(c.did, "b", "second")
+    missing_reference(other, "private", "another-account")
+    {:ok, _} = Atoll.Blobs.stage(other, "first", "text/plain")
+    # Wrong metadata does not satisfy the owning account's reference.
+    {:ok, _} = Atoll.Blobs.stage(c.did, "second", "application/octet-stream")
+    hidden = missing_reference(c.did, "hidden", "taken-down")
+    Repo.insert!(%Atoll.Blobs.Takedown{did: c.did, cid: hidden, ref: "moderated"})
+
+    first = inventory_request(c, "repo.listMissingBlobs", %{"limit" => "1", "did" => other})
+    assert get_resp_header(first, "cache-control") == ["no-store"]
+    assert get_resp_header(first, "dpop-nonce") != []
+    first = json_response(first, 200)
+
+    second =
+      inventory_request(c, "repo.listMissingBlobs", %{"limit" => "1", "cursor" => first["cursor"]})
+      |> json_response(200)
+
+    refute Map.has_key?(second, "cursor")
+
+    expected =
+      for {path, bytes} <- [{"a", "first"}, {"b", "second"}] do
+        %{
+          "cid" => Atoll.CID.to_base32(Atoll.CID.create(bytes, :raw)),
+          "recordUri" => "at://" <> c.did <> "/com.example.record/" <> path
+        }
+      end
+
+    assert MapSet.new(first["blobs"] ++ second["blobs"]) == MapSet.new(expected)
+    {:ok, _} = Atoll.Blobs.stage(c.did, "first", "text/plain")
+    assert length(json_response(inventory_request(c, "repo.listMissingBlobs"), 200)["blobs"]) == 1
+
+    for params <- [%{"limit" => "0"}, %{"limit" => "1001"}, %{"cursor" => "bad"}] do
+      assert inventory_request(c, "repo.listMissingBlobs", params).status == 400
+    end
+  end
+
+  @tag :oauth_inventory
+  test "OAuth account status resolves outside locks and returns only the authenticated inventory",
+       c do
+    Repo.update_all(AccessToken, set: [scope: "atproto"])
+    {:ok, key} = Atoll.KeyVault.fetch(c.did)
+    {:ok, blob} = Atoll.Blobs.stage(c.did, "owned", "text/plain")
+
+    {:ok, head} =
+      Repositories.apply_writes(
+        c.did,
+        [{:put, "com.example.record/a", %{"$type" => "com.example.record", "blob" => blob}}],
+        key
+      )
+
+    other = "did:plc:otherstatus"
+    {:ok, _} = Repositories.create_managed(other)
+    {:ok, _} = Atoll.Blobs.stage(other, "not-owned", "text/plain")
+
+    doc =
+      inventory_identity(c, fn ->
+        refute Repo.in_transaction?()
+        send(self(), :resolved_inventory)
+      end)
+
+    result = inventory_request(c, "server.checkAccountStatus", %{"did" => other})
+    assert_received :resolved_inventory
+    body = json_response(result, 200)
+    assert body["validDid"] and body["activated"]
+    assert body["repoCommit"] == Atoll.CID.to_base32(head.head)
+    assert body["repoRev"] == head.rev
+    assert body["indexedRecords"] == 1
+    assert body["expectedBlobs"] == 1
+    assert body["importedBlobs"] == 1
+    assert body["repoBlocks"] > 0
+    refute Map.has_key?(body, "email")
+    assert get_resp_header(result, "cache-control") == ["no-store"]
+
+    inventory_identity(
+      c,
+      fn -> :ok end,
+      put_in(doc, ["service", Access.at(0), "serviceEndpoint"], "https://other.example.com")
+    )
+
+    assert json_response(inventory_request(c, "server.checkAccountStatus"), 200)["validDid"] ==
+             false
+
+    Application.put_env(:atoll, :identity_resolution_options,
+      lookup: fn _ -> {:error, :nxdomain} end
+    )
+
+    assert json_response(inventory_request(c, "server.checkAccountStatus"), 200)["validDid"] ==
+             false
+  end
+
+  @tag :oauth_inventory
+  test "inventory routes require fresh bound proofs and never resolve before authorization", c do
+    inventory_identity(c, fn -> send(self(), :resolved_inventory) end)
+
+    for method <- ["repo.listMissingBlobs", "server.checkAccountStatus"] do
+      path = "/xrpc/com.atproto." <> method
+      assert get(c.conn, path).status == 401
+
+      for scheme <- ["Bearer", "DPoP"] do
+        assert c.conn
+               |> put_req_header("authorization", scheme <> " " <> c.tokens["access_token"])
+               |> get(path)
+               |> json_response(401)
+      end
+
+      assert inventory_request(c, method, %{}, resource_proof(c, c.tokens["access_token"])).status ==
+               401
+
+      wrong = %{c | resource_nonce: c.nonce}
+      challenge = inventory_request(wrong, method)
+      assert json_response(challenge, 401)["error"] == "use_dpop_nonce"
+      refute_received :resolved_inventory
+      signed = inventory_proof(c, method)
+      assert inventory_request(c, method, %{}, signed).status == 200
+      if method == "server.checkAccountStatus", do: assert_received(:resolved_inventory)
+
+      assert json_response(inventory_request(c, method, %{}, signed), 401)["error"] ==
+               "invalid_dpop_proof"
+
+      refute_received :resolved_inventory
+    end
+
+    Repo.delete_all(Atoll.Accounts.Session)
+
+    for method <- ["repo.listMissingBlobs", "server.checkAccountStatus"],
+        do: assert(inventory_request(c, method).status == 401)
+
+    refute_received :resolved_inventory
+  end
+
+  @tag :oauth_inventory
+  test "status rechecks expiry, account state, token scopes and revocation after DID resolution",
+       c do
+    for {schema, changes, status} <- [
+          {AccessToken, [expires_at: 1], 401},
+          {Session, [expires_at: 1], 401},
+          {Atoll.Accounts.Session, [expires_at: 1], 401},
+          {Atoll.Repositories.Head, [status: :deactivated], 401},
+          {AccessToken, [scope: ""], 403}
+        ] do
+      original = Repo.one!(schema)
+
+      inventory_identity(c, fn ->
+        refute Repo.in_transaction?()
+        Repo.update_all(schema, set: changes)
+      end)
+
+      signed = inventory_proof(c, "server.checkAccountStatus")
+      assert inventory_request(c, "server.checkAccountStatus", %{}, signed).status == status
+
+      Repo.update_all(schema,
+        set: Enum.map(changes, fn {key, _} -> {key, Map.fetch!(original, key)} end)
+      )
+
+      assert inventory_request(c, "server.checkAccountStatus", %{}, signed).status == 401
+    end
+
+    inventory_identity(c, fn -> Repo.delete_all(Atoll.Accounts.Session) end)
+
+    assert json_response(inventory_request(c, "server.checkAccountStatus"), 401)["error"] ==
+             "invalid_token"
+  end
+
+  defp missing_reference(did, path, bytes) do
+    cid = Atoll.CID.create(bytes, :raw)
+    {:ok, head} = Repositories.get_head(did)
+
+    Repo.insert!(%Atoll.Blobs.Reference{
+      did: did,
+      path: "com.example.record/" <> path,
+      cid: cid,
+      mime_type: "text/plain",
+      size: byte_size(bytes),
+      rev: head.rev
+    })
+
+    cid
+  end
+
+  defp inventory_identity(c, callback, doc \\ nil) do
+    {:ok, key} = Atoll.KeyVault.fetch(c.did)
+    {:ok, public} = Atoll.Multikey.encode(key.curve, key.public)
+
+    doc =
+      doc ||
+        %{
+          "id" => c.did,
+          "verificationMethod" => [
+            %{
+              "id" => "#atproto",
+              "controller" => c.did,
+              "type" => "Multikey",
+              "publicKeyMultibase" => public
+            }
+          ],
+          "service" => [
+            %{
+              "id" => "#atproto_pds",
+              "type" => "AtprotoPersonalDataServer",
+              "serviceEndpoint" => AtollWeb.Endpoint.url()
+            }
+          ]
+        }
+
+    Application.put_env(:atoll, :identity_resolution_options,
+      lookup: fn _ -> {:ok, {8, 8, 8, 8}} end,
+      request:
+        Req.new(
+          plug: fn conn ->
+            callback.()
+            Req.Test.json(conn, doc)
+          end
+        )
+    )
+
+    doc
+  end
+
+  defp inventory_request(c, method, params \\ %{}, signed \\ nil),
+    do:
+      c.conn
+      |> put_req_header("authorization", "DPoP " <> c.tokens["access_token"])
+      |> put_req_header("dpop", signed || inventory_proof(c, method))
+      |> get("/xrpc/com.atproto." <> method, params)
+
+  defp inventory_proof(c, method),
+    do:
+      resource_proof(c, c.tokens["access_token"], %{
+        "htu" => AtollWeb.Endpoint.url() <> "/xrpc/com.atproto." <> method
+      })
 
   defp export_request(c, method, params, signed \\ nil),
     do:

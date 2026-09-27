@@ -4,6 +4,8 @@ defmodule Atoll.OAuth.Resource do
   Proof admission commits before request parsing and mutation transactions;
   account, source session, OAuth session and access-token locks protect the callback.
   The reader is trusted server code and must not perform mutations or network IO.
+  The separate resolution callback may perform bounded network reads outside locks;
+  its result cannot authorize access without the final locked recheck.
   Required scopes and issuer options are trusted endpoint policy, never request input.
   """
   import Ecto.Query
@@ -15,6 +17,28 @@ defmodule Atoll.OAuth.Resource do
 
   def read(token, headers, url, reader, opts \\ []) when is_function(reader, 1),
     do: admit(token, headers, "GET", url, fn _, _, principal -> reader.(principal) end, opts)
+
+  @doc "Admit a read, resolve external data without locks, then recheck authorization for the final read."
+  def read_with_resolution(token, headers, url, resolver, reader, opts \\ [])
+      when is_function(resolver, 1) and is_function(reader, 2) do
+    with {:ok, {access, candidate, principal}} <-
+           admit(
+             token,
+             headers,
+             "GET",
+             url,
+             fn access, candidate, principal ->
+               {access, candidate, principal}
+             end,
+             opts
+           ) do
+      resolved = resolver.(principal)
+      locked_read(access, candidate, &reader.(&1, resolved), opts)
+    end
+  rescue
+    _ in [Postgrex.Error, DBConnection.ConnectionError] ->
+      {:error, :oauth_resource_store_unavailable}
+  end
 
   @write_methods %{
     create: "createRecord",
