@@ -65,6 +65,10 @@ config :atoll,
        AtollWeb.ReadOnlyPlug.enabled_from_env!(System.get_env("ATOLL_READ_ONLY"))
 
 config :atoll,
+       :reserved_handles,
+       Atoll.Accounts.ReservedHandles.list_from_env!(System.get_env("ATOLL_RESERVED_HANDLES"))
+
+config :atoll,
        :xrpc_rate_limit,
        AtollWeb.XRPCRequestPlug.rate_limit_from_env!(System.get_env("ATOLL_XRPC_RATE_LIMIT"))
 
@@ -362,10 +366,6 @@ if config_env() == :prod do
   config :atoll, AtollWeb.Endpoint,
     url: [host: host, port: 443, scheme: "https"],
     http: [
-      # Enable IPv6 and bind on all interfaces.
-      # Set it to  {0, 0, 0, 0, 0, 0, 0, 1} for local network only access.
-      # See the documentation on https://bandit.hexdocs.pm/Bandit.html#t:options/0
-      # for details about using IPv6 vs IPv4 and loopback vs public addresses.
       ip: {0, 0, 0, 0, 0, 0, 0, 0}
     ],
     secret_key_base: secret_key_base

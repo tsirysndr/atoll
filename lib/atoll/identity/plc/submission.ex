@@ -111,10 +111,12 @@ defmodule Atoll.Identity.PLC.Submission do
   defp forward(did, operation, opts) do
     ["at://" <> handle] = operation["alsoKnownAs"]
 
-    if Signup.hosted_handle?(handle) or
-         Handle.resolve(handle, Keyword.put(opts, :force_refresh, true)) == {:ok, did},
-       do: :ok,
-       else: {:error, :unverified_handle}
+    cond do
+      Atoll.Accounts.ReservedHandles.blocked?(handle, did) -> {:error, :handle_reserved}
+      Signup.hosted_handle?(handle) -> :ok
+      Handle.resolve(handle, Keyword.put(opts, :force_refresh, true)) == {:ok, did} -> :ok
+      true -> {:error, :unverified_handle}
+    end
   end
 
   defp authorize!(token, did) do

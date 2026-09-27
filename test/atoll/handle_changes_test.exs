@@ -71,6 +71,36 @@ defmodule Atoll.HandleChangesTest do
              )
   end
 
+  test "reserved labels reject self-service signup and claims but stay with their owner", ctx do
+    assert {:error, :handle_reserved} =
+             Signup.create(%{"handle" => "www.example.com", "password" => "signup password"})
+
+    assert {:error, :handle_reserved} =
+             Signup.create(%{"handle" => "CDN.example.com", "password" => "signup password"})
+
+    assert {:error, :handle_reserved} =
+             HandleChanges.stage(
+               ctx.pair.access_jwt,
+               "mail.example.com",
+               ctx.audit,
+               operation(ctx, "mail.example.com")
+             )
+
+    assert Repo.aggregate(Update, :count) == 0
+    refute HandleChanges.claimed?("mail.example.com")
+
+    # An operator-created account holding a reserved handle can restage it.
+    owner = account("pds.example.com")
+
+    assert {:ok, _} =
+             HandleChanges.stage(
+               owner.pair.access_jwt,
+               "pds.example.com",
+               owner.audit,
+               operation(owner, "pds.example.com")
+             )
+  end
+
   test "custom names require a fresh forward claim and token revocation during lookup blocks staging",
        ctx do
     handle = "custom.other.com"

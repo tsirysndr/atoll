@@ -41,6 +41,9 @@ defmodule AtollWeb.XRPCFallback do
   def call(conn, {:error, :signup_disabled}),
     do: error(conn, 403, "Forbidden", "Fresh signup is disabled.")
 
+  def call(conn, {:error, :handle_reserved}),
+    do: error(conn, 400, "HandleNotAvailable", "Handle is reserved.")
+
   def call(conn, {:error, :unsupported_domain}),
     do: error(conn, 400, "UnsupportedDomain", "Choose a handle under an available server domain.")
 

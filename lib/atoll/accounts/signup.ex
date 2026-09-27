@@ -226,8 +226,13 @@ defmodule Atoll.Accounts.Signup do
 
   defp input(_), do: {:error, :invalid_request}
 
-  defp supported_domain(handle),
-    do: if(hosted_handle?(handle), do: :ok, else: custom_domain(handle))
+  defp supported_domain(handle) do
+    cond do
+      not hosted_handle?(handle) -> custom_domain(handle)
+      Atoll.Accounts.ReservedHandles.blocked?(handle) -> {:error, :handle_reserved}
+      true -> :ok
+    end
+  end
 
   defp email(nil), do: {:ok, nil}
   defp email(value), do: EmailAddress.normalize(value)

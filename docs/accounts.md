@@ -777,3 +777,16 @@ local `temp` route is the signup-queue check implemented above. Atoll matches
 that surface; fresh signups gate on invite codes, email confirmation and rate
 limits instead.
 
+
+### Reserved handles
+
+`ATOLL_RESERVED_HANDLES` holds comma-separated first labels that self-service
+flows may not claim beneath the hosted handle domains; unset it to use the
+built-in default list (`Atoll.Accounts.ReservedHandles.default/0`, including
+`www`, `admin`, `mail`, `pds`, `cdn`, and similar operational names), or set
+it empty to disable the check. Fresh signup, `com.atproto.identity.updateHandle`,
+did:web handle changes, and authenticated PLC submission return
+`HandleNotAvailable` for a reserved label. Operator endpoints stay
+unrestricted so placeholders can be registered deliberately, and an account
+already holding a reserved handle keeps claiming its own name. Custom-domain
+handles are unaffected.

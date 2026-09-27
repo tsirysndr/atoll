@@ -88,10 +88,12 @@ defmodule Atoll.Identity.WebHandleChanges do
   end
 
   defp forward(handle, did, opts) do
-    if Signup.hosted_handle?(handle) or
-         Handle.resolve(handle, Keyword.put(opts, :force_refresh, true)) == {:ok, did},
-       do: :ok,
-       else: {:error, :unverified_handle}
+    cond do
+      Atoll.Accounts.ReservedHandles.blocked?(handle, did) -> {:error, :handle_reserved}
+      Signup.hosted_handle?(handle) -> :ok
+      Handle.resolve(handle, Keyword.put(opts, :force_refresh, true)) == {:ok, did} -> :ok
+      true -> {:error, :unverified_handle}
+    end
   end
 
   defp check!(:ok), do: :ok
