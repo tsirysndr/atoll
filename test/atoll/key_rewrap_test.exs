@@ -1,6 +1,7 @@
 defmodule Atoll.KeyRewrapTest do
   use Atoll.DataCase, async: false
   alias Atoll.{KeyVault, KeyRewrap, MasterKeys, Multikey, Repositories, SigningKey}
+  alias Atoll.Moderation.AuditEntry
   alias Atoll.Accounts.Profile
   alias Atoll.Identity.PLC.{Operation, Registration, Registrations}
   alias Atoll.Repositories.{EncryptedKey, Events}
@@ -69,6 +70,25 @@ defmodule Atoll.KeyRewrapTest do
 
     assert {:ok, %{repositories: 0, plc: 0, unchanged: 4}} = KeyRewrap.batch()
     assert Events.latest_seq() == seq
+    [first, second, unchanged] = Repo.all(from a in AuditEntry, order_by: a.id)
+    assert first.operation == "atoll.keys.rewrap"
+    assert first.actor == "operator"
+    assert first.did == nil
+    assert first.subject == %{"kind" => "keyEncryption"}
+    assert first.requested == %{"limit" => 1, "after" => nil}
+    assert first.before_state == %{"identifiers" => [cursor]}
+
+    assert first.after_state == %{
+             "scanned" => 1,
+             "repositories" => 1,
+             "plc" => 1,
+             "totp" => 0,
+             "unchanged" => 0,
+             "cursor" => cursor
+           }
+
+    assert second.requested == %{"limit" => 1, "after" => cursor}
+    assert unchanged.after_state["unchanged"] == 4
   end
 
   test "unreadable PLC envelope rolls back an earlier repository rewrap in the same page", c do
@@ -83,6 +103,7 @@ defmodule Atoll.KeyRewrapTest do
     switch(c)
     assert {:error, :key_decryption_failed} = KeyRewrap.batch()
     assert Repo.get!(EncryptedKey, ctx.did).envelope == before
+    assert Repo.aggregate(AuditEntry, :count) == 0
   end
 
   test "new writes use only the active key and old keys cannot read rewrapped envelopes", c do
@@ -126,6 +147,27 @@ defmodule Atoll.KeyRewrapTest do
     refute output =~ Base.encode64(c.old)
     refute output =~ Base.encode64(c.new)
     assert {:error, :invalid_rewrap_options} = KeyRewrap.batch(101)
+  end
+
+  test "audit failure rolls back repository envelope updates", c do
+    {:ok, _} = Repositories.create_managed("did:web:audit.example.com")
+    before = Repo.all(EncryptedKey)
+    switch(c)
+
+    Repo.query!(
+      "ALTER TABLE moderation_audit_entries ADD CONSTRAINT reject_rewrap_audit CHECK (operation <> 'atoll.keys.rewrap')"
+    )
+
+    assert_raise Ecto.ConstraintError, fn -> KeyRewrap.batch() end
+    assert Repo.all(EncryptedKey) == before
+    assert Repo.aggregate(AuditEntry, :count) == 0
+  end
+
+  test "empty pages are audited without inventing affected identifiers" do
+    assert {:ok, result} = KeyRewrap.batch()
+    entry = Repo.one!(AuditEntry)
+    assert entry.before_state == %{"identifiers" => []}
+    assert entry.after_state == Jason.decode!(Jason.encode!(result))
   end
 
   defp switch(c) do

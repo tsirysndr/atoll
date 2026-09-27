@@ -50,9 +50,20 @@ defmodule Atoll.KeyRewrap do
               end
             )
 
-          if length(heads) > limit,
-            do: Map.put(counts, :cursor, List.last(page).did),
-            else: counts
+          result =
+            if length(heads) > limit,
+              do: Map.put(counts, :cursor, List.last(page).did),
+              else: counts
+
+          Atoll.Moderation.Audit.key_rewrap!(
+            "atoll.keys.rewrap",
+            limit,
+            after_did,
+            Enum.map(page, & &1.did),
+            result
+          )
+
+          result
         end)
       end
     else

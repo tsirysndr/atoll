@@ -4,6 +4,20 @@ defmodule Atoll.Moderation.Audit do
   alias Atoll.{Repo, Syntax}
   alias Atoll.Moderation.AuditEntry
 
+  @doc "Records an operator encryption-maintenance page using public identifiers and counts only."
+  def key_rewrap!(operation, limit, cursor, identifiers, result)
+      when operation in ["atoll.keys.rewrap", "atoll.keys.rewrapReserved"] do
+    insert!(
+      operation,
+      nil,
+      %{kind: "keyEncryption"},
+      %{limit: limit, after: cursor},
+      %{identifiers: identifiers},
+      Map.take(result, [:scanned, :repositories, :plc, :totp, :rotated, :unchanged, :cursor]),
+      "operator"
+    )
+  end
+
   @doc "Records event deletion and the replay boundary without retaining event payloads."
   def event_retention!(limit, seconds, floor, result, actor) do
     insert!(

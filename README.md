@@ -2507,7 +2507,7 @@ For a deployment with multiple nodes, rotate in these stages:
    securely available for backups made before the rotation.
 
 Each page scans at most 100 repositories in DID order and commits atomically.
-Output contains only `scanned`, `repositories` and `plc` rewrap counts, `unchanged`
+Output contains only `scanned`, `repositories`, `plc`, and `totp` rewrap counts, `unchanged`
 envelope count, and an optional DID cursor. Repositories without stored envelopes
 are counted as scanned but need no change. An unreadable/tampered envelope or
 database failure aborts the entire page; repair and retry that page without
@@ -2523,6 +2523,15 @@ Reserved keys have no repository yet and are covered by the separate
 `rewrap_reserved` command, which reports `scanned`, `rotated`, `unchanged`, and an
 optional public-key cursor. Verify a complete pass of both commands before
 retiring a fallback key.
+
+Each successful page, including unchanged or empty pages, appends an operator audit
+entry atomically with its envelope updates: `atoll.keys.rewrap` or
+`atoll.keys.rewrapReserved`. Entries retain the page limit, input/output cursors,
+at most 100 scanned public identifiers (DIDs or reserved public keys), and result
+counts. They never retain master keys, private keys, authenticator secrets,
+envelopes, or key fingerprints. Audit insertion failure rolls back the entire
+page. Inspect these server-wide entries using `mix atoll.moderation.history`
+without a DID filter.
 
 This rotates encryption protection, not repository signing keys, PLC authority,
 JWT secrets, or server identity keys. It cannot recover an envelope when every

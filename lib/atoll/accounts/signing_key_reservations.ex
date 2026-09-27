@@ -135,9 +135,20 @@ defmodule Atoll.Accounts.SigningKeyReservations do
 
           result = %{scanned: length(page), rotated: rotated, unchanged: length(page) - rotated}
 
-          if length(rows) > limit,
-            do: Map.put(result, :cursor, List.last(page).public_key),
-            else: result
+          result =
+            if length(rows) > limit,
+              do: Map.put(result, :cursor, List.last(page).public_key),
+              else: result
+
+          Atoll.Moderation.Audit.key_rewrap!(
+            "atoll.keys.rewrapReserved",
+            limit,
+            cursor,
+            Enum.map(page, & &1.public_key),
+            result
+          )
+
+          result
         end)
       end
     else

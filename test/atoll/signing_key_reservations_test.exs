@@ -1,5 +1,6 @@
 defmodule Atoll.SigningKeyReservationsTest do
   use Atoll.DataCase, async: false
+  alias Atoll.Moderation.AuditEntry
   alias Atoll.Accounts.{ReservedSigningKey, SigningKeyReservations}
   alias Atoll.{KeyVault, Multikey, Repositories, SigningKey}
   @did "did:web:reserved.example.com"
@@ -147,8 +148,40 @@ defmodule Atoll.SigningKeyReservationsTest do
              & &1.public_key
            ) == Enum.map(old, & &1.public_key)
 
+    [first, second, unchanged] = Repo.all(from a in AuditEntry, order_by: a.id)
+    assert first.operation == "atoll.keys.rewrapReserved"
+    assert first.actor == "operator"
+    assert first.did == nil
+    assert first.subject == %{"kind" => "keyEncryption"}
+    assert first.requested == %{"limit" => 2, "after" => nil}
+    assert first.before_state == %{"identifiers" => Enum.map(Enum.take(old, 2), & &1.public_key)}
+
+    assert first.after_state == %{
+             "scanned" => 2,
+             "rotated" => 2,
+             "unchanged" => 0,
+             "cursor" => cursor
+           }
+
+    assert second.requested == %{"limit" => 2, "after" => cursor}
+    assert unchanged.after_state == %{"scanned" => 3, "rotated" => 0, "unchanged" => 3}
     assert {:error, :invalid_rewrap_options} = SigningKeyReservations.rewrap(101)
     assert {:error, :invalid_rewrap_options} = SigningKeyReservations.rewrap(1, "bad")
+  end
+
+  test "audit failure rolls back reserved envelope changes", c do
+    {:ok, _} = SigningKeyReservations.reserve()
+    before = Repo.all(ReservedSigningKey)
+    Application.put_env(:atoll, :key_encryption_key, :crypto.strong_rand_bytes(32))
+    Application.put_env(:atoll, :previous_key_encryption_keys, [c.master])
+
+    Repo.query!(
+      "ALTER TABLE moderation_audit_entries ADD CONSTRAINT reject_reserved_audit CHECK (operation <> 'atoll.keys.rewrapReserved')"
+    )
+
+    assert_raise Ecto.ConstraintError, fn -> SigningKeyReservations.rewrap() end
+    assert Repo.all(ReservedSigningKey) == before
+    assert Repo.aggregate(AuditEntry, :count) == 0
   end
 
   test "a corrupt later envelope rolls back earlier rewraps in the same page", c do

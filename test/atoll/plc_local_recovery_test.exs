@@ -659,7 +659,9 @@ defmodule Atoll.PLCLocalRecoveryTest do
              retired.rotation_retired_at
 
     audits = Repo.all(Atoll.Moderation.AuditEntry)
-    assert length(audits) == 2
+    assert length(audits) == 3
+    [rewrap] = Enum.filter(audits, &(&1.operation == "atoll.keys.rewrap"))
+    assert rewrap.after_state["unchanged"] == 2
     audit = Enum.find(audits, &(&1.operation == "atoll.plc.retireSignupKey"))
     assert audit.before_state["retained"]
     refute audit.after_state["retained"]
