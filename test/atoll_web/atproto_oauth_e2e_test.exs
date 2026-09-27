@@ -2,7 +2,7 @@ defmodule AtollWeb.AtprotoOAuthE2ETest do
   use Atoll.DataCase, async: false
   @moduletag :interop
 
-  for scenario <- ["base", "granular", "blobs"] do
+  for scenario <- ["base", "granular", "blobs", "email"] do
     @tag scenario: scenario
     test "official OAuth SDK verifies #{scenario} grants through refresh and revocation", %{
       scenario: scenario
@@ -14,7 +14,8 @@ defmodule AtollWeb.AtprotoOAuthE2ETest do
         :key_encryption_key,
         :oauth_nonce_secret,
         :localhost_dids_enabled,
-        :blob_storage
+        :blob_storage,
+        :email_worker
       ]
 
       previous = Map.new(keys, &{&1, Application.fetch_env(:atoll, &1)})
@@ -36,6 +37,7 @@ defmodule AtollWeb.AtprotoOAuthE2ETest do
 
       Application.put_env(:atoll, :localhost_dids_enabled, true)
       Application.put_env(:atoll, :blob_storage, backend: :postgres)
+      Application.put_env(:atoll, :email_worker, [])
       server = start_supervised!({Bandit, plug: AtollWeb.Endpoint, port: 0, ip: {127, 0, 0, 1}})
       {:ok, {_, port}} = ThousandIsland.listener_info(server)
 
@@ -51,6 +53,14 @@ defmodule AtollWeb.AtprotoOAuthE2ETest do
       password = "disposable upstream OAuth password"
       {:ok, _} = Atoll.Repositories.create_managed(did)
       {:ok, _} = Atoll.Accounts.Credentials.create(did, password)
+
+      profile =
+        Repo.insert!(%Atoll.Accounts.Profile{
+          did: did,
+          handle: "oauth-interop.example.com",
+          email: "oauth-interop@example.com",
+          email_confirmed_at: DateTime.utc_now()
+        })
 
       {output, status} =
         System.cmd(
@@ -70,6 +80,7 @@ defmodule AtollWeb.AtprotoOAuthE2ETest do
       assert output =~ "Official ATProto OAuth client flow passed"
       assert Repo.aggregate(Atoll.OAuth.Session, :count) == 0
       assert Repo.aggregate(Atoll.Accounts.Session, :count) == 0
+      assert Repo.get!(Atoll.Accounts.Profile, did) == profile
 
       expected =
         if scenario == "granular",

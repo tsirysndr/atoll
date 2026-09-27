@@ -27,10 +27,15 @@ try {
     requests.push({ path: url.pathname, status: response.status })
     return response
   }
-  assert.ok(['base', 'granular', 'blobs'].includes(scenario))
+  assert.ok(['base', 'granular', 'blobs', 'email'].includes(scenario))
   const collection = 'com.example.oauthrecord'
-  const grantedScope = scenario === 'granular' ? `atproto repo:${collection}?action=create` : scenario === 'blobs' ? 'atproto blob:text/plain' : 'atproto'
-  const requestedScope = scenario === 'granular' ? `${grantedScope} repo:${collection}?action=update` : scenario === 'blobs' ? `${grantedScope} blob:image/png` : 'atproto'
+  const grants = {
+    base: ['atproto', 'atproto'],
+    granular: [`atproto repo:${collection}?action=create`, `atproto repo:${collection}?action=create repo:${collection}?action=update`],
+    blobs: ['atproto blob:text/plain', 'atproto blob:text/plain blob:image/png'],
+    email: ['atproto account:email', 'atproto account:email account:email?action=manage'],
+  }
+  const [grantedScope, requestedScope] = grants[scenario]
   const redirect = 'http://127.0.0.1:8750/callback'
   const clientId = `http://localhost?${new URLSearchParams({ redirect_uri: redirect, scope: requestedScope })}`
   const client = new NodeOAuthClient({
@@ -97,6 +102,11 @@ try {
     // Select text uploads and decline the requested PNG permission.
     consent.permission_1 = 'yes'
   }
+  if (scenario === 'email') {
+    assert.ok(html.includes('Read your email address and confirmation status'))
+    assert.ok(html.includes('Read and change your email address'))
+    consent.permission_1 = 'yes'
+  }
   response = await browser('/oauth/authorize', consent)
   assert.equal(response.status, 303)
   const callback = new URL(response.headers.get('location'))
@@ -120,6 +130,32 @@ try {
     assert.equal(result.status, 403)
     assert.equal((await result.json()).error, 'insufficient_scope')
   }
+  const checkEmailPrivacy = async () => {
+    const result = await session.fetchHandler('/xrpc/com.atproto.server.getSession')
+    assert.equal(result.status, 200)
+    const account = await result.json()
+    if (scenario === 'email') {
+      assert.equal(account.email, 'oauth-interop@example.com')
+      assert.equal(account.emailConfirmed, true)
+    } else {
+      assert.ok(!Object.hasOwn(account, 'email'))
+      assert.ok(!Object.hasOwn(account, 'emailConfirmed'))
+    }
+    assert.ok(!Object.hasOwn(account, 'emailAuthFactor'))
+    for (const [method, body] of [
+      ['requestEmailUpdate', {}],
+      ['updateEmail', { email: 'unapproved@example.com', token: 'unapproved-code' }],
+      ['requestEmailConfirmation', {}],
+      ['confirmEmail', { email: 'oauth-interop@example.com', token: 'unapproved-code' }],
+    ]) {
+      await denied(session.fetchHandler(`/xrpc/com.atproto.server.${method}`, {
+        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
+      }))
+    }
+  }
+  stage = 'account email read and management restrictions'
+  assert.equal((await session.getTokenInfo()).scope, grantedScope)
+  await checkEmailPrivacy()
   const checkRestrictions = async () => {
     await denied(write('putRecord', { repo: did, collection, rkey: 'first', record: { ...record, text: 'forbidden update' }, validate: false }))
     await denied(write('deleteRecord', { repo: did, collection, rkey: 'first' }))
@@ -180,6 +216,8 @@ try {
     stage = 'blob permissions after refresh'
     await checkBlobPermissions('after refresh')
   }
+  stage = 'account email permissions after refresh'
+  await checkEmailPrivacy()
   stage = 'source session logout'
   response = await browser('/account/sessions')
   html = await response.text()
