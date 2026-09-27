@@ -103,3 +103,33 @@ groups:
           severity: warning
         annotations:
           summary: Atoll worker reported failures in the last ten minutes
+
+      - alert: AtollDatabaseInventoryUnavailable
+        expr: |
+          atoll_database_inventory_enabled{job="atoll"} == 1
+          and on (job, instance)
+          (
+            atoll_database_inventory_available{job="atoll"} == 0
+            or atoll_database_inventory_success_time_seconds{job="atoll"} < time() - 120
+          )
+          and on (job, instance) up{job="atoll"} == 1
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: Atoll database inventory is unavailable or stale
+
+      - alert: AtollBlobCleanupBacklog
+        expr: |
+          atoll_blob_cleanup_oldest_time_seconds{job="atoll"} > 0
+          and atoll_blob_cleanup_oldest_time_seconds{job="atoll"} < time() - 86400
+          and atoll_blob_cleanup_pending{job="atoll"} > 0
+          and on (job, instance) atoll_database_inventory_available{job="atoll"} == 1
+          and on (job, instance) atoll_database_inventory_success_time_seconds{job="atoll"} >= time() - 120
+          and on (job, instance) atoll_database_inventory_enabled{job="atoll"} == 1
+          and on (job, instance) up{job="atoll"} == 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Atoll blob cleanup has jobs older than 24 hours

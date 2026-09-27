@@ -1002,6 +1002,7 @@ observations do not produce duplicate events. The
 - [x] Scheduler progress-deadline gauges for all eight background workers, with an overdue-progress alert and rule tests.
 - [x] Configured-worker expectation and process-presence gauges with missing-worker alerts independent of prior heartbeat observations.
 - [x] Prometheus alerts for sustained database pool wait and total query latency, with volume floors, recovery and counter-reset tests.
+- [x] Cached per-backend blob cleanup backlog inventory, bounded database polling, and stale-inventory/aged-backlog alerts.
 - [ ] Comprehensive operational monitoring and alerting.
 - [x] Offline MST and compact-proof interoperability against pinned `@atproto/repo` 0.8.10 fixtures.
 - [x] Opt-in live HTTP integration with the official ATProto client, including signed repository and record-proof verification.
@@ -1072,6 +1073,11 @@ and collects these metric families:
 | `atoll_collector_start_time_seconds` | Collector start time as Unix seconds. |
 | `atoll_vm_memory_bytes` | Current total Erlang VM memory. |
 | `atoll_vm_run_queue` | Current Erlang run queue length. |
+| `atoll_database_inventory_enabled` | Whether periodic database inventory is enabled (1 or 0). |
+| `atoll_database_inventory_available` | Whether the latest inventory poll succeeded (1 or 0); initially 0. |
+| `atoll_database_inventory_success_time_seconds` | Last successful inventory timestamp; initially 0. |
+| `atoll_blob_cleanup_pending` | Last observed queued cleanup jobs, labeled only by `postgres` or `s3` backend. |
+| `atoll_blob_cleanup_oldest_time_seconds` | Last observed oldest queued job timestamp per backend; 0 for empty/unobserved. |
 
 Worker names cover identity refresh, blob cleanup, account cleanup, signup cleanup,
 signup retry, OAuth key checks, event retention, and relay announcement. Results
@@ -1081,6 +1087,33 @@ query text, credentials, or external URLs. Collection is always active in memory
 the setting controls HTTP exposure. Scrapes read counters, VM state, worker
 configuration and local process registration without messaging workers, querying
 PostgreSQL or contacting blob storage.
+
+When metrics are enabled, the existing telemetry poller samples the durable blob
+cleanup queue every ten seconds. Set
+`config :atoll, :metrics_database_polling_enabled, false` to disable database
+inventory separately; it is disabled by default in tests. Polls query only the
+local database, using a 100 ms lock timeout, two-second statement timeout and
+three-second transaction/client timeout. They never contact S3, delete jobs, or
+acquire the repository write lock. Exact counts scan the queue, so very large
+queues or pool contention can prevent an observation within those bounds.
+
+Successful observations replace both backend counts and oldest timestamps.
+Failures set availability to zero and preserve the previous snapshot and success
+time. Always gate queue dashboards on availability and freshness; initial zeroes
+are not proof of an empty queue. Cached observations reset with the collector.
+The seven fixed series contain no CIDs or account identifiers. Every node polls
+the shared queue independently: use per-instance views or a maximum across
+replicas, not a sum that double-counts the same jobs. Pending jobs can include
+objects retained for other owners or remote objects already deleted before a
+local retry; the count is not reclaimable byte usage. Unexpired staged uploads
+and other maintenance backlogs are not included.
+
+`AtollDatabaseInventoryUnavailable` alerts after two minutes of failed polling
+or stale observations (older than two minutes) while enabled and scrapeable.
+`AtollBlobCleanupBacklog` alerts per backend when a fresh snapshot has jobs older
+than 24 hours for five minutes, including when automatic cleanup is disabled.
+Tune this threshold to your intended manual or scheduled cleanup policy. Keep
+PDS and Prometheus clocks synchronized.
 
 Each worker updates its progress deadline when scheduling its next tick, using
 the actual delay plus its task timeout, rounded up to seconds. Idle rescheduling
@@ -1116,7 +1149,7 @@ Histograms reset with the collector. The runbook includes a percentile query and
 its accuracy limits.
 
 This exporter does not install Prometheus, configure alert delivery, or monitor disk capacity,
-backlogs, external services, or backup freshness. Baseline scrape, server-error,
+other backlogs, external services, or backup freshness. Baseline scrape, server-error,
 readiness, database pool/total latency, worker-failure, missing-worker and overdue-progress alerts are available in
 [`ops/prometheus/alerts.yml`](ops/prometheus/alerts.yml), with setup instructions,
 limitations and first-response checks in the

@@ -18,6 +18,7 @@ config :atoll,
   ecto_repos: [Atoll.Repo],
   record_write_rate_limit: 300,
   metrics_enabled: false,
+  metrics_database_polling_enabled: true,
   passkeys_enabled: true,
   generators: [timestamp_type: :utc_datetime]
 

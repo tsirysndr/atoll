@@ -1,6 +1,7 @@
 import Config
 
 config :atoll, :development_identity, true
+config :atoll, :metrics_database_polling_enabled, false
 
 # Configure your database
 #

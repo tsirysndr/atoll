@@ -402,3 +402,161 @@ tests:
       - eval_time: "16m"
         alertname: "AtollDatabaseLatency"
         exp_alerts: []
+
+  - name: "Database inventory failures, recovery and disabled polling"
+    interval: "1m"
+    input_series:
+      - series: 'atoll_database_inventory_enabled{job="atoll",instance="pds:443"}'
+        values: "1x5"
+      - series: 'atoll_database_inventory_available{job="atoll",instance="pds:443"}'
+        values: "0 0 0 1 1 1"
+      - series: 'atoll_database_inventory_success_time_seconds{job="atoll",instance="pds:443"}'
+        values: "0 0 0 180 240 300"
+      - series: 'up{job="atoll",instance="pds:443"}'
+        values: "1x5"
+      - series: 'atoll_database_inventory_enabled{job="atoll",instance="disabled:443"}'
+        values: "0x5"
+      - series: 'atoll_database_inventory_available{job="atoll",instance="disabled:443"}'
+        values: "0x5"
+      - series: 'up{job="atoll",instance="disabled:443"}'
+        values: "1x5"
+    alert_rule_test:
+      - eval_time: "1m"
+        alertname: "AtollDatabaseInventoryUnavailable"
+        exp_alerts: []
+      - eval_time: "2m"
+        alertname: "AtollDatabaseInventoryUnavailable"
+        exp_alerts:
+          - exp_labels: {job: atoll, instance: "pds:443", severity: warning}
+            exp_annotations: {summary: "Atoll database inventory is unavailable or stale"}
+      - eval_time: "3m"
+        alertname: "AtollDatabaseInventoryUnavailable"
+        exp_alerts: []
+
+  - name: "Stopped polling becomes stale even when last observation succeeded"
+    interval: "1m"
+    input_series:
+      - series: 'atoll_database_inventory_enabled{job="atoll",instance="pds:443"}'
+        values: "1x7"
+      - series: 'atoll_database_inventory_available{job="atoll",instance="pds:443"}'
+        values: "1x7"
+      - series: 'atoll_database_inventory_success_time_seconds{job="atoll",instance="pds:443"}'
+        values: "1x7"
+      - series: 'up{job="atoll",instance="pds:443"}'
+        values: "1x6 0"
+    alert_rule_test:
+      - eval_time: "4m"
+        alertname: "AtollDatabaseInventoryUnavailable"
+        exp_alerts: []
+      - eval_time: "5m"
+        alertname: "AtollDatabaseInventoryUnavailable"
+        exp_alerts:
+          - exp_labels: {job: atoll, instance: "pds:443", severity: warning}
+            exp_annotations: {summary: "Atoll database inventory is unavailable or stale"}
+      - eval_time: "7m"
+        alertname: "AtollDatabaseInventoryUnavailable"
+        exp_alerts: []
+
+  - name: "Old cleanup jobs alert per backend, fresh snapshots gate firing and clearing"
+    interval: "1m"
+    input_series:
+      - series: 'atoll_database_inventory_enabled{job="atoll",instance="pds:443"}'
+        values: "1x1450"
+      - series: 'atoll_database_inventory_available{job="atoll",instance="pds:443"}'
+        values: "1x1450"
+      - series: 'atoll_database_inventory_success_time_seconds{job="atoll",instance="pds:443"}'
+        values: "0+60x1446 86760x4"
+      - series: 'up{job="atoll",instance="pds:443"}'
+        values: "1x1450"
+      - series: 'atoll_blob_cleanup_pending{job="atoll",instance="pds:443",backend="s3"}'
+        values: "3x1450"
+      - series: 'atoll_blob_cleanup_oldest_time_seconds{job="atoll",instance="pds:443",backend="s3"}'
+        values: "1x1450"
+      - series: 'atoll_blob_cleanup_pending{job="atoll",instance="pds:443",backend="postgres"}'
+        values: "0x1450"
+      - series: 'atoll_blob_cleanup_oldest_time_seconds{job="atoll",instance="pds:443",backend="postgres"}'
+        values: "0x1450"
+      - series: 'atoll_database_inventory_enabled{job="atoll",instance="down:443"}'
+        values: "1x1450"
+      - series: 'atoll_database_inventory_available{job="atoll",instance="down:443"}'
+        values: "1x1450"
+      - series: 'up{job="atoll",instance="down:443"}'
+        values: "0x1450"
+      - series: 'atoll_database_inventory_success_time_seconds{job="atoll",instance="down:443"}'
+        values: "0+60x1450"
+      - series: 'atoll_blob_cleanup_pending{job="atoll",instance="down:443",backend="s3"}'
+        values: "3x1450"
+      - series: 'atoll_blob_cleanup_oldest_time_seconds{job="atoll",instance="down:443",backend="s3"}'
+        values: "1x1450"
+      - series: 'atoll_database_inventory_enabled{job="atoll",instance="disabled:443"}'
+        values: "0x1450"
+      - series: 'atoll_database_inventory_available{job="atoll",instance="disabled:443"}'
+        values: "1x1450"
+      - series: 'up{job="atoll",instance="disabled:443"}'
+        values: "1x1450"
+      - series: 'atoll_database_inventory_success_time_seconds{job="atoll",instance="disabled:443"}'
+        values: "0+60x1450"
+      - series: 'atoll_blob_cleanup_pending{job="atoll",instance="disabled:443",backend="s3"}'
+        values: "3x1450"
+      - series: 'atoll_blob_cleanup_oldest_time_seconds{job="atoll",instance="disabled:443",backend="s3"}'
+        values: "1x1450"
+      - series: 'atoll_database_inventory_enabled{job="atoll",instance="failed:443"}'
+        values: "1x1450"
+      - series: 'atoll_database_inventory_available{job="atoll",instance="failed:443"}'
+        values: "0x1450"
+      - series: 'up{job="atoll",instance="failed:443"}'
+        values: "1x1450"
+      - series: 'atoll_database_inventory_success_time_seconds{job="atoll",instance="failed:443"}'
+        values: "0+60x1450"
+      - series: 'atoll_blob_cleanup_pending{job="atoll",instance="failed:443",backend="s3"}'
+        values: "3x1450"
+      - series: 'atoll_blob_cleanup_oldest_time_seconds{job="atoll",instance="failed:443",backend="s3"}'
+        values: "1x1450"
+      - series: 'atoll_database_inventory_enabled{job="atoll",instance="empty:443"}'
+        values: "1x1450"
+      - series: 'atoll_database_inventory_available{job="atoll",instance="empty:443"}'
+        values: "1x1450"
+      - series: 'up{job="atoll",instance="empty:443"}'
+        values: "1x1450"
+      - series: 'atoll_database_inventory_success_time_seconds{job="atoll",instance="empty:443"}'
+        values: "0+60x1450"
+      - series: 'atoll_blob_cleanup_pending{job="atoll",instance="empty:443",backend="s3"}'
+        values: "0x1450"
+      - series: 'atoll_blob_cleanup_oldest_time_seconds{job="atoll",instance="empty:443",backend="s3"}'
+        values: "0x1450"
+      - series: 'atoll_database_inventory_enabled{job="atoll",instance="young:443"}'
+        values: "1x1450"
+      - series: 'atoll_database_inventory_available{job="atoll",instance="young:443"}'
+        values: "1x1450"
+      - series: 'up{job="atoll",instance="young:443"}'
+        values: "1x1450"
+      - series: 'atoll_database_inventory_success_time_seconds{job="atoll",instance="young:443"}'
+        values: "0+60x1450"
+      - series: 'atoll_blob_cleanup_pending{job="atoll",instance="young:443",backend="s3"}'
+        values: "3x1450"
+      - series: 'atoll_blob_cleanup_oldest_time_seconds{job="atoll",instance="young:443",backend="s3"}'
+        values: "86000x1450"
+      - series: 'atoll_database_inventory_enabled{job="other",instance="unrelated:443"}'
+        values: "1x1450"
+      - series: 'atoll_database_inventory_available{job="other",instance="unrelated:443"}'
+        values: "1x1450"
+      - series: 'up{job="other",instance="unrelated:443"}'
+        values: "1x1450"
+      - series: 'atoll_database_inventory_success_time_seconds{job="other",instance="unrelated:443"}'
+        values: "0+60x1450"
+      - series: 'atoll_blob_cleanup_pending{job="other",instance="unrelated:443",backend="s3"}'
+        values: "3x1450"
+      - series: 'atoll_blob_cleanup_oldest_time_seconds{job="other",instance="unrelated:443",backend="s3"}'
+        values: "1x1450"
+    alert_rule_test:
+      - eval_time: "24h5m"
+        alertname: "AtollBlobCleanupBacklog"
+        exp_alerts: []
+      - eval_time: "24h6m"
+        alertname: "AtollBlobCleanupBacklog"
+        exp_alerts:
+          - exp_labels: {job: atoll, instance: "pds:443", backend: s3, severity: warning}
+            exp_annotations: {summary: "Atoll blob cleanup has jobs older than 24 hours"}
+      - eval_time: "24h9m"
+        alertname: "AtollBlobCleanupBacklog"
+        exp_alerts: []

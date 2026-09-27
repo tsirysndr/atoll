@@ -85,6 +85,34 @@ report a blocked or suspended process as present; use the progress alert alongsi
 this inventory check. Both gauges keep the eight fixed worker labels and expose
 no process IDs, account identifiers or configuration secrets.
 
+## Cleanup backlog and inventory freshness
+
+Metrics-enabled nodes sample PostgreSQL's blob cleanup queue every ten seconds,
+with bounded lock, statement and client timeouts. The scrape itself reads only
+cached inventory. `config :atoll, :metrics_database_polling_enabled, false` disables
+these polls independently. Counts and oldest timestamps have only `postgres` and
+`s3` labels. They measure cleanup jobs, not bytes that can safely be deleted.
+A shared database produces duplicate observations across PDS nodes; do not sum
+those counts across replicas. Poll failures preserve the old snapshot, so gate
+queries on availability and a recent success timestamp.
+
+`AtollDatabaseInventoryUnavailable` fires after two minutes when enabled polling
+has failed or its last success is older than two minutes, while `up=1`. Check
+database reachability, pool pressure, queue size, lock contention and the telemetry
+poller. It also detects a stopped poller whose last attempt succeeded. A collector
+restart sets availability and last success to zero until a new poll succeeds.
+Disabled polling suppresses the alert. Missing series are not inventory of expected
+servers; use separate exporter/version coverage checks.
+
+`AtollBlobCleanupBacklog` fires per backend after a job remains more than 24 hours
+old for five minutes, using only successful observations at most two minutes old.
+Check cleanup worker enablement/progress, recent failed-item counters, S3
+connectivity and object ownership before running manual collection. Intentionally
+scheduled manual cleanup may warrant a different age threshold. Empty queues,
+failed/stale inventory, disabled polling and failed scrapes suppress this alert.
+Stale inventory has its own alert; clearing the backlog alert alone is not proof
+that jobs were deleted. These timestamps depend on synchronized clocks.
+
 ## Latency percentiles
 
 For per-instance completed HTTP request p95 over five minutes:
@@ -131,7 +159,8 @@ exposition framing. GitHub Actions runs the same checks on pushes.
 jobs, low volume, idle and missing series, failed items, failed/timed-out runs,
 duplicate suppression, counter resets, stalled progress, idle scheduling and
 deadline resets, absent enabled workers, process-registration recovery and database
-pool/total latency. These are synthetic rule tests, not a
+pool/total latency, inventory failure/staleness and aged blob cleanup queues.
+These are synthetic rule tests, not a
 live scrape or notification delivery test. With a compatible local `promtool`,
 you can also run `promtool check rules alerts.yml` and
 `promtool test rules alerts.test.yml` from this directory.

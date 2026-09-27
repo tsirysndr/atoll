@@ -3,6 +3,15 @@ defmodule Atoll.Metrics do
   use GenServer
 
   @help %{
+    "atoll_database_inventory_enabled" => "Whether periodic database inventory is enabled.",
+    "atoll_database_inventory_available" =>
+      "Whether the latest database inventory poll succeeded.",
+    "atoll_database_inventory_success_time_seconds" =>
+      "Unix timestamp of the last successful database inventory; zero means unobserved.",
+    "atoll_blob_cleanup_pending" =>
+      "Queued blob cleanup jobs from the last successful inventory by backend.",
+    "atoll_blob_cleanup_oldest_time_seconds" =>
+      "Oldest queued blob cleanup timestamp by backend; zero means empty or unobserved.",
     "atoll_http_duration_seconds_total" =>
       "Accumulated completed HTTP request duration in seconds.",
     "atoll_database_duration_seconds_total" =>
@@ -63,7 +72,8 @@ defmodule Atoll.Metrics do
             [:phoenix, :endpoint, :stop],
             [:atoll, :repo, :query],
             [:atoll, :readiness, :check],
-            [:atoll, :worker, :scheduled]
+            [:atoll, :worker, :scheduled],
+            [:atoll, :metrics, :database]
           ] ++
             Map.keys(@workers)
 
@@ -83,6 +93,8 @@ defmodule Atoll.Metrics do
     indexes = definitions |> Enum.with_index(1) |> Map.new(fn {{key, _, _}, n} -> {key, n} end)
 
     state = %{
+      server: self(),
+      inventory: %{available: 0, success: 0, rows: %{}},
       histograms:
         Map.new(@histograms, fn {key, _} ->
           {key, :counters.new(length(@buckets) + 1, [:write_concurrency])}
@@ -103,7 +115,7 @@ defmodule Atoll.Metrics do
         state.handler,
         @events,
         &__MODULE__.handle_event/4,
-        Map.take(state, [:counters, :indexes, :deadlines, :worker_indexes, :histograms])
+        Map.take(state, [:counters, :indexes, :deadlines, :worker_indexes, :histograms, :server])
       )
 
     {:ok, state}
@@ -132,6 +144,10 @@ defmodule Atoll.Metrics do
     add(state, {:readiness, result}, 1)
   end
 
+  def handle_event([:atoll, :metrics, :database], _, metadata, state) do
+    GenServer.cast(state.server, {:database_inventory, metadata[:result]})
+  end
+
   def handle_event([:atoll, :worker, :scheduled], measurements, metadata, state) do
     with {:ok, index} <- Map.fetch(state.worker_indexes, metadata[:worker]),
          deadline
@@ -153,6 +169,30 @@ defmodule Atoll.Metrics do
         add(state, {:worker, worker, result}, 1)
         add(state, {:failed_items, worker}, measurements[:failed])
     end
+  end
+
+  @impl true
+  def handle_cast({:database_inventory, {:ok, rows, time}}, state)
+      when is_map(rows) and is_integer(time) and time > 0 do
+    rows = Map.take(rows, ["postgres", "s3"])
+
+    if Enum.all?(rows, fn
+         {_, {count, oldest}}
+         when is_integer(count) and count >= 0 and is_integer(oldest) and oldest >= 0 ->
+           true
+
+         _ ->
+           false
+       end) do
+      inventory = %{available: 1, success: time, rows: rows}
+      {:noreply, %{state | inventory: inventory}}
+    else
+      {:noreply, put_in(state.inventory.available, 0)}
+    end
+  end
+
+  def handle_cast({:database_inventory, _}, state) do
+    {:noreply, put_in(state.inventory.available, 0)}
   end
 
   @impl true
@@ -185,7 +225,10 @@ defmodule Atoll.Metrics do
 
     output = [
       exposition(counters, "counter"),
-      exposition(gauges ++ deadlines ++ inventory, "gauge"),
+      exposition(
+        gauges ++ deadlines ++ inventory ++ database_inventory(state.inventory),
+        "gauge"
+      ),
       histograms(state)
     ]
 
@@ -194,6 +237,22 @@ defmodule Atoll.Metrics do
 
   @impl true
   def terminate(_, state), do: :telemetry.detach(state.handler)
+
+  defp database_inventory(inventory) do
+    [
+      {"atoll_database_inventory_enabled", if(Atoll.Metrics.Database.enabled?(), do: 1, else: 0)},
+      {"atoll_database_inventory_available", inventory.available},
+      {"atoll_database_inventory_success_time_seconds", inventory.success}
+    ] ++
+      Enum.flat_map(["postgres", "s3"], fn backend ->
+        {count, oldest} = Map.get(inventory.rows, backend, {0, 0})
+
+        [
+          {~s(atoll_blob_cleanup_pending{backend="#{backend}"}), count},
+          {~s(atoll_blob_cleanup_oldest_time_seconds{backend="#{backend}"}), oldest}
+        ]
+      end)
+  end
 
   defp definitions do
     [
