@@ -45,7 +45,7 @@ defmodule AtollWeb.OAuthMetadataTest do
     assert authorization["dpop_signing_alg_values_supported"] == ["ES256"]
 
     assert authorization["scopes_supported"] ==
-             ~w(atproto transition:generic transition:chat.bsky transition:email repo:*)
+             ~w(atproto transition:generic transition:chat.bsky transition:email repo:* blob:*/*)
 
     assert authorization["scopes_supported"] == resource["scopes_supported"]
     assert authorization["prompt_values_supported"] == ["create"]

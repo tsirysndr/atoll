@@ -426,7 +426,8 @@ mutation. Deletes and empty batches need no record schema, even with `validate: 
 - [x] OAuth resource read guard and DPoP `getSession`, with per-access-token email scope enforcement.
 - [x] DPoP repository create/put/delete/applyWrites with transitional generic scope and transactional authorization rechecks.
 - [x] Granular repository OAuth permissions by collection/action, browser consent, and semantic scope narrowing.
-- [ ] Granular blob, RPC, identity and account permissions, and dynamically resolved permission sets.
+- [x] Granular blob OAuth permissions by MIME type, browser consent, scope narrowing and storage-time checks.
+- [ ] Granular RPC, identity and account permissions, and dynamically resolved permission sets.
 - [x] DPoP blob uploads with transitional generic scope, pre-body proof admission, and transactional authorization rechecks.
 - [x] DPoP service-token issuance with current generic/chat scope checks and authorization locks held through signing.
 - [x] DPoP authentication on public repository/blob export routes without granting inactive-account export privileges.
@@ -4503,8 +4504,9 @@ default HTTPS callback ports are rejected. `redirect_allowed?/2` compares the
 entire callback exactly, including any query, except for virtual localhost
 clients where only the loopback port is ignored. `scopes_allowed?/2` requires
 `atproto` and checks that every requested scope is covered by the declaration.
-Repository permissions may narrow collections/actions and combine coverage across
-declared scopes; other scopes still require exact membership. This does not grant
+Repository permissions may narrow collections/actions and blob permissions may
+narrow accepted MIME patterns, combining coverage across declared scopes. Other
+scopes still require exact membership. This does not grant
 permissions or replace consent and endpoint scope enforcement.
 
 Local bounds are 32 distinct callbacks, 128 scope tokens in a 4 KiB scope string,
@@ -4614,7 +4616,7 @@ Requests require `response_type=code`, state, an exactly registered callback,
 declared scopes including `atproto`, and an S256 challenge. Optional `login_hint`
 is preserved but is not account authentication. An optional `dpop_jkt` must match
 the verified proof key. Scope admission accepts `atproto`, the three transitional
-scopes and granular `repo` permissions; `transition:chat.bsky` requires
+scopes and granular `repo`/`blob` permissions; `transition:chat.bsky` requires
 `transition:generic`. Other permission resource types and permission sets await
 implementation. Unknown fields, client secrets,
 verifiers, Request Objects, and supplied request URIs are rejected. Input is capped
@@ -4662,8 +4664,8 @@ authorization server. `GET /.well-known/oauth-authorization-server` advertises t
 implemented authorization, PAR and token endpoints, PKCE S256, ES256 DPoP and
 client assertions, public/confidential clients, refresh grants, transitional
 scopes and `prompt=create`. Explicit `response_mode=query` is accepted by PAR;
-other response modes are rejected. Repository permissions are supported and
-`repo:*` is advertised; the other fine-grained permission types remain pending.
+other response modes are rejected. Repository and blob permissions are supported;
+`repo:*` and `blob:*/*` are advertised. The other permission types remain pending.
 
 Both documents derive their URLs from Phoenix Endpoint's configured public URL,
 never request or forwarding headers. Configure a canonical HTTPS origin without a
@@ -5141,15 +5143,16 @@ rejection and scope changes during schema lookup. Parsing and coverage tests inc
 wildcards, multiple collections, combined grants and rejected encodings. The syntax
 follows the [repository permission specification](https://atproto.com/specs/permission#repo);
 `putRecord` follows the reference PDS requirement for both create and update.
-Granular blob/RPC/account/identity permissions and `include:` permission sets remain
-pending and are rejected at PAR admission.
+Granular blob permissions are described below. RPC/account/identity permissions
+and `include:` permission sets remain pending and are rejected at PAR admission.
 
 ### DPoP blob uploads
 
 `POST /xrpc/com.atproto.repo.uploadBlob` accepts DPoP-bound OAuth access tokens
-with `atproto transition:generic`. Proof admission and scope checks run before
-reading the raw request body. An admitted proof remains consumed when size,
-metadata, quota, or storage checks fail. Missing generic scope returns the OAuth
+with `atproto` and either `transition:generic` or applicable granular blob scopes.
+Proof admission and declared MIME permission checks run before reading the raw
+request body. An admitted proof remains consumed when size, metadata, quota, or
+storage checks fail. Missing upload permission returns the OAuth
 `insufficient_scope` error with HTTP 403; invalid or revoked access returns 401.
 
 Uploads use the same signed, process-bound, 30-second internal credential as
@@ -5164,8 +5167,40 @@ staged visibility, and PostgreSQL/S3 storage behavior apply to OAuth uploads.
 Tests cover raw bytes, publication through an OAuth record write, pre-body proof
 validation, failure replay, revocation and scope changes between the upload plug
 and controller, quotas, and mocked S3 success/failure. These additions do not
-change the opt-in MinIO integration tests. Fine-grained blob permissions remain
-pending along with the broader permissions system.
+change the opt-in MinIO integration tests.
+
+### Granular blob permissions
+
+Request `blob:image/*` to upload images, `blob:image/png` for PNG only, or
+`blob:*/*` for all media types. Repeated `accept` parameters allow a union, such as
+`blob?accept=image/png&accept=text/plain`. MIME patterns support a full subtype
+wildcard or `*/*`; suffix globs, parameters and unknown permission fields are
+rejected. Positional/query percent encoding follows repository permissions; a
+literal `+` in a query value must be encoded as `%2B`. MIME matching is
+case-insensitive, while resource names remain case-sensitive.
+
+Client declarations and granted scopes can cover narrower MIME permissions in
+PAR, consent and refresh. Specific types cannot expand into a subtype wildcard,
+and image permissions cannot expand to all media. The consent page lists the
+accepted media types and allows each requested scope to be unchecked. Blob scopes
+do not authorize record writes or other protected resources.
+
+The upload plug checks the normalized declared MIME type before body admission;
+a missing Content-Type retains the `application/octet-stream` default. Under the
+storage transaction's repository and authorization locks, Atoll checks current
+scope against the declaration, the detected MIME type, and any existing ownership
+row's MIME type. The first stored MIME for an account/CID stays authoritative.
+A spoofed declaration or duplicate upload therefore cannot refresh staged metadata
+or return a descriptor outside the granted types. These checks precede PostgreSQL
+byte writes and S3 requests. Scope changes after body admission return HTTP 403;
+retries require a new DPoP proof.
+
+Tests cover consent selection, semantic refresh narrowing, accepted/rejected MIME
+patterns, declared/detected mismatches, duplicate stored metadata, early rejection
+and proof replay, and scope changes before storage. A mocked S3 transport verifies
+that a denied MIME upload makes no object-storage request. Signature detection
+still does not decode complete media files; full media validation remains pending.
+Scope syntax follows the [blob permission specification](https://atproto.com/specs/permission#blob).
 
 ### DPoP service-token issuance
 

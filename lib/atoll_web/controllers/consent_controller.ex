@@ -175,11 +175,10 @@ defmodule AtollWeb.ConsentController do
       scopes
       |> Enum.with_index()
       |> Enum.flat_map(fn {scope, index} ->
-        case Atoll.OAuth.Permissions.repo(scope) do
-          {:ok, _} ->
+        case Atoll.OAuth.Permissions.describe(scope) do
+          label when is_binary(label) ->
             [
-              {scope, "permission_" <> Integer.to_string(index),
-               Atoll.OAuth.Permissions.describe(scope)}
+              {scope, "permission_" <> Integer.to_string(index), label}
             ]
 
           _ ->

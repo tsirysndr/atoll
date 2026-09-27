@@ -546,12 +546,116 @@ defmodule AtollWeb.OAuthRecordWriteTest do
              Repositories.get_record(c.did, "com.example.record/changed-scope")
   end
 
-  defp upload_blob(c, bytes, signed \\ nil),
+  @tag scope: "atproto blob:image/*"
+  test "granular blob permissions admit only matching declared MIME before body parsing", c do
+    png = <<137, "PNG", 13, 10, 26, 10, "test signature">>
+    result = upload_blob(c, png, nil, "IMAGE/PNG") |> json_response(200)
+    assert result["blob"]["mimeType"] == "image/png"
+    assert write(c, "createRecord", body(c, "blob-only")).status == 403
+    conn = put_req_header(c.conn, "content-length", "5242881")
+    signed = write_proof(c, "uploadBlob")
+
+    assert upload_blob(%{c | conn: conn}, "not-read", signed, "text/plain") |> json_response(403) ==
+             %{"error" => "insufficient_scope"}
+
+    assert upload_blob(c, png, signed, "image/png").status == 401
+    assert Repo.aggregate(Atoll.Blobs.Blob, :count) == 1
+  end
+
+  @tag scope: "atproto blob:image/jpeg"
+  test "a permitted declaration cannot store a disallowed detected MIME, including through S3",
+       c do
+    Application.put_env(:atoll, :blob_storage,
+      backend: :s3,
+      s3: [
+        endpoint: "https://s3.example.com",
+        bucket: "test-bucket",
+        region: "us-east-1",
+        access_key_id: "test",
+        secret_access_key: "secret",
+        request: Req.new(plug: fn _ -> flunk("unauthorized S3 request") end)
+      ]
+    )
+
+    png = <<137, "PNG", 13, 10, 26, 10, "not-jpeg">>
+    before = Repo.aggregate(Atoll.Storage.Block, :count)
+    signed = write_proof(c, "uploadBlob")
+
+    assert upload_blob(c, png, signed, "image/jpeg") |> json_response(403) == %{
+             "error" => "insufficient_scope"
+           }
+
+    assert upload_blob(c, png, signed, "image/jpeg").status == 401
+    assert Repo.aggregate(Atoll.Blobs.Blob, :count) == 0
+    assert Repo.aggregate(Atoll.Storage.Block, :count) == before
+  end
+
+  @tag scope: "atproto blob:image/jpeg"
+  test "a duplicate upload cannot bypass the first stored MIME authorization", c do
+    bytes = "opaque bytes without a recognized media signature"
+    {:ok, _} = Atoll.Blobs.stage(c.did, bytes, "text/plain")
+    old = Repo.one!(Atoll.Blobs.Blob)
+    Repo.update_all(Atoll.Blobs.Blob, set: [staged_at: ~U[2020-01-01 00:00:00Z]])
+    assert upload_blob(c, bytes, nil, "image/jpeg").status == 403
+    current = Repo.one!(Atoll.Blobs.Blob)
+    assert current.mime_type == "text/plain"
+    assert current.cid == old.cid
+    assert DateTime.compare(current.staged_at, ~U[2020-01-01 00:00:00Z]) == :eq
+  end
+
+  @tag scope: "atproto blob:*/*"
+  test "blob refresh permissions narrow by MIME and support repeated accepted types", c do
+    scope = "atproto blob?accept=image/png&accept=text/plain"
+
+    params = %{
+      "grant_type" => "refresh_token",
+      "client_id" => @id,
+      "refresh_token" => c.tokens["refresh_token"],
+      "scope" => scope
+    }
+
+    tokens = send_form(c, URI.encode_query(params)) |> json_response(200)
+    assert tokens["scope"] == scope
+    narrowed = %{c | tokens: tokens}
+    assert upload_blob(narrowed, "plain", nil, "text/plain").status == 200
+    assert upload_blob(narrowed, <<137, "PNG", 13, 10, 26, 10>>, nil, "image/png").status == 200
+    assert upload_blob(narrowed, <<255, 216, 255>>, nil, "image/jpeg").status == 403
+    assert upload_blob(c, <<255, 216, 255>>, nil, "image/jpeg").status == 200
+  end
+
+  @tag scope: "atproto blob:*/*"
+  test "MIME scope changes after body admission are enforced under storage authorization locks",
+       c do
+    conn =
+      Plug.Test.conn(:post, "/xrpc/com.atproto.repo.uploadBlob", "private bytes")
+      |> put_req_header("authorization", "DPoP " <> c.tokens["access_token"])
+      |> put_req_header("dpop", write_proof(c, "uploadBlob"))
+      |> AtollWeb.BlobUploadPlug.call([])
+
+    refute conn.halted
+    assert conn.private.atoll_blob_upload.mime == "application/octet-stream"
+    Repo.update_all(AccessToken, set: [scope: "atproto blob:image/*"])
+
+    assert AtollWeb.BlobController.upload(conn, %{}) |> json_response(403) == %{
+             "error" => "insufficient_scope"
+           }
+
+    assert Repo.aggregate(Atoll.Blobs.Blob, :count) == 0
+    # Direct internal use of the admitted credential must apply the same MIME policy.
+    assert {:error, :insufficient_scope} =
+             Atoll.Blobs.stage_authenticated(
+               conn.private.atoll_blob_upload.token,
+               "private bytes",
+               "text/plain"
+             )
+  end
+
+  defp upload_blob(c, bytes, signed \\ nil, mime \\ "application/octet-stream"),
     do:
       c.conn
       |> put_req_header("authorization", "DPoP " <> c.tokens["access_token"])
       |> put_req_header("dpop", signed || write_proof(c, "uploadBlob"))
-      |> put_req_header("content-type", "application/octet-stream")
+      |> put_req_header("content-type", mime)
       |> post("/xrpc/com.atproto.repo.uploadBlob", bytes)
 
   defp body(c, key),

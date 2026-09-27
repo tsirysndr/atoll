@@ -144,15 +144,18 @@ defmodule AtollWeb.BrowserConsentTest do
     assert Repo.aggregate(Atoll.OAuth.Session, :count) == 0
   end
 
-  test "granular repository consent displays requested operations and excludes unchecked scopes",
+  test "granular consent displays record and MIME permissions and excludes unchecked scopes",
        c do
     # A localhost client's declared wildcard covers narrower requested permissions.
     client =
       "http://localhost?" <>
-        URI.encode_query(%{"scope" => "atproto repo:*", "redirect_uri" => @redirect_uri})
+        URI.encode_query(%{"scope" => "atproto repo:* blob:*/*", "redirect_uri" => @redirect_uri})
 
     verifier = random()
-    scopes = for n <- 1..15, do: "repo:com.example.record#{n}?action=create"
+
+    scopes =
+      for(n <- 1..13, do: "repo:com.example.record#{n}?action=create") ++
+        ["blob:image/*", "blob:text/plain"]
 
     params =
       c.params
@@ -179,6 +182,7 @@ defmodule AtollWeb.BrowserConsentTest do
 
     page = signed |> browser() |> get("/oauth/authorize")
     assert html_response(page, 200) =~ "create in com.example.record1"
+    assert page.resp_body =~ "Upload media: image/*"
     refute page.resp_body =~ "use application services"
     assert submit(page, %{"decision" => "approve", "permission_999" => "yes"}).status == 400
     assert submit(page, %{"decision" => "approve", "permission_1" => "repo:*"}).status == 400
@@ -206,7 +210,8 @@ defmodule AtollWeb.BrowserConsentTest do
       |> json_response(200)
 
     assert tokens["scope"] == Enum.join(["atproto" | Enum.take(scopes, 14)], " ")
-    refute tokens["scope"] =~ "record15"
+    assert tokens["scope"] =~ "blob:image/*"
+    refute tokens["scope"] =~ "blob:text/plain"
   end
 
   test "denial returns only the stored callback, state and issuer and consumes the request", c do

@@ -56,7 +56,7 @@ defmodule Atoll.OAuth.PermissionsTest do
       refute Permissions.supported?(scope)
     end
 
-    for scope <- ~w(blob:*/* rpc:* identity:* account:email include:com.example.permissions),
+    for scope <- ~w(rpc:* identity:* account:email include:com.example.permissions),
         do: refute(Permissions.supported?(scope))
   end
 
@@ -83,5 +83,75 @@ defmodule Atoll.OAuth.PermissionsTest do
              %{"scope" => "atproto repo:com.example.post"},
              "atproto repo:*"
            )
+  end
+
+  test "blob permissions support MIME patterns, repeated accept parameters and normalization" do
+    assert {:ok, %{accept: ["image/*"]}} = Permissions.blob("blob:IMAGE/*")
+
+    assert {:ok, %{accept: ["image/png", "text/plain"]}} =
+             Permissions.blob("blob?accept=image%2Fpng&accept=text/plain")
+
+    assert {:ok, %{accept: ["application/ld+json"]}} =
+             Permissions.blob("blob:application/ld+json?")
+
+    assert {:ok, %{accept: ["application/ld+json"]}} =
+             Permissions.blob("blob?accept=application/ld%2Bjson")
+
+    assert Permissions.supported?("blob:*/*")
+    assert Permissions.write_admission?("atproto blob:image/*", :upload_blob)
+    refute Permissions.write_admission?("atproto blob:*/*", :put)
+    assert Permissions.allows_blob?("atproto blob:image/*", "IMAGE/PNG")
+    refute Permissions.allows_blob?("atproto blob:image/*", "text/plain")
+    refute Permissions.allows_blob?("atproto blob:*/*", "text/plain; charset=utf-8")
+  end
+
+  test "blob scope attenuation cannot expand wildcard coverage" do
+    grants = %{"scope" => "atproto blob:image/* blob:text/plain"}
+
+    assert ClientMetadata.scopes_allowed?(
+             grants,
+             "atproto blob?accept=image/png&accept=text/plain"
+           )
+
+    refute ClientMetadata.scopes_allowed?(grants, "atproto blob:*/*")
+    refute ClientMetadata.scopes_allowed?(grants, "atproto blob:text/*")
+    refute ClientMetadata.scopes_allowed?(grants, "atproto blob:image/*?accept=text/plain")
+
+    refute ClientMetadata.scopes_allowed?(
+             %{"scope" => "atproto blob:image/png blob:image/jpeg"},
+             "atproto blob:image/*"
+           )
+
+    assert ClientMetadata.scopes_allowed?(
+             %{"scope" => "atproto blob:*/*"},
+             "atproto blob:image/*"
+           )
+
+    refute ClientMetadata.scopes_allowed?(%{"scope" => "atproto repo:*"}, "atproto blob:*/*")
+  end
+
+  test "malformed MIME permission patterns are rejected without broadening access" do
+    for scope <- [
+          "blob",
+          "blob:",
+          "blob:*",
+          "blob:*/png",
+          "blob:image/p*",
+          "blob:image/**",
+          "blob:application/*+json",
+          "blob:image/png;foo=bar",
+          "blob:image/png?accept=image/jpeg",
+          "blob?accept=",
+          "blob?accept=image/png&action=upload",
+          "blob:%ff",
+          "blob:%",
+          "blob?accept=application/ld+json",
+          "blob?accept=image/png%00",
+          "blob:image/png&accept=text/plain"
+        ] do
+      assert {:error, :invalid_scope} = Permissions.blob(scope)
+      refute Permissions.supported?(scope)
+      refute Permissions.allows_blob?("atproto " <> scope, "image/png")
+    end
   end
 end

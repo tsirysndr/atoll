@@ -19,6 +19,7 @@ defmodule AtollWeb.BlobUploadPlug do
          {:ok, token} <- authorize(conn),
          :ok <- encoding(conn),
          {:ok, mime} <- mime(conn),
+         :ok <- authorize_mime(token, mime),
          {:ok, length} <- content_length(conn),
          {:ok, bytes, conn} <- read(conn, [], 0, System.monotonic_time(:millisecond) + 30_000) do
       if is_nil(length) or length == byte_size(bytes) do
@@ -67,6 +68,18 @@ defmodule AtollWeb.BlobUploadPlug do
            do: {:ok, token}
     end
   end
+
+  defp authorize_mime(%Atoll.OAuth.WriteCredential{} = credential, mime) do
+    with {:ok, principal} <- Atoll.OAuth.Resource.recheck(credential, :upload_blob),
+         true <- Atoll.OAuth.Permissions.allows_blob?(principal.scope, mime) do
+      :ok
+    else
+      false -> {:error, {:oauth, :insufficient_scope}}
+      {:error, reason} -> {:error, {:oauth, reason}}
+    end
+  end
+
+  defp authorize_mime(_, _), do: :ok
 
   defp limit(conn) do
     case SessionLimiter.check({:blob_upload, conn.remote_ip}, 60) do

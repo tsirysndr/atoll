@@ -29,7 +29,8 @@ defmodule Atoll.Blobs do
         # deadlock with refresh, which takes a head share lock before its session lock.
         active_head!(did, "FOR UPDATE", true)
 
-        with {:ok, %{did: did}} <- authenticate_upload(token),
+        with {:ok, %{did: did} = principal} <- authenticate_upload(token),
+             :ok <- upload_permission(token, principal, bytes, content_type),
              {:ok, blob} <- stage_for_status(did, bytes, content_type, opts, true) do
           blob
         else
@@ -38,6 +39,22 @@ defmodule Atoll.Blobs do
       end)
     end
   end
+
+  defp upload_permission(%Atoll.OAuth.WriteCredential{}, principal, bytes, content_type)
+       when is_binary(bytes) do
+    with {:ok, declared} <- normalize_mime(content_type),
+         detected = Atoll.Blobs.MimeSniffer.detect(bytes, declared),
+         existing = Repo.get_by(Blob, did: principal.did, cid: CID.create(bytes, :raw)),
+         types = [declared, detected] ++ if(existing, do: [existing.mime_type], else: []),
+         true <- Enum.all?(types, &Atoll.OAuth.Permissions.allows_blob?(principal.scope, &1)) do
+      :ok
+    else
+      false -> {:error, :insufficient_scope}
+      error -> error
+    end
+  end
+
+  defp upload_permission(_, _, _, _), do: :ok
 
   defp upload_identity(%Atoll.OAuth.WriteCredential{} = credential) do
     with {:ok, %{did: did}} <- authenticate_upload(credential), do: {:ok, did}

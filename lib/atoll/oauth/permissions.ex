@@ -1,16 +1,13 @@
 defmodule Atoll.OAuth.Permissions do
-  @moduledoc "Bounded repository permission scopes and collection/action authorization."
+  @moduledoc "Bounded repository and blob permission scopes with semantic coverage."
   @legacy ~w(atproto transition:generic transition:chat.bsky transition:email)
   @actions ~w(create update delete)
 
-  def supported?(scope), do: scope in @legacy or match?({:ok, _}, repo(scope))
+  def supported?(scope),
+    do: scope in @legacy or match?({:ok, _}, repo(scope)) or match?({:ok, _}, blob(scope))
 
-  def repo(value) when is_binary(value) and byte_size(value) in 1..4096 do
-    with true <- Regex.match?(~r/\A[\x21\x23-\x5b\x5d-\x7e]+\z/, value),
-         false <- Regex.match?(~r/%(?![0-9a-fA-F]{2})/, value),
-         [base | rest] <- String.split(value, "?", parts: 2),
-         {:ok, positional} <- positional(base),
-         {:ok, params} <- parameters(List.first(rest) || ""),
+  def repo(value) do
+    with {:ok, positional, params} <- syntax(value, "repo", ~w(collection action)),
          true <- is_nil(positional) or not Map.has_key?(params, "collection"),
          collections = if(positional, do: [positional], else: params["collection"]),
          actions = Map.get(params, "action", @actions),
@@ -24,7 +21,17 @@ defmodule Atoll.OAuth.Permissions do
     end
   end
 
-  def repo(_), do: {:error, :invalid_scope}
+  def blob(value) do
+    with {:ok, positional, params} <- syntax(value, "blob", ["accept"]),
+         true <- is_nil(positional) or not Map.has_key?(params, "accept"),
+         accept = if(positional, do: [positional], else: params["accept"]),
+         true <- is_list(accept) and accept != [],
+         true <- Enum.all?(accept, &mime_pattern?/1) do
+      {:ok, %{accept: accept |> Enum.map(&String.downcase/1) |> Enum.uniq()}}
+    else
+      _ -> {:error, :invalid_scope}
+    end
+  end
 
   # A requested permission can be narrower than several declared/granted scopes.
   # In particular, an explicit collection can never cover a requested wildcard.
@@ -39,7 +46,10 @@ defmodule Atoll.OAuth.Permissions do
           end)
 
         _ ->
-          false
+          case blob(requested) do
+            {:ok, permission} -> Enum.all?(permission.accept, &blob_allowed?(granted, &1))
+            _ -> false
+          end
       end
     end
   end
@@ -49,6 +59,7 @@ defmodule Atoll.OAuth.Permissions do
 
     "transition:generic" in scopes or
       case action do
+        :upload_blob -> Enum.any?(scopes, &match?({:ok, _}, blob(&1)))
         :batch -> Enum.any?(scopes, &match?({:ok, _}, repo(&1)))
         :put -> Enum.all?(~w(create update), &any_action?(scopes, &1))
         :create -> any_action?(scopes, "create")
@@ -62,16 +73,64 @@ defmodule Atoll.OAuth.Permissions do
     "transition:generic" in scopes or repo_allowed?(scopes, collection, action)
   end
 
-  def describe(scope) do
-    {:ok, permission} = repo(scope)
+  def allows_blob?(scope, mime) do
+    with {:ok, mime} <- Atoll.Blobs.normalize_mime(mime) do
+      scopes = String.split(scope, " ")
+      "transition:generic" in scopes or blob_allowed?(scopes, mime)
+    else
+      _ -> false
+    end
+  end
 
-    collections =
-      Enum.map_join(permission.collections, ", ", fn
-        "*" -> "all collections"
-        collection -> collection
+  def describe(scope) do
+    case repo(scope) do
+      {:ok, permission} ->
+        collections =
+          Enum.map_join(permission.collections, ", ", fn
+            "*" -> "all collections"
+            collection -> collection
+          end)
+
+        "Write public records: " <> Enum.join(permission.actions, ", ") <> " in " <> collections
+
+      _ ->
+        case blob(scope) do
+          {:ok, permission} ->
+            "Upload media: " <>
+              Enum.map_join(permission.accept, ", ", fn
+                "*/*" -> "all media types"
+                mime -> mime
+              end)
+
+          _ ->
+            nil
+        end
+    end
+  end
+
+  defp blob_allowed?(scopes, mime),
+    do:
+      Enum.any?(scopes, fn scope ->
+        case blob(scope) do
+          {:ok, permission} -> Enum.any?(permission.accept, &mime_covers?(&1, mime))
+          _ -> false
+        end
       end)
 
-    "Write public records: " <> Enum.join(permission.actions, ", ") <> " in " <> collections
+  defp mime_covers?(pattern, mime),
+    do:
+      pattern == "*/*" or pattern == mime or
+        (String.ends_with?(pattern, "/*") and
+           String.starts_with?(mime, String.trim_trailing(pattern, "*")))
+
+  defp mime_pattern?("*/*"), do: true
+
+  defp mime_pattern?(value) do
+    # Media types are case-insensitive; only a complete subtype wildcard is supported.
+    concrete =
+      if String.ends_with?(value, "/*"), do: String.trim_trailing(value, "*") <> "x", else: value
+
+    match?({:ok, _}, Atoll.Blobs.normalize_mime(concrete))
   end
 
   defp repo_allowed?(scopes, collection, action),
@@ -96,13 +155,31 @@ defmodule Atoll.OAuth.Permissions do
         end
       end)
 
-  defp positional("repo"), do: {:ok, nil}
-  defp positional("repo:" <> value), do: {:ok, URI.decode(value)}
-  defp positional(_), do: {:error, :invalid_scope}
+  defp syntax(value, resource, keys) when is_binary(value) and byte_size(value) in 1..4096 do
+    with true <- Regex.match?(~r/\A[\x21\x23-\x5b\x5d-\x7e]+\z/, value),
+         false <- Regex.match?(~r/%(?![0-9a-fA-F]{2})/, value),
+         [base | rest] <- String.split(value, "?", parts: 2),
+         {:ok, positional} <- positional(base, resource),
+         {:ok, params} <- parameters(List.first(rest) || "", keys) do
+      {:ok, positional, params}
+    else
+      _ -> {:error, :invalid_scope}
+    end
+  end
 
-  defp parameters(""), do: {:ok, %{}}
+  defp syntax(_, _, _), do: {:error, :invalid_scope}
 
-  defp parameters(query) do
+  defp positional(base, resource) do
+    case String.split(base, ":", parts: 2) do
+      [^resource] -> {:ok, nil}
+      [^resource, value] -> {:ok, URI.decode(value)}
+      _ -> {:error, :invalid_scope}
+    end
+  end
+
+  defp parameters("", _), do: {:ok, %{}}
+
+  defp parameters(query, keys) do
     pairs = String.split(query, "&")
 
     if length(pairs) <= 128 do
@@ -112,7 +189,7 @@ defmodule Atoll.OAuth.Permissions do
             key = URI.decode_www_form(key)
             value = URI.decode_www_form(value)
 
-            if key in ["collection", "action"] and String.valid?(value) and value != "",
+            if key in keys and String.valid?(value) and value != "",
               do: {:cont, {:ok, Map.update(acc, key, [value], &(&1 ++ [value]))}},
               else: {:halt, {:error, :invalid_scope}}
 
