@@ -8,7 +8,8 @@ defmodule AtollWeb.AtprotoOAuthE2ETest do
         {"blobs", :k256},
         {"email", :k256},
         {"rpc", :k256},
-        {"rpc", :p256}
+        {"rpc", :p256},
+        {"confidential", :k256}
       ] do
     @tag scenario: scenario, curve: curve
     test "official OAuth SDK verifies #{scenario} #{curve} grants through refresh and revocation",
@@ -25,7 +26,8 @@ defmodule AtollWeb.AtprotoOAuthE2ETest do
         :localhost_dids_enabled,
         :blob_storage,
         :email_worker,
-        :rate_limit_backend
+        :rate_limit_backend,
+        :oauth_transport_options
       ]
 
       previous = Map.new(keys, &{&1, Application.fetch_env(:atoll, &1)})
@@ -75,6 +77,41 @@ defmodule AtollWeb.AtprotoOAuthE2ETest do
         })
 
       {:ok, signing_key} = Atoll.KeyVault.fetch(did)
+      Application.put_env(:atoll, :oauth_transport_options, [])
+      parent = self()
+      client_key = JOSE.JWK.generate_key({:ec, :secp256r1})
+      {_, private_jwk} = JOSE.JWK.to_map(client_key)
+      private_jwk = Map.merge(private_jwk, %{"kid" => "interop-client", "alg" => "ES256"})
+
+      if scenario == "confidential" do
+        metadata = %{
+          "client_id" => "https://client.example.com/client.json",
+          "redirect_uris" => ["https://client.example.com/callback"],
+          "scope" => "atproto",
+          "grant_types" => ["authorization_code", "refresh_token"],
+          "response_types" => ["code"],
+          "token_endpoint_auth_method" => "private_key_jwt",
+          "token_endpoint_auth_signing_alg" => "ES256",
+          "dpop_bound_access_tokens" => true,
+          "jwks" => %{"keys" => [Map.delete(private_jwk, "d")]}
+        }
+
+        Application.put_env(:atoll, :oauth_transport_options,
+          lookup: fn "client.example.com" -> {:ok, {8, 8, 8, 8}} end,
+          request:
+            Req.new(
+              plug: fn conn ->
+                assert conn.host == "8.8.8.8"
+                assert Plug.Conn.get_req_header(conn, "host") == ["client.example.com"]
+                assert conn.request_path == "/client.json"
+                send(parent, :client_metadata_fetched)
+                bindings = Repo.all(from s in Atoll.OAuth.Session, select: s.client_binding)
+                send(parent, {:client_bindings, bindings})
+                Req.Test.json(conn, metadata)
+              end
+            )
+        )
+      end
 
       {output, status} =
         System.cmd(
@@ -89,11 +126,25 @@ defmodule AtollWeb.AtprotoOAuthE2ETest do
             Base.encode16(signing_key.public, case: :lower),
             Atom.to_string(curve)
           ],
-          stderr_to_stdout: true
+          stderr_to_stdout: true,
+          env: [{"ATOLL_TEST_CLIENT_JWK", Jason.encode!(private_jwk)}]
         )
 
       assert status == 0, output
       assert output =~ "Official ATProto OAuth client flow passed"
+
+      if scenario == "confidential" do
+        assert Repo.aggregate(Atoll.OAuth.ClientAssertionUse, :count) >= 3
+        for _ <- 1..3, do: assert_received(:client_metadata_fetched)
+
+        assert_received {:client_bindings,
+                         [%{"kid" => "interop-client", "alg" => "ES256", "jkt" => thumbprint}]}
+
+        assert thumbprint == JOSE.JWK.thumbprint(client_key)
+      else
+        assert Repo.aggregate(Atoll.OAuth.ClientAssertionUse, :count) == 0
+      end
+
       assert Repo.aggregate(Atoll.OAuth.Session, :count) == 0
       assert Repo.aggregate(Atoll.Accounts.Session, :count) == 0
       assert Repo.get!(Atoll.Accounts.Profile, did) == profile

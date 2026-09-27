@@ -28,28 +28,41 @@ try {
     requests.push({ path: url.pathname, status: response.status })
     return response
   }
-  assert.ok(['base', 'granular', 'blobs', 'email', 'rpc'].includes(scenario))
+  assert.ok(['base', 'granular', 'blobs', 'email', 'rpc', 'confidential'].includes(scenario))
   const collection = 'com.example.oauthrecord'
   const audience = 'did:web:appview.example.com#bsky_appview'
   const method = 'app.bsky.feed.getTimeline'
   const rpcScope = `rpc:${method}?aud=${encodeURIComponent(audience).replaceAll('%3A', ':')}`
   const grants = {
     base: ['atproto', 'atproto'],
+    confidential: ['atproto', 'atproto'],
     granular: [`atproto repo:${collection}?action=create`, `atproto repo:${collection}?action=create repo:${collection}?action=update`],
     blobs: ['atproto blob:text/plain', 'atproto blob:text/plain blob:image/png'],
     email: ['atproto account:email', 'atproto account:email account:email?action=manage'],
     rpc: [`atproto ${rpcScope}`, `atproto ${rpcScope} rpc:app.bsky.feed.getFeed?aud=*`],
   }
   const [grantedScope, requestedScope] = grants[scenario]
-  const redirect = 'http://127.0.0.1:8750/callback'
-  const clientId = `http://localhost?${new URLSearchParams({ redirect_uri: redirect, scope: requestedScope })}`
+  const confidential = scenario === 'confidential'
+  const redirect = confidential ? 'https://client.example.com/callback' : 'http://127.0.0.1:8750/callback'
+  const clientId = confidential ? 'https://client.example.com/client.json' : `http://localhost?${new URLSearchParams({ redirect_uri: redirect, scope: requestedScope })}`
+  let clientKeys = {}
+  let clientAuth = { token_endpoint_auth_method: 'none' }
+  if (confidential) {
+    const { JoseKey } = require('@atproto/jwk-jose')
+    const privateJwk = JSON.parse(process.env.ATOLL_TEST_CLIENT_JWK)
+    delete process.env.ATOLL_TEST_CLIENT_JWK
+    const { d, ...publicJwk } = privateJwk
+    assert.ok(d)
+    clientKeys = { keyset: [await JoseKey.fromJWK(privateJwk)] }
+    clientAuth = { token_endpoint_auth_method: 'private_key_jwt', token_endpoint_auth_signing_alg: 'ES256', jwks: { keys: [publicJwk] } }
+  }
   const client = new NodeOAuthClient({
     clientMetadata: {
       client_id: clientId, redirect_uris: [redirect], scope: requestedScope,
       grant_types: ['authorization_code', 'refresh_token'], response_types: ['code'],
-      token_endpoint_auth_method: 'none', dpop_bound_access_tokens: true,
+      ...clientAuth, dpop_bound_access_tokens: true,
     },
-    allowHttp: true, fetch: localFetch, stateStore: store(), sessionStore: store(),
+    ...clientKeys, allowHttp: true, fetch: localFetch, stateStore: store(), sessionStore: store(),
     // This script performs operations sequentially with one SDK instance.
     requestLock: async (_name, fn) => fn(),
     // Isolate identity resolution; OAuth discovery and issuer binding remain SDK checks.

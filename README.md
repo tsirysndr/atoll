@@ -1209,9 +1209,10 @@ accounts, tokens and keys are disposable and database changes roll back.
 
 Identity resolution uses a fixed synthetic DID document pointing at the temporary
 server; the SDK still checks that document's PDS against discovered issuer metadata.
-Six cases cover a localhost public client with base `atproto` scope, a
-granular repository grant, a granular blob grant, an email-read grant, and an RPC
-grant using each repository signing curve (secp256k1 and P-256). The base grant cannot write records. The granular flow
+Seven cases cover a confidential client plus localhost public clients with base
+`atproto` scope, granular repository/blob grants, an email-read grant, and an RPC
+grant using each repository signing curve (secp256k1 and P-256). The base grant
+cannot write records. The granular flow
 requests create/update access to one collection but approves only create; the SDK
 receives the narrowed scope and can create records before and after refresh.
 Updates, deletes, cross-collection creates, and batches mixing permitted and
@@ -1248,7 +1249,17 @@ The harness uses the PostgreSQL rate limiter so counters roll back with each tes
 this preserves real admission limits without sharing a loopback IP budget across
 independent scenarios. Prior limiter and application settings are restored afterward.
 
-These tests do not establish live DID/handle resolution, confidential-client
+The confidential-client case uses an ephemeral ES256 key and the SDK's
+`private_key_jwt` authentication for PAR, code exchange, and refresh. Atoll retrieves
+an inline JWKS from a controlled Req transport fixture; all authorization requests
+still use real loopback HTTP. Assertions are recorded in the replay store, and the
+persisted grant binds the client key ID, algorithm, and thumbprint. A synthetic
+private JWK is passed only to the child process environment and never printed;
+metadata contains only the public key. No dependencies or real client keys are
+installed or changed. Remote metadata/JWKS HTTPS transport and key-removal
+interoperability are not established by this fixture.
+
+These tests do not establish live DID/handle resolution, remote client metadata
 interoperability, RPC proxying, identity permissions, email management or repository import, browser rendering, or
 complete OAuth profile compliance.
 The development-only HTTP identity exception is enabled only for this test and
