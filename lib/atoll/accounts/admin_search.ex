@@ -10,9 +10,9 @@ defmodule Atoll.Accounts.AdminSearch do
          {:ok, email} <- email(params["email"]),
          {:ok, limit} <- page_size(params["limit"]),
          {:ok, cursor} <- cursor(params["cursor"], email) do
-      Repo.transaction(fn ->
-        Repo.query!("SET LOCAL lock_timeout = '1s'")
-        Repo.query!("SET LOCAL statement_timeout = '5s'")
+      Repo.read_transaction(fn ->
+        Repo.read_query!("SET LOCAL lock_timeout = '1s'")
+        Repo.read_query!("SET LOCAL statement_timeout = '5s'")
 
         query =
           from p in Profile,

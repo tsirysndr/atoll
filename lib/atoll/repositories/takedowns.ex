@@ -66,7 +66,7 @@ defmodule Atoll.Repositories.Takedowns do
 
   @doc "Check under a head lock before a public record API read. Does not filter sync data."
   def ensure_visible!(did, path) do
-    if Repo.exists?(from t in Takedown, where: t.did == ^did and t.path == ^path),
+    if Repo.exists?(from(t in Takedown, where: t.did == ^did and t.path == ^path), primary: true),
       do: Repo.rollback(:not_found)
 
     :ok

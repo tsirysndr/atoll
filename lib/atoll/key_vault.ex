@@ -113,7 +113,7 @@ defmodule Atoll.KeyVault do
           where: k.did == ^did,
           select: {h, k.envelope}
 
-      case Repo.one(query, log: false) do
+      case Repo.one(query, log: false, primary: true) do
         nil -> {:error, :key_not_found}
         {head, envelope} -> Atoll.MasterKeys.decrypt(master, &decrypt(head, envelope, &1))
       end

@@ -21,6 +21,12 @@ defmodule Atoll.Proxy.ReadAfterWrite do
   ]
 
   def munge(nsid, response, did, query) when nsid in @munged and is_binary(did) do
+    Atoll.Repo.with_primary(fn -> munge_current(nsid, response, did, query) end)
+  end
+
+  def munge(_nsid, response, _did, _query), do: response
+
+  defp munge_current(nsid, response, did, query) do
     case {response.status, rev(response)} do
       {200, rev} when is_binary(rev) ->
         local = LocalRecords.since(did, rev)
@@ -43,8 +49,6 @@ defmodule Atoll.Proxy.ReadAfterWrite do
   rescue
     _ -> response
   end
-
-  def munge(_nsid, response, _did, _query), do: response
 
   defp apply_munge("app.bsky.actor.getProfile", body, %{profile: profile}, did) do
     if profile && body["did"] == did,

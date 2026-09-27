@@ -27,7 +27,7 @@ defmodule Atoll.Repositories.EventRetention do
 
   def bounds do
     %{rows: [[floor, latest]]} =
-      Repo.query!("""
+      Repo.read_query!("""
       SELECT cursor_floor, GREATEST(cursor_floor, COALESCE((SELECT max(seq) FROM repository_events), 0))
       FROM event_retention_state WHERE id = 1
       """)

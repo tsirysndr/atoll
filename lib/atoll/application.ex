@@ -113,6 +113,9 @@ defmodule Atoll.Application do
           Atoll.OAuth.KeyCheckWorker.children()
       end
 
+    # Start the optional reader before the endpoint and any background workers.
+    {database_children, service_children} = Enum.split(children, 2)
+    children = database_children ++ Atoll.ReadRepo.children() ++ service_children
     Supervisor.start_link(Atoll.Redis.children() ++ children ++ workers, opts)
   end
 

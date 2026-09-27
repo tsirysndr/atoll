@@ -65,7 +65,7 @@ defmodule Atoll.Accounts.Credentials do
   @doc false
   def verified_digest(did, password) do
     if Syntax.did?(did) and valid_password?(password) do
-      case Repo.get(Credential, did) do
+      case Repo.get(Credential, did, primary: true) do
         nil ->
           Argon2.no_user_verify(argon2_type: 2)
           {:error, :invalid_credentials}
@@ -82,7 +82,7 @@ defmodule Atoll.Accounts.Credentials do
 
   @doc false
   def current_digest?(did, expected) do
-    case Repo.get(Credential, did) do
+    case Repo.get(Credential, did, primary: true) do
       nil ->
         false
 

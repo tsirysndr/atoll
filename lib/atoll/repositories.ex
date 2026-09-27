@@ -383,7 +383,8 @@ defmodule Atoll.Repositories do
   end
 
   def get_head(did) when is_binary(did) do
-    case Repo.get(Head, did) do
+    # Availability and signing-key checks must observe takedowns and rotations immediately.
+    case Repo.get(Head, did, primary: true) do
       nil -> {:error, :not_found}
       head -> {:ok, head}
     end

@@ -1,5 +1,12 @@
 import Config
 
+read_replica = Atoll.DatabaseConfig.read_replica_from_env!(System.get_env())
+config :atoll, :read_repo_enabled, not is_nil(read_replica)
+
+if read_replica do
+  config :atoll, Atoll.ReadRepo, read_replica
+end
+
 config :atoll,
        :oauth_nonce_secret,
        Atoll.OAuth.Nonce.secret_from_env!(System.get_env("ATOLL_OAUTH_NONCE_SECRET"))

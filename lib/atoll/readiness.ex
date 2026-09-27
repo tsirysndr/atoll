@@ -1,5 +1,5 @@
 defmodule Atoll.Readiness do
-  @moduledoc "A bounded PostgreSQL connectivity probe, independent of liveness."
+  @moduledoc "Bounded connectivity probes for the primary and optional reader, independent of liveness."
 
   def check do
     started = System.monotonic_time()
@@ -15,10 +15,20 @@ defmodule Atoll.Readiness do
   end
 
   defp database do
-    case Atoll.Repo.query("SELECT 1", [], timeout: 1_000, queue: false, log: false) do
-      {:ok, %{rows: [[1]]}} -> :ready
-      _ -> :unavailable
-    end
+    repos = [Atoll.Repo] ++ Atoll.ReadRepo.children()
+
+    if Enum.all?(repos, fn repo ->
+         match?(
+           {:ok, %{rows: [[1]]}},
+           Ecto.Adapters.SQL.query(repo.get_dynamic_repo(), "SELECT 1", [],
+             timeout: 1_000,
+             queue: false,
+             log: false
+           )
+         )
+       end),
+       do: :ready,
+       else: :unavailable
   rescue
     # Missing repo processes and connection failures must still produce a health response.
     _ in [RuntimeError, DBConnection.ConnectionError, Postgrex.Error] -> :unavailable

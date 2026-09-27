@@ -6,7 +6,7 @@ defmodule Atoll.Identity.HandleAuthorization do
 
   def authenticate({:admin, did}) do
     if Syntax.did?(did) do
-      case Repo.get(Head, did) do
+      case Repo.get(Head, did, primary: true) do
         nil -> {:error, :admin_account_not_found}
         head -> {:ok, head}
       end

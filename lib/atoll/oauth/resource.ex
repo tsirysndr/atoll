@@ -190,8 +190,8 @@ defmodule Atoll.OAuth.Resource do
          true <- is_integer(claims["expires"]) and claims["expires"] > clock!(),
          true <- is_binary(claims["digest"]),
          {:ok, <<_::256>> = digest} <- Base.url_decode64(claims["digest"], padding: false),
-         %AccessToken{} = access <- Repo.get(AccessToken, digest, log: false),
-         %Session{} = session <- Repo.get(Session, access.session_id, log: false),
+         %AccessToken{} = access <- Repo.get(AccessToken, digest, log: false, primary: true),
+         %Session{} = session <- Repo.get(Session, access.session_id, log: false, primary: true),
          true <- claims["binding"] == fingerprint(session) do
       locked_read(
         access,
@@ -254,8 +254,9 @@ defmodule Atoll.OAuth.Resource do
       true ->
         digest = :crypto.hash(:sha256, token)
 
-        with %AccessToken{} = access <- Repo.get(AccessToken, digest, log: false),
-             %Session{} = candidate <- Repo.get(Session, access.session_id, log: false),
+        with %AccessToken{} = access <- Repo.get(AccessToken, digest, log: false, primary: true),
+             %Session{} = candidate <-
+               Repo.get(Session, access.session_id, log: false, primary: true),
              true <- candidate.issuer == issuer,
              {:ok, _} <-
                Proofs.verify(

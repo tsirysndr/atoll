@@ -200,7 +200,10 @@ defmodule Atoll.Accounts.Signup do
   end
 
   def pending?(did),
-    do: Repo.exists?(from r in Registration, where: r.did == ^did and is_nil(r.completed_at))
+    do:
+      Repo.exists?(from(r in Registration, where: r.did == ^did and is_nil(r.completed_at)),
+        primary: true
+      )
 
   defp input(%{"handle" => handle, "password" => password} = params) do
     with true <-

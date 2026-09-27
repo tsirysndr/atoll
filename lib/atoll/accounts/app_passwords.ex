@@ -84,7 +84,10 @@ defmodule Atoll.Accounts.AppPasswords do
 
   @doc false
   def verify(did, password) when is_binary(password) and byte_size(password) in 8..1024 do
-    case Repo.get_by(AppPassword, [did: did, digest: digest(did, password)], log: false) do
+    case Repo.get_by(AppPassword, [did: did, digest: digest(did, password)],
+           log: false,
+           primary: true
+         ) do
       nil -> {:error, :invalid_credentials}
       app -> {:ok, %{id: app.id, scope: scope(app)}}
     end
@@ -94,7 +97,7 @@ defmodule Atoll.Accounts.AppPasswords do
 
   @doc false
   def current?(did, id, scope) do
-    case Repo.get(AppPassword, id) do
+    case Repo.get(AppPassword, id, primary: true) do
       %AppPassword{did: ^did} = app -> scope(app) == scope
       _ -> false
     end

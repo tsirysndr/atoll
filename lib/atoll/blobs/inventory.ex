@@ -13,11 +13,11 @@ defmodule Atoll.Blobs.Inventory do
       cids = for {_, {:ok, cid}} <- decoded, do: cid
 
       {:ok, states} =
-        Repo.transaction(fn ->
-          Repo.query!("SET LOCAL statement_timeout = '5s'")
-          Repo.query!("SET LOCAL lock_timeout = '1s'")
+        Repo.read_transaction(fn ->
+          Repo.read_query!("SET LOCAL statement_timeout = '5s'")
+          Repo.read_query!("SET LOCAL lock_timeout = '1s'")
 
-          Repo.query!(
+          Repo.read_query!(
             """
             SELECT cid, 'owned' FROM repository_blobs WHERE backend = 's3' AND cid = ANY($1::bytea[])
             UNION

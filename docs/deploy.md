@@ -36,6 +36,58 @@ Use TLS (`?ssl=true` in `DATABASE_URL`) whenever the database is not on the
 same host. The application needs an ordinary owner role; no extensions beyond
 `plpgsql` are required.
 
+### Optional asynchronous read replica
+
+Leave `READ_DATABASE_URL` unset to use the primary for all database access.
+To enable a separate read pool, add these settings alongside `DATABASE_URL`:
+
+```sh
+DATABASE_URL=ecto://atoll:PRIMARY_PASSWORD@primary.example.com/atoll_prod?ssl=true
+READ_DATABASE_URL=ecto://atoll_reader:READER_PASSWORD@replica.example.com/atoll_prod?ssl=true
+READ_POOL_SIZE=10
+```
+
+`READ_POOL_SIZE` defaults to `POOL_SIZE`, or 10 when neither is set. The reader
+uses the same `ECTO_IPV6` setting as the primary, but has its own URL and
+credentials. Restart Atoll after changing the settings. Provision replication
+separately: Atoll does not create or manage PostgreSQL replicas. Use a role with
+SELECT access to the application tables and schema usage. Reader sessions set
+`default_transaction_read_only=on`, and the read repository exposes no Ecto
+insert/update/delete functions.
+
+Ordinary Ecto reads (`get`, `all`, `one`, `exists?`, aggregates, reloads and
+preloads) use the reader. Writes use the primary. Transactions, row-locking reads,
+migrations, authentication/authorization checks, current account availability,
+signing-key custody, and record takedown checks retain primary consistency.
+Repository exports and other reads that depend on shared locks also stay on the
+primary; those locks cannot be moved to an asynchronous replica. Inventory,
+account search, and database metrics use explicit read transactions where safe.
+
+Writes, ordinary primary transactions and raw primary SQL pin subsequent reads
+in the **same BEAM process** to the primary. This preserves read-after-write
+behavior within that process, including after a transaction commits. The pin
+does not expire during the process lifetime and does not propagate to spawned
+processes. Fresh requests/processes can see replication lag. The AppView
+read-after-write reconciliation path explicitly uses the primary even in a
+fresh process. Replica reads do not guarantee that a just-created account,
+handle, record or blob is immediately visible to other requests.
+
+Only `Atoll.Repo` is in `ecto_repos`; migrate the primary and let PostgreSQL
+replicate the schema before serving reads. `/health/ready` probes both pools
+when the reader is configured. Reader failures are reported instead of silently
+rerouting reads to the primary. Existing database query metrics include both
+pools. To disable the reader, remove `READ_DATABASE_URL` and restart.
+
+Application code continues to call `Atoll.Repo`. Use `primary: true` on an
+individual Ecto read or `Atoll.Repo.with_primary(fn -> ... end)` for a group of
+reads that must be current. `Repo.query/3` and `Repo.query!/3` are always primary;
+use `Repo.read_query/3` or `Repo.read_query!/3` only for audited read-only SQL.
+`Repo.read_transaction/2` keeps a read callback and its streams on one connection;
+nested read callbacks join the outer transaction and rollback aborts that outer
+transaction. Use `Repo.read_query!/3` for transaction-local settings within these
+callbacks. Writes, ordinary transactions and raw primary SQL are rejected inside
+read callbacks. Do not use read transactions for authorization or locking reads.
+
 ## 3. Build the release
 
 On the build machine, from a clean checkout of the exact commit you validated
