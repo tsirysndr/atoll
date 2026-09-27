@@ -322,6 +322,8 @@ case System.get_env("ATOLL_BLOB_STORAGE", "postgres") do
       backend: :s3,
       s3: [
         endpoint: required.("ATOLL_S3_ENDPOINT"),
+        public_domain:
+          Atoll.Blobs.S3.public_domain_from_env!(System.get_env("ATOLL_S3_PUBLIC_DOMAIN")),
         bucket: required.("ATOLL_S3_BUCKET"),
         region: System.get_env("ATOLL_S3_REGION", "us-east-1"),
         access_key_id: required.("ATOLL_S3_ACCESS_KEY_ID"),

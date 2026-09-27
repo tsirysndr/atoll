@@ -168,6 +168,26 @@ defmodule Atoll.Blobs do
     end)
   end
 
+  @doc "Optional CDN URL for an active account's publicly referenced S3 blob."
+  def public_url(did, cid_text, opts \\ []) do
+    config = storage(opts)
+
+    with domain when is_binary(domain) <- get_in(config, [:s3, :public_domain]),
+         {:ok, cid} <- CID.from_base32(cid_text),
+         {:ok, %{codec: :raw}} <- CID.decode(cid),
+         true <-
+           Repo.exists?(
+             from b in public_query(did),
+               join: h in Head,
+               on: h.did == b.did,
+               where: b.cid == ^cid and b.backend == :s3 and h.status == :active
+           ) do
+      S3.public_url(cid, public_domain: domain)
+    else
+      _ -> nil
+    end
+  end
+
   @doc "Lists available referenced blobs with an exclusive CID cursor and optional reference revision."
   def list_public(did, limit, cursor \\ nil, since \\ nil, token \\ nil) when limit in 1..1000 do
     Repo.transaction(fn ->

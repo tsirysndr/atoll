@@ -662,16 +662,28 @@ transformed.
 bytes in an S3-compatible bucket while retaining ownership, MIME type, size,
 and backend metadata in PostgreSQL. Repository commits and MST blocks remain
 in PostgreSQL. S3 uses signed, path-style requests and fixed object keys
-`blobs/<base32-CID>`; the bucket must already exist and remain private.
+`blobs/<base32-CID>`; the bucket must already exist. Keep it private unless
+deliberately exposing objects through a public bucket domain.
 
 | Variable | Purpose |
 | --- | --- |
 | `ATOLL_S3_ENDPOINT` | Service origin, such as `https://s3.us-east-1.amazonaws.com` or `http://localhost:9000` for local MinIO |
+| `ATOLL_S3_PUBLIC_DOMAIN` | Optional public bucket domain, e.g. `cdn.rocksky.social` or `https://cdn.rocksky.social`; no bucket name or path |
 | `ATOLL_S3_BUCKET` | Existing bucket name |
 | `ATOLL_S3_REGION` | Signing region; defaults to `us-east-1` |
 | `ATOLL_S3_ACCESS_KEY_ID` | Access key with object PUT/GET/DELETE permission |
 | `ATOLL_S3_SECRET_ACCESS_KEY` | Secret key, supplied outside version control |
 | `ATOLL_S3_SESSION_TOKEN` | Optional temporary-credential token |
+
+When configured, local profile and post image URLs for available S3 blobs use
+`https://<public-domain>/blobs/<base32-CID>`. An explicit
+`ATOLL_IMAGE_CDN_URL_PATTERN` takes precedence. PostgreSQL blobs and deployments
+without the public domain retain the PDS `getBlob` URL. Signed S3 operations and
+the `getBlob` authorization and byte-verification path are unchanged. The domain
+must map directly to the bucket root and serve the correct content type.
+Direct CDN links remain subject to the CDN's access and cache policy; withdrawing
+a reference or taking down an account does not revoke a previously issued public
+link, so public-object removal/cache purging must be handled at the CDN too.
 
 Trusted internal callers can use:
 
@@ -1074,4 +1086,3 @@ observations do not produce duplicate events. The
 - [x] Opt-in official OAuth SDK integration covering discovery, PAR, narrowed granular repository/blob/email/RPC consent, DPoP resources, refresh and source-session revocation.
 - [x] Upstream WebSocket firehose decoding, signed commit application, live delivery, cursor resumption and error-frame integration tests.
 - [x] End-to-end compatibility suites against pinned official implementations: the `@atproto/api` client (sessions, records, blobs, preferences), the official OAuth client SDK, the upstream firehose consumer, and `@atproto/repo` proof fixtures. Live-network federation against public relays and AppViews remains an operator deployment check, not a repository test.
-

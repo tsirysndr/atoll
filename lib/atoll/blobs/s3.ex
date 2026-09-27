@@ -3,6 +3,34 @@ defmodule Atoll.Blobs.S3 do
   alias Atoll.CID
   @max_bytes 5 * 1024 * 1024
 
+  @doc "Public bucket-domain URL for an object, without the path-style bucket prefix."
+  def public_url(cid, config) do
+    with domain when is_binary(domain) <- Keyword.get(config, :public_domain),
+         {:ok, %{codec: :raw}} <- CID.decode(cid) do
+      domain <> "/blobs/" <> CID.to_base32(cid)
+    else
+      _ -> nil
+    end
+  end
+
+  @doc false
+  def public_domain_from_env!(value) when value in [nil, ""], do: nil
+
+  def public_domain_from_env!(value) when is_binary(value) do
+    url = if String.contains?(value, "://"), do: value, else: "https://" <> value
+
+    with {:ok, uri} <- URI.new(url),
+         true <- uri.scheme == "https" and Atoll.Syntax.handle?(uri.host),
+         true <- is_nil(uri.userinfo) and is_nil(uri.query) and is_nil(uri.fragment),
+         true <- uri.path in [nil, "", "/"] and uri.port in 1..65_535 do
+      URI.to_string(%{uri | host: String.downcase(uri.host), path: nil})
+    else
+      _ ->
+        raise ArgumentError,
+              "ATOLL_S3_PUBLIC_DOMAIN must be a domain or HTTPS origin without a path"
+    end
+  end
+
   def put(cid, bytes, config) do
     case request(:put, cid, bytes, config) do
       {:ok, %{status: status}} when status in 200..299 -> :ok

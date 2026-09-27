@@ -4,7 +4,7 @@ defmodule Atoll.Proxy.LocalViewer do
 
   Mirrors the reference viewer without an AppView back-channel: counts are
   zero directly after creation, record embeds render as not-yet-found, and
-  image URLs use the configured CDN pattern or this server's public getBlob
+  image URLs use the configured CDN pattern, S3 public domain, or public getBlob
   route. Views built here are only spliced into responses for their author.
   """
   alias Atoll.Repo
@@ -173,8 +173,9 @@ defmodule Atoll.Proxy.LocalViewer do
   def image_url(pattern, did, cid) do
     case Application.get_env(:atoll, :image_cdn_url_pattern) do
       nil ->
-        AtollWeb.Endpoint.url() <>
-          "/xrpc/com.atproto.sync.getBlob?did=" <> URI.encode_www_form(did) <> "&cid=" <> cid
+        Atoll.Blobs.public_url(did, cid) ||
+          AtollWeb.Endpoint.url() <>
+            "/xrpc/com.atproto.sync.getBlob?did=" <> URI.encode_www_form(did) <> "&cid=" <> cid
 
       format ->
         [pattern, did, cid]
