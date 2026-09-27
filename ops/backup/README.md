@@ -92,9 +92,9 @@ Restore object bytes to an isolated target bucket before enabling serving or
 cleanup. Preserve object keys and account for provider versioning, retention,
 encryption/KMS keys and permissions. Atoll's S3 inventory can describe current
 ownership but is not proof of a complete backup or permission to delete objects.
-Automated bucket snapshot/copy, object integrity verification, cross-store restore
-drills, and a complete Atoll-schema restore drill remain unimplemented; the main
-backup/restore checklist remains open.
+Automated bucket snapshot/copy, object integrity verification, and cross-store
+restore drills remain unimplemented; the main backup/restore checklist remains
+open. The PostgreSQL Atoll-schema drill below covers selected application state.
 
 ## Test the primitive
 
@@ -113,3 +113,46 @@ manual integration check, separate from `mix precommit`.
 PostgreSQL references: [pg_dump](https://www.postgresql.org/docs/18/app-pgdump.html),
 [pg_restore](https://www.postgresql.org/docs/18/app-pgrestore.html), and
 [backup methods](https://www.postgresql.org/docs/18/backup.html).
+
+## Atoll schema and application-data drill
+
+```sh
+# Existing Mix dependencies and PostgreSQL 18 clients are required.
+# Use explicit PGHOST/PGPORT/PGUSER/PGPASSWORD settings for the local test server.
+PATH=/path/to/postgresql-18/bin:$PATH python3 scripts/test_atoll_database_backup.py
+```
+
+This separate integration check creates two uniquely named disposable databases,
+runs every Atoll migration in the source, seeds synthetic application data, archives
+it, restores into the empty target, and verifies using Atoll's application modules
+in a fresh process. It removes only the databases and temporary files it created.
+It starts only the repository and its dependencies: no endpoint, background worker,
+email or relay service runs. It does not use development or production databases.
+The Elixir fixture rejects database names outside the disposable-test naming format.
+Unlike libpq's archive tool, the fixture uses explicit Postgrex connection settings;
+PGSERVICE, PGPASSFILE and libpq SSL options are not fixture configuration.
+
+The drill verifies:
+
+- Preserved migration count and a byte-identical CAR export whose signature and
+  repository tree validate with the original public key.
+- Decryption of the retained repository signing key, with failure under the wrong
+  encryption key before successful recovery with the original key.
+- Password verification, an existing access token, and refresh-token rotation.
+- Published PostgreSQL blob bytes and CID verification, retained quota accounting,
+  and operator audit rows.
+- A nonzero replay floor, rejection of an older cursor, and encoding of retained
+  event frames.
+- A new signed write after restore, exercising restored indexes/triggers and
+  sequence advancement beyond the pre-backup event sequence.
+
+The fixture's encryption/session secrets are random, ephemeral environment values;
+its comparison file includes synthetic session tokens and is mode 0600 inside a
+private temporary directory. Neither is included in the archive. The runner reports
+only failure stages to avoid printing credentials in exception values. Matching
+keys remain a separately retained requirement for real recovery.
+
+This is selected application coverage, not proof of every pending PLC/OAuth/signup
+state, S3 recovery, rolling-version migration compatibility, production grants,
+large-database performance or point-in-time recovery. Continue to perform deployment-
+specific restore drills before relying on an archive for recovery.
