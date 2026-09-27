@@ -465,11 +465,11 @@ mutation. Deletes and empty batches need no record schema, even with `validate: 
 - [x] Explicit OAuth policy for every currently implemented local XRPC route, including public reads and unsupported account/operator grants.
 - [x] Localhost virtual public-client metadata, loopback callback matching, and flow integration without metadata network requests.
 - [x] OAuth nonce challenges and proof admission for supplied OAuth credentials on all currently implemented local XRPC routes.
-- [ ] ATProto OAuth authorization and resource server support.
+- [x] ATProto OAuth authorization and resource server support (discovery, PAR, DPoP token issuance/refresh/revocation, granular scopes and permission sets, browser consent, and resource-route admission above).
 - [x] Live-session and repository ownership checks for blob uploads and single/batch record writes.
 - [x] Operator Basic authentication for repository/blob exports, including inactive accounts.
-- [ ] Authorization for remaining account and repository operations.
-- [ ] Account migration, identity updates, and signing-key lifecycle.
+- [x] Explicit authorization on every routed account and repository operation: session/app-password checks, OAuth admission, operator Basic credentials, or deliberate public availability.
+- [x] Account migration in and out (service-authenticated creation, repository/blob/preference export and import, missing-blob inventory, DID credential recommendation, PLC signature/signing/submission and activation), identity updates, and the signing-key lifecycle including reservation, rotation and operator recovery.
 - [x] Authenticated `com.atproto.server.checkAccountStatus` with repository/blob inventory and DID service/key checks.
 - [x] Locally served private `app.bsky` actor preferences with namespace replacement, restricted-session personal-details protection and declared-age synthesis.
 
@@ -1038,7 +1038,7 @@ observations do not produce duplicate events. The
 - [x] Audited operator account deletion with durable shared-safe blob cleanup.
 - [x] Operator account messages through the configurable email Worker, with attempt/outcome history.
 - [x] Atomic operator audit entries for PLC key installation, replacement, and unchanged retries, without private-key material.
-- [ ] Remaining administrative account controls and audit coverage for other operator actions.
+- [x] The complete `com.atproto.admin` endpoint surface at the pinned upstream revision, with transactional audit history for every mutating operator action.
 - [ ] Production configuration, HTTPS deployment, and signing-key protection.
 - [x] Logical PostgreSQL archive/restore helper with checksums, empty-target protection, and disposable-database integration checks.
 - [x] Disposable full-schema PostgreSQL restore drill covering signed repositories, encrypted custody, sessions, blobs, audit history and replay boundaries.
