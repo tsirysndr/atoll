@@ -8,7 +8,9 @@ defmodule Atoll.ServerRuntimeConfigTest do
       "ATOLL_SESSION_MAX_COUNT" => "25",
       "PHX_HOST" => "PDS.Example.com",
       "DATABASE_URL" => "ecto://postgres:postgres@localhost/atoll_config_test",
-      "SECRET_KEY_BASE" => String.duplicate("a", 64)
+      "SECRET_KEY_BASE" => String.duplicate("a", 64),
+      "ATOLL_KEY_ENCRYPTION_KEY" => Base.encode64(:binary.copy(<<11>>, 32)),
+      "ATOLL_SESSION_SIGNING_KEY" => Base.encode64(:binary.copy(<<12>>, 32))
     }
 
     previous = Map.new(values, fn {key, _} -> {key, System.get_env(key)} end)
@@ -40,6 +42,40 @@ defmodule Atoll.ServerRuntimeConfigTest do
     System.delete_env("ATOLL_PDS_DID")
 
     assert_raise RuntimeError, "ATOLL_PDS_DID is required in production", fn ->
+      Config.Reader.read!("config/runtime.exs", env: :prod, target: :host)
+    end
+  end
+
+  test "production runtime fails before boot when custody or session secrets are missing" do
+    for name <- ["ATOLL_KEY_ENCRYPTION_KEY", "ATOLL_SESSION_SIGNING_KEY"] do
+      value = System.get_env(name)
+      System.delete_env(name)
+
+      error =
+        assert_raise RuntimeError, fn ->
+          Config.Reader.read!("config/runtime.exs", env: :prod, target: :host)
+        end
+
+      assert error.message =~ name
+      System.put_env(name, value)
+    end
+  end
+
+  test "production HSTS enforcement is opt-in and validated" do
+    config = Config.Reader.read!("config/runtime.exs", env: :prod, target: :host)
+    refute config[:atoll][AtollWeb.Endpoint][:force_ssl]
+    System.put_env("ATOLL_FORCE_SSL", "true")
+    on_exit(fn -> System.delete_env("ATOLL_FORCE_SSL") end)
+    config = Config.Reader.read!("config/runtime.exs", env: :prod, target: :host)
+
+    assert config[:atoll][AtollWeb.Endpoint][:force_ssl] == [
+             hsts: true,
+             rewrite_on: [:x_forwarded_proto]
+           ]
+
+    System.put_env("ATOLL_FORCE_SSL", "never")
+
+    assert_raise RuntimeError, "ATOLL_FORCE_SSL must be true or false", fn ->
       Config.Reader.read!("config/runtime.exs", env: :prod, target: :host)
     end
   end
