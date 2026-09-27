@@ -135,5 +135,7 @@ try {
     await exited;
     clearTimeout(force);
   }
-  await rm(profile, {recursive: true, force: true});
+  // Chrome helpers can finish writing the profile after the main process exits.
+  // Retry transient ENOTEMPTY/EBUSY failures, but still fail if cleanup cannot finish.
+  await rm(profile, {recursive: true, force: true, maxRetries: 10, retryDelay: 100});
 }
