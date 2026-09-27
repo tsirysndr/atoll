@@ -923,6 +923,7 @@ observations do not produce duplicate events. The
 - [x] `GET /health/ready` database connectivity readiness with bounded queries and outcome telemetry.
 - [x] Opt-in supervised cleanup of expired sessions and service-token replay markers, with bounded batches and outcome telemetry.
 - [x] Opt-in operator-authenticated Prometheus endpoint with fixed-cardinality HTTP, database, readiness, worker and VM metrics.
+- [x] Baseline Prometheus alert rules and operator runbook, with firing/recovery/counter-reset tests in CI.
 - [ ] Comprehensive operational monitoring and alerting.
 - [x] Offline MST and compact-proof interoperability against pinned `@atproto/repo` 0.8.10 fixtures.
 - [ ] End-to-end compatibility tests with existing ATProto clients and servers.
@@ -1000,8 +1001,13 @@ atomic snapshot across all families. Endpoint counts include completed scrapes
 and probes, and omit requests that terminate without an endpoint stop event.
 Durations are totals, not latency histograms or percentiles. This exporter does
 not install Prometheus, configure alert delivery, or monitor disk capacity,
-backlogs, external services, or backup freshness. Comprehensive monitoring and
-alerting remain on the checklist.
+backlogs, external services, or backup freshness. Baseline scrape, server-error,
+readiness and worker-failure alerts are available in
+[`ops/prometheus/alerts.yml`](ops/prometheus/alerts.yml), with setup instructions,
+limitations and first-response checks in the
+[operator runbook](ops/prometheus/README.md). Validate them with
+`bash scripts/test_monitoring.sh`; CI runs the same `promtool` checks and synthetic
+rule tests. Comprehensive monitoring and alerting remain on the checklist.
 
 ### Development configuration
 

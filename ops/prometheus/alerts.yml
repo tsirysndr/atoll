@@ -1,0 +1,51 @@
+groups:
+  - name: atoll
+    interval: 1m
+    rules:
+      - alert: AtollScrapeUnavailable
+        expr: up{job="atoll"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: Atoll metrics scrape is unavailable
+
+      - alert: AtollHighServerErrorRate
+        expr: |
+          (
+            sum by (job, instance) (rate(atoll_http_requests_total{job="atoll",status_class="5xx"}[5m]))
+            / sum by (job, instance) (rate(atoll_http_requests_total{job="atoll"}[5m]))
+          ) > 0.05
+          and
+          sum by (job, instance) (rate(atoll_http_requests_total{job="atoll"}[5m])) >= 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Atoll has sustained server errors
+
+      - alert: AtollReadinessFailures
+        expr: |
+          (
+            sum by (job, instance) (rate(atoll_readiness_checks_total{job="atoll",outcome="unavailable"}[5m]))
+            / sum by (job, instance) (rate(atoll_readiness_checks_total{job="atoll"}[5m]))
+          ) >= 0.5
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: Atoll database readiness checks are failing
+
+      - alert: AtollWorkerFailures
+        expr: |
+          sum by (job, instance, worker) (
+            increase(atoll_worker_runs_total{job="atoll",result=~"failed|timeout"}[10m])
+          ) > 0
+          or
+          sum by (job, instance, worker) (
+            increase(atoll_worker_items_failed_total{job="atoll"}[10m])
+          ) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: Atoll worker reported failures in the last ten minutes

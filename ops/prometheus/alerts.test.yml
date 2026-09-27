@@ -1,0 +1,184 @@
+rule_files:
+  - "alerts.yml"
+evaluation_interval: "1m"
+tests:
+  - name: "Scrape delay, recovery, and unrelated jobs"
+    interval: "1m"
+    input_series:
+      - series: 'up{job="atoll",instance="pds:443"}'
+        values: "0 0 0 1 1"
+      - series: 'up{job="unrelated",instance="other:443"}'
+        values: "0x4"
+    alert_rule_test:
+      - eval_time: "1m"
+        alertname: "AtollScrapeUnavailable"
+        exp_alerts: []
+      - eval_time: "2m"
+        alertname: "AtollScrapeUnavailable"
+        exp_alerts:
+          - exp_labels:
+              job: "atoll"
+              instance: "pds:443"
+              severity: "critical"
+            exp_annotations:
+              summary: "Atoll metrics scrape is unavailable"
+      - eval_time: "3m"
+        alertname: "AtollScrapeUnavailable"
+        exp_alerts: []
+  - name: "Sustained server errors preserve instance labels and clear after recovery"
+    interval: "1m"
+    input_series:
+      - series: 'atoll_http_requests_total{job="atoll",instance="pds:443",status_class="2xx"}'
+        values: "0+100x10 1120+120x10"
+      - series: 'atoll_http_requests_total{job="atoll",instance="pds:443",status_class="5xx"}'
+        values: "0+20x10 200+0x10"
+      - series: 'atoll_http_requests_total{job="atoll",instance="healthy:443",status_class="2xx"}'
+        values: "0+120x21"
+      - series: 'atoll_http_requests_total{job="atoll",instance="healthy:443",status_class="5xx"}'
+        values: "0x21"
+    alert_rule_test:
+      - eval_time: "4m"
+        alertname: "AtollHighServerErrorRate"
+        exp_alerts: []
+      - eval_time: "8m"
+        alertname: "AtollHighServerErrorRate"
+        exp_alerts:
+          - exp_labels:
+              job: "atoll"
+              instance: "pds:443"
+              severity: "warning"
+            exp_annotations:
+              summary: "Atoll has sustained server errors"
+      - eval_time: "20m"
+        alertname: "AtollHighServerErrorRate"
+        exp_alerts: []
+  - name: "Low volume and idle traffic do not trigger HTTP warnings"
+    interval: "1m"
+    input_series:
+      - series: 'atoll_http_requests_total{job="atoll",instance="pds:443",status_class="5xx"}'
+        values: "0+1x15"
+      - series: 'atoll_http_requests_total{job="atoll",instance="pds:443",status_class="2xx"}'
+        values: "0x15"
+      - series: 'atoll_http_requests_total{job="atoll",instance="idle:443",status_class="5xx"}'
+        values: "0x15"
+      - series: 'atoll_http_requests_total{job="atoll",instance="idle:443",status_class="2xx"}'
+        values: "0x15"
+    alert_rule_test:
+      - eval_time: "15m"
+        alertname: "AtollHighServerErrorRate"
+        exp_alerts: []
+  - name: "Readiness delay, healthy probes, and recovery"
+    interval: "1m"
+    input_series:
+      - series: 'atoll_readiness_checks_total{job="atoll",instance="pds:443",outcome="unavailable"}'
+        values: "0+2x5 10x10"
+      - series: 'atoll_readiness_checks_total{job="atoll",instance="pds:443",outcome="ready"}'
+        values: "0x5 2+2x10"
+      - series: 'atoll_readiness_checks_total{job="atoll",instance="healthy:443",outcome="ready"}'
+        values: "0+2x16"
+      - series: 'atoll_readiness_checks_total{job="atoll",instance="healthy:443",outcome="unavailable"}'
+        values: "0x16"
+    alert_rule_test:
+      - eval_time: "2m"
+        alertname: "AtollReadinessFailures"
+        exp_alerts: []
+      - eval_time: "4m"
+        alertname: "AtollReadinessFailures"
+        exp_alerts:
+          - exp_labels:
+              job: "atoll"
+              instance: "pds:443"
+              severity: "critical"
+            exp_annotations:
+              summary: "Atoll database readiness checks are failing"
+      - eval_time: "15m"
+        alertname: "AtollReadinessFailures"
+        exp_alerts: []
+  - name: "Worker run and item failures both alert without duplicate alerts"
+    interval: "1m"
+    input_series:
+      - series: 'atoll_worker_runs_total{job="atoll",instance="pds:443",worker="blob_cleanup",result="timeout"}'
+        values: "0 1x15"
+      - series: 'atoll_worker_items_failed_total{job="atoll",instance="pds:443",worker="blob_cleanup"}'
+        values: "0 2x15"
+      - series: 'atoll_worker_runs_total{job="atoll",instance="pds:443",worker="signup_retry",result="ok"}'
+        values: "0+1x16"
+      - series: 'atoll_worker_items_failed_total{job="atoll",instance="pds:443",worker="signup_retry"}'
+        values: "0 1x15"
+      - series: 'atoll_worker_runs_total{job="atoll",instance="pds:443",worker="identity_refresh",result="failed"}'
+        values: "0 1x15"
+    alert_rule_test:
+      - eval_time: "0m"
+        alertname: "AtollWorkerFailures"
+        exp_alerts: []
+      - eval_time: "2m"
+        alertname: "AtollWorkerFailures"
+        exp_alerts:
+          - exp_labels:
+              job: "atoll"
+              instance: "pds:443"
+              severity: "warning"
+              worker: "blob_cleanup"
+            exp_annotations:
+              summary: "Atoll worker reported failures in the last ten minutes"
+          - exp_labels:
+              job: "atoll"
+              instance: "pds:443"
+              severity: "warning"
+              worker: "signup_retry"
+            exp_annotations:
+              summary: "Atoll worker reported failures in the last ten minutes"
+          - exp_labels:
+              job: "atoll"
+              instance: "pds:443"
+              severity: "warning"
+              worker: "identity_refresh"
+            exp_annotations:
+              summary: "Atoll worker reported failures in the last ten minutes"
+      - eval_time: "15m"
+        alertname: "AtollWorkerFailures"
+        exp_alerts: []
+  - name: "Counter resets and missing or idle probes do not imply failures"
+    interval: "1m"
+    input_series:
+      - series: 'atoll_worker_runs_total{job="atoll",instance="pds:443",worker="blob_cleanup",result="failed"}'
+        values: "100x3 0x12"
+      - series: 'atoll_worker_items_failed_total{job="atoll",instance="pds:443",worker="signup_retry"}'
+        values: "50x3 0x12"
+      - series: 'atoll_readiness_checks_total{job="atoll",instance="pds:443",outcome="unavailable"}'
+        values: "20x3 0x12"
+      - series: 'atoll_readiness_checks_total{job="atoll",instance="pds:443",outcome="ready"}'
+        values: "100x3 0x12"
+      - series: 'atoll_http_requests_total{job="atoll",instance="pds:443",status_class="5xx"}'
+        values: "100x3 0x12"
+      - series: 'atoll_http_requests_total{job="atoll",instance="pds:443",status_class="2xx"}'
+        values: "1000x3 0+120x12"
+    alert_rule_test:
+      - eval_time: "6m"
+        alertname: "AtollHighServerErrorRate"
+        exp_alerts: []
+      - eval_time: "6m"
+        alertname: "AtollReadinessFailures"
+        exp_alerts: []
+      - eval_time: "6m"
+        alertname: "AtollWorkerFailures"
+        exp_alerts: []
+      - eval_time: "15m"
+        alertname: "AtollWorkerFailures"
+        exp_alerts: []
+  - name: "Missing series do not create phantom alerts"
+    interval: "1m"
+    input_series: []
+    alert_rule_test:
+      - eval_time: "15m"
+        alertname: "AtollScrapeUnavailable"
+        exp_alerts: []
+      - eval_time: "15m"
+        alertname: "AtollHighServerErrorRate"
+        exp_alerts: []
+      - eval_time: "15m"
+        alertname: "AtollReadinessFailures"
+        exp_alerts: []
+      - eval_time: "15m"
+        alertname: "AtollWorkerFailures"
+        exp_alerts: []

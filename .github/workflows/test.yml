@@ -63,6 +63,9 @@ jobs:
       - name: Run project checks and tests
         run: mix precommit
 
+      - name: Check monitoring alert rules
+        run: bash scripts/test_monitoring.sh
+
       - name: Run passkey browser integration
         env:
           CHROME_BIN: google-chrome
