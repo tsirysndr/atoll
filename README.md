@@ -944,6 +944,7 @@ observations do not produce duplicate events. The
 - [x] Offline S3 blob archives with CID verification, empty-prefix restoration, and a real MinIO round trip.
 - [x] Combined PostgreSQL/MinIO restore drill for published and staged blobs, retained credentials, signed repositories and post-restore publication.
 - [x] Paired offline recovery-set wrapper binding database/S3 archives, deployment revision and a nonsecret external-keyring reference.
+- [x] Recovery-set checks for every database-owned S3 blob's archive membership and size, including staged blobs and mixed storage.
 - [ ] Complete database/S3 recovery sets, broader restore drills, and backup / restore workflow.
 - [x] `GET /health/ready` database connectivity readiness with bounded queries and outcome telemetry.
 - [x] Opt-in supervised cleanup of expired sessions and service-token replay markers, with bounded batches and outcome telemetry.

@@ -22,7 +22,7 @@ env = {**os.environ, 'MIX_ENV': 'test', 'PGUSER': os.environ.get('PGUSER', getpa
 os.umask(0o077)
 
 
-def command(args, database, stage=None):
+def command(args, database, stage=None, ok=True, expected_error=None):
     command_env = {**env, 'PGDATABASE': database}
     if s3:
         command_env.update({
@@ -35,9 +35,11 @@ def command(args, database, stage=None):
         command_env.pop('ATOLL_S3_SESSION_TOKEN', None)
     result = subprocess.run(args, cwd=ROOT, env=command_env,
                             stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    if result.returncode:
+    if (result.returncode == 0) != ok:
         # Child exception data can contain synthetic credentials. Report only stage.
         raise RuntimeError(f'Restore drill command failed: {stage or args[0]}')
+    if expected_error and expected_error.encode() not in result.stderr:
+        raise RuntimeError(f'Restore drill rejected for an unexpected reason: {stage}')
 
 
 try:
@@ -52,6 +54,18 @@ try:
         command(fixture + ['seed', evidence], source, 'seed Atoll schema and data')
         recovery = [sys.executable, 'scripts/recovery_set.py']
         revision = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip()
+        metadata = ['--revision', revision, '--keyring-reference', 'ephemeral-drill-keys']
+        if s3:
+            command(recovery + ['backup', archive, '--offline', '--storage', 'postgres'] + metadata,
+                    source, 'refuse a PostgreSQL-only set with S3 ownership', ok=False,
+                    expected_error='Database owns S3 blobs')
+            assert not Path(archive).exists()
+            command(fixture + ['remove_source_blob', evidence], source, 'remove disposable source blob')
+            command(recovery + ['backup', archive, '--offline', '--storage', 's3'] + metadata,
+                    source, 'refuse a recovery set missing an owned S3 blob', ok=False,
+                    expected_error='missing a database-owned S3 blob')
+            assert not Path(archive).exists()
+            command(fixture + ['repair_source_blob', evidence], source, 'repair disposable source blob')
         command(recovery + ['backup', archive, '--offline', '--storage', 's3' if s3 else 'postgres',
                             '--revision', revision, '--keyring-reference', 'ephemeral-drill-keys'],
                 source, 'create paired recovery set')

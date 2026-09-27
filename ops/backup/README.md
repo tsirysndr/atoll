@@ -54,10 +54,32 @@ any S3 writes. S3 failure prevents database restoration; a later database failur
 can leave a populated target bucket. No remote rollback/deletion is attempted.
 Keep failed targets offline, investigate, and retry using fresh targets.
 
+Before reporting backup or restore success, the wrapper reads all S3 ownership
+rows from the offline source or restored database and checks that each CID appears
+in the verified S3 index with the database's recorded byte size. This includes
+staged/unpublished blobs and repeated ownership of shared objects. It streams
+fixed-width metadata into a private temporary file and searches the on-disk index
+with bounded memory; temporary disk space scales with ownership rows. A PostgreSQL-
+only recovery set is rejected if any S3 ownership remains, even if the deployment's
+default backend has been switched to PostgreSQL. Mixed PostgreSQL/S3 ownership
+requires an S3 recovery set. The wrapper therefore requires the Atoll schema;
+use the database primitive for generic PostgreSQL databases.
+
+Local `verify` still needs no live database and checks archive integrity only;
+it does not inspect ownership inside the dump. Restore's ownership check happens
+after the database transaction commits. If it fails, both targets may be populated
+and must remain offline for investigation. Coverage checks require the database
+and local files to stay unchanged and do not prove that the source was quiesced
+across the snapshots. Cleanup-only rows are not required ownership: an object may
+already have been deleted before its cleanup job was acknowledged. Untracked
+objects are still copied by the S3 archive helper. Missing blobs that a migration
+has yet to import are outside this ownership check.
+
 The directory, its ancestors and targets must remain private and unchanged by
 other processes. Retain durable encrypted copies, keys and configuration outside
-this helper; it does not fsync, encrypt, replicate, enforce retention, verify
-database/S3 ownership completeness or prove that writers were actually stopped.
+this helper; it does not fsync, encrypt, replicate, enforce retention or prove that
+writers were actually stopped. Ownership coverage is limited to stored S3 blob
+rows; broader repository/media/application validity still needs restore drills.
 Both Atoll restore drills below exercise this wrapper. Unit checks for component
 pairing, failure ordering and existing-directory protection run with
 `python3 scripts/test_recovery_set.py` and in push CI.
@@ -283,7 +305,11 @@ disposable database names. Buckets are removed with the temporary MinIO containe
 the Python runner removes its databases and local archives.
 
 The fixture seeds an S3-backed published blob, an unpublished staged blob, and an
-untracked object. With the source fixture process stopped, it creates and verifies
+untracked object. It first proves that a PostgreSQL-only set is refused while S3
+ownership exists. It then deletes one known test object, checks that an S3 set
+fails specifically for missing ownership coverage, and repairs that test object.
+Both failed attempts must remove their incomplete local set. With the source
+fixture process stopped, it creates and verifies
 a recovery set containing the database and all three S3 objects. It first restores
 only the database into the target and checks that the published blob cannot be
 served from the empty target bucket, with no PostgreSQL raw-block fallback. It

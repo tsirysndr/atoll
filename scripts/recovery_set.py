@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Create, verify and restore paired offline Atoll database/blob archives."""
 import argparse
+import base64
 import datetime
 import json
 import os
@@ -9,6 +10,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 
 import database_backup as database
 
@@ -70,6 +72,63 @@ def verify(directory):
     return manifest
 
 
+def ownership_rows(output):
+    # COPY streams bounded-width rows to a private temporary file, avoiding a
+    # whole-database list in memory. No account identifiers are exported.
+    sql = "COPY (SELECT encode(cid, 'hex'), size FROM repository_blobs WHERE backend = 's3') TO STDOUT"
+    try:
+        subprocess.run(['psql', '--no-password', '--dbname', database.database(),
+                        '-Xq', '--set=ON_ERROR_STOP=1', '-c', sql],
+                       stdin=subprocess.DEVNULL, stdout=output, stderr=subprocess.DEVNULL, check=True)
+    except (OSError, subprocess.CalledProcessError):
+        raise database.BackupError('Unable to read S3 ownership from the offline database') from None
+    output.seek(0)
+
+
+def indexed(index, count, text):
+    low, high = 0, count
+    while low < high:
+        middle = (low + high) // 2
+        index.seek(middle * 60)
+        entry = index.read(60)
+        if len(entry) != 60 or entry[-1:] != b'\n':
+            raise database.BackupError('Invalid S3 archive index during ownership check')
+        if entry[:59] < text:
+            low = middle + 1
+        elif entry[:59] > text:
+            high = middle
+        else:
+            return True
+    return False
+
+
+def verify_blob_coverage(directory, storage):
+    # Requires prior archive verification and an offline, unchanged database.
+    # Cleanup jobs are not ownership: their object may already have been deleted.
+    with tempfile.TemporaryFile() as rows:
+        ownership_rows(rows)
+        if storage == 'postgres':
+            if rows.read(1):
+                raise database.BackupError('Database owns S3 blobs; use an S3 recovery set')
+            return
+        index_path = directory / 's3' / 'index'
+        count = index_path.stat().st_size // 60
+        with index_path.open('rb') as index:
+            while line := rows.readline(100):
+                if not re.fullmatch(rb'[0-9a-f]{72}\t[0-9]{1,7}\n', line):
+                    raise database.BackupError('Invalid S3 ownership row')
+                encoded, size = line.rstrip(b'\n').split(b'\t')
+                cid = bytes.fromhex(encoded.decode('ascii'))
+                if cid[:4] != bytes.fromhex('01551220') or int(size) > 5 * 1024 * 1024:
+                    raise database.BackupError('Invalid S3 ownership metadata')
+                text = b'b' + base64.b32encode(cid).lower().rstrip(b'=')
+                if not indexed(index, count, text):
+                    raise database.BackupError('Recovery set is missing a database-owned S3 blob')
+                blob = directory / 's3' / 'blobs' / text.decode('ascii')
+                if blob.stat().st_size != int(size):
+                    raise database.BackupError('S3 archive size disagrees with database ownership')
+
+
 def backup(directory, storage, revision, keyring_reference):
     if (storage not in ('postgres', 's3') or not re.fullmatch(r'[a-f0-9]{40}|[a-f0-9]{64}', revision or '')
             or not keyring_reference or len(keyring_reference) > 200):
@@ -91,6 +150,7 @@ def backup(directory, storage, revision, keyring_reference):
             manifest['s3ManifestSha256'] = checksum(directory / 's3' / 'manifest.json')
         (directory / 'recovery.json').write_text(json.dumps(manifest, indent=2) + '\n')
         verify(directory)
+        verify_blob_coverage(directory, storage)
         complete = True
     finally:
         if not complete:
@@ -105,6 +165,7 @@ def restore(directory):
     if manifest['storage'] == 's3':
         s3('restore', directory / 's3')
     database.restore(directory / 'database')
+    verify_blob_coverage(directory, manifest['storage'])
 
 
 def main():

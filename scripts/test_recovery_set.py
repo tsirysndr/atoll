@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Recovery-set pairing and mutation-order tests; real stores use the Atoll drill."""
 import os
+import base64
+import hashlib
 import contextlib
 import io
 from pathlib import Path
@@ -24,6 +26,7 @@ class RecoverySetTest(unittest.TestCase):
         patch.object(recovery.database, 'require_empty_target', lambda: self.calls.append('empty database')).start()
         patch.object(recovery.database, 'restore', lambda p: self.calls.append('restore database')).start()
         patch.object(recovery, 's3', self.s3).start()
+        patch.object(recovery, 'verify_blob_coverage', lambda p, s: self.calls.append('coverage')).start()
 
     def database_backup(self, path):
         path.mkdir()
@@ -43,7 +46,7 @@ class RecoverySetTest(unittest.TestCase):
         self.backup()
         recovery.restore(self.directory)
         self.assertEqual(self.calls, ['verify database', 'verify s3', 'empty database',
-                                      'restore s3', 'restore database'])
+                                      'restore s3', 'restore database', 'coverage'])
 
     def test_component_swap_fails_before_any_target_or_archive_tool(self):
         for component in ['database', 's3']:
@@ -90,7 +93,7 @@ class RecoverySetTest(unittest.TestCase):
     def test_postgres_set_never_contacts_s3(self):
         self.backup('postgres')
         recovery.restore(self.directory)
-        self.assertEqual(self.calls, ['verify database', 'empty database', 'restore database'])
+        self.assertEqual(self.calls, ['verify database', 'empty database', 'restore database', 'coverage'])
         (self.directory / 's3').mkdir()
         with self.assertRaises(recovery.database.BackupError):
             recovery.verify(self.directory)
@@ -123,6 +126,55 @@ class RecoverySetTest(unittest.TestCase):
             self.assertEqual(error.exception.code, 2)
         self.assertFalse(self.directory.exists())
         self.assertEqual(self.calls, [])
+
+
+class BlobCoverageTest(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.directory = Path(self.temporary.name)
+        self.rows = b''
+        patcher = patch.object(recovery, 'ownership_rows', self.write_rows)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        (self.directory / 's3' / 'blobs').mkdir(parents=True)
+        self.contents = [b'', b'one', b'two', b'three']
+        self.cids = [bytes.fromhex('01551220') + hashlib.sha256(b).digest() for b in self.contents]
+        self.names = [b'b' + base64.b32encode(cid).lower().rstrip(b'=') for cid in self.cids]
+        (self.directory / 's3' / 'index').write_bytes(b''.join(n + b'\n' for n in sorted(self.names)))
+        for name, content in zip(self.names, self.contents):
+            (self.directory / 's3' / 'blobs' / name.decode()).write_bytes(content)
+
+    def write_rows(self, output):
+        output.write(self.rows)
+        output.seek(0)
+
+    def test_all_owned_objects_found_with_duplicates_and_untracked_extras(self):
+        self.rows = b''.join(cid.hex().encode() + b'\t' + str(len(content)).encode() + b'\n'
+                             for cid, content in zip(self.cids, self.contents))
+        self.rows += self.rows  # Shared objects can have multiple ownership rows.
+        recovery.verify_blob_coverage(self.directory, 's3')
+        self.rows = b''
+        recovery.verify_blob_coverage(self.directory, 's3')
+        recovery.verify_blob_coverage(self.directory, 'postgres')
+
+    def test_missing_index_entry_fails_even_if_file_exists(self):
+        self.rows = self.cids[0].hex().encode() + b'\t0\n'
+        (self.directory / 's3' / 'index').write_bytes(b''.join(n + b'\n' for n in sorted(self.names[1:])))
+        with self.assertRaisesRegex(recovery.database.BackupError, 'missing'):
+            recovery.verify_blob_coverage(self.directory, 's3')
+
+    def test_wrong_size_or_malformed_metadata_fails(self):
+        for row in [self.cids[0].hex().encode() + b'\t1\n', b'bad\n',
+                    b'00' * 36 + b'\t0\n', self.cids[0].hex().encode() + b'\t5242881\n']:
+            self.rows = row
+            with self.assertRaises(recovery.database.BackupError):
+                recovery.verify_blob_coverage(self.directory, 's3')
+
+    def test_postgres_only_set_rejects_any_s3_ownership(self):
+        self.rows = self.cids[0].hex().encode() + b'\t0\n'
+        with self.assertRaisesRegex(recovery.database.BackupError, 'owns S3'):
+            recovery.verify_blob_coverage(self.directory, 'postgres')
 
 
 if __name__ == '__main__':
