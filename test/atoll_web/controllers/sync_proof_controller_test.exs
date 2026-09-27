@@ -175,6 +175,56 @@ defmodule AtollWeb.SyncProofControllerTest do
     assert Repositories.export(@did) == {:error, :invalid_repository}
   end
 
+  test "record proofs do not read unrelated metadata or sibling blocks", %{
+    conn: conn,
+    head: head,
+    all: all
+  } do
+    path = @collection <> "/r1"
+    {:ok, commit} = CBOR.decode(all[head.head])
+    {:ok, proof} = Atoll.MST.Proof.fetch(commit["data"].cid, path, &Map.fetch(all, &1))
+    {:ok, tree} = Atoll.MST.load(commit["data"].cid, all)
+    sibling = Enum.find(Map.keys(tree.blocks), &(not Map.has_key?(proof.blocks, &1)))
+
+    Repo.get!(Atoll.Storage.Block, sibling)
+    |> Ecto.Changeset.change(data: "corrupt")
+    |> Repo.update!()
+
+    Repo.get_by!(Record, did: @did, path: @collection <> "/r2") |> Repo.delete!()
+
+    bytes =
+      conn |> get(@record, %{did: @did, collection: @collection, rkey: "r1"}) |> response(200)
+
+    assert {:ok, %{roots: [root], blocks: blocks}} = CAR.decode(bytes)
+    assert root == head.head
+    assert Atoll.MST.Proof.verify(commit["data"].cid, path, blocks) == {:ok, proof.cid}
+    refute Map.has_key?(blocks, sibling)
+    assert Repositories.export(@did) == {:error, :invalid_repository}
+  end
+
+  test "corrupt stored search-path nodes and inconsistent requested CIDs fail closed", %{
+    conn: conn,
+    all: all,
+    head: head
+  } do
+    {:ok, commit} = CBOR.decode(all[head.head])
+    root = commit["data"].cid
+    node = Repo.get!(Atoll.Storage.Block, root)
+    corrupt = node |> Ecto.Changeset.change(data: "corrupt") |> Repo.update!()
+
+    assert conn
+           |> get(@record, %{did: @did, collection: @collection, rkey: "r1"})
+           |> json_response(500)
+
+    Repo.update!(Ecto.Changeset.change(corrupt, data: all[root]))
+    row = Repo.get_by!(Record, did: @did, path: @collection <> "/r1")
+    row |> Ecto.Changeset.change(cid: head.head) |> Repo.update!()
+
+    assert conn
+           |> get(@record, %{did: @did, collection: @collection, rkey: "r1"})
+           |> json_response(500)
+  end
+
   defp walk(nil, _, _, visited), do: {nil, visited}
 
   defp walk(%Link{cid: cid}, target, blocks, visited) do

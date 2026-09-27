@@ -676,16 +676,23 @@ defmodule Atoll.Repositories do
   @doc "Exports a compact existence or absence proof anchored to the current signed commit."
   def export_record(did, path) do
     Repo.transaction(fn ->
-      {head, tree, commit} = snapshot!(did)
+      head = locked_head!(did, "FOR SHARE")
+      bytes = block!(head.head)
 
-      case MST.proof(tree, path) do
-        {:ok, proof} ->
-          blocks = Map.put(proof.blocks, head.head, commit)
-          blocks = if proof.cid, do: Map.put(blocks, proof.cid, block!(proof.cid)), else: blocks
-          archive!([head.head], blocks)
-
-        {:error, reason} ->
-          Repo.rollback(reason)
+      with {:ok, commit} <- Commit.verify(bytes, did, head.curve, head.public_key),
+           true <- commit["rev"] == head.rev,
+           {:ok, proof} <- MST.Proof.fetch(commit["data"].cid, path, &Storage.get_block/1),
+           indexed <-
+             Repo.one(from r in Record, where: r.did == ^did and r.path == ^path, select: r.cid),
+           true <- indexed == proof.cid do
+        # The signed path is authoritative. Do not rebuild the repository from
+        # the mutable record index or fetch unrelated sibling subtrees.
+        blocks = Map.put(proof.blocks, head.head, bytes)
+        blocks = if proof.cid, do: Map.put(blocks, proof.cid, block!(proof.cid)), else: blocks
+        archive!([head.head], blocks)
+      else
+        {:error, :mst_proof_too_large} -> Repo.rollback(:car_too_large)
+        _ -> Repo.rollback(:invalid_repository)
       end
     end)
   end

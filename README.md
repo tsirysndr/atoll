@@ -182,6 +182,7 @@ record Lexicons or grant access to account data.
 - [x] Chunked repository exports with lazy record-body reads.
 - [x] Streamed HTTP imports with private staging and atomic publication.
 - [ ] Bounded-memory repository metadata traversal.
+- [x] Bounded search-path loading for individual signed record proof exports.
 - [x] Incremental CARv1 decoding with bounded framing buffers and verified block callbacks.
 - [x] Request-scoped private disk staging for incrementally validated CAR blocks.
 - [x] Supervised staging cleanup on request exit and configurable per-node concurrency admission.
@@ -3353,9 +3354,29 @@ returns its record CID, or `nil` for a proven absence. Missing path blocks are
 errors, not evidence of absence. Visited blocks must match their DAG-CBOR CIDs,
 use canonical encoding and key-prefix compression, sort keys within the inherited
 subtree bounds, and follow the SHA-256-derived tree levels without skipping empty
-intermediate nodes. Limits are 129 visited nodes, 1 MiB per node, and 10,000 entries
-per node. Sibling subtrees need not be supplied; the verifier does not claim to
+intermediate nodes. Limits are 129 visited nodes, 1 MiB per node, 2 MiB of retained
+path-node bytes and 10,000 entries per node. Sibling subtrees need not be supplied; the verifier does not claim to
 validate their structure or the complete repository.
+
+`Atoll.MST.Proof.fetch/4` performs the same validation through a CID reader that
+returns `{:ok, bytes}`. It returns only the visited blocks and the record CID (or
+`nil` for absence), and never requests sibling subtrees. The default retained-node
+budget is 2 MiB; trusted internal callers can set `max_bytes` between 1 byte and
+64 MiB. Crossing that budget stops traversal with `mst_proof_too_large`. Missing,
+corrupt or malformed selected nodes fail rather than becoming absence proofs.
+
+`com.atproto.sync.getRecord` now uses this loader against the verified current
+commit's signed root, with the repository head locked throughout export. It checks
+the commit revision and the requested record-index entry against the proof, then
+loads only the selected record block. It no longer reconstructs the complete MST
+from every index row. Unrelated index rows or sibling blocks are not audited by
+this endpoint; full export retains its whole-index consistency check. Selected
+index inconsistencies still fail closed. Inactive repositories remain unavailable.
+Tests compare fetched paths with constructed canonical trees, enforce exact byte
+budgets, and distinguish unrelated damage from selected-path corruption.
+
+Whole-repository metadata traversal and compact commit-event inversion proofs
+remain pending; this change bounds individual record proof construction.
 
 `Atoll.Repositories.RecordProof.verify/5` accepts a CAR of at most 2 MiB, an
 expected DID/path, and a trusted signing curve/public key. It checks the first CAR

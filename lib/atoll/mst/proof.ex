@@ -4,26 +4,41 @@ defmodule Atoll.MST.Proof do
   alias Atoll.CBOR.{Bytes, Link}
 
   def verify(root, key, blocks) when is_map(blocks) do
-    if Syntax.repo_path?(key) do
+    case fetch(root, key, &Map.fetch(blocks, &1)) do
+      {:ok, proof} -> {:ok, proof.cid}
+      {:error, _} -> {:error, :invalid_mst_proof}
+    end
+  end
+
+  def verify(_, _, _), do: {:error, :invalid_mst_proof}
+
+  @doc """
+  Loads and verifies only the requested search path from a CID reader.
+  Returns its blocks and record CID (nil proves absence). The reader returns
+  {:ok, bytes}; missing/corrupt nodes fail closed. A trusted :max_bytes option
+  bounds retained node bytes (default 2 MiB, maximum 64 MiB), in addition to
+  the per-node and depth bounds. Unvisited subtrees are not validated.
+  """
+  def fetch(root, key, reader, opts \\ []) when is_function(reader, 1) do
+    limit = Keyword.get(opts, :max_bytes, 2 * 1024 * 1024)
+
+    if Syntax.repo_path?(key) and is_integer(limit) and limit in 1..(64 * 1024 * 1024) do
       try do
-        {:ok, walk(root, key, blocks, nil, nil, nil, 0)}
+        state = %{reader: reader, blocks: %{}, bytes: 0, limit: limit}
+        {cid, state} = walk(root, key, state, nil, nil, nil, 0)
+        {:ok, %{cid: cid, blocks: state.blocks}}
       catch
         :invalid_mst_proof -> {:error, :invalid_mst_proof}
+        :mst_proof_too_large -> {:error, :mst_proof_too_large}
       end
     else
       {:error, :invalid_mst_proof}
     end
   end
 
-  def verify(_, _, _), do: {:error, :invalid_mst_proof}
-
-  defp walk(cid, key, blocks, low, high, expected_level, depth) do
+  defp walk(cid, key, state, low, high, expected_level, depth) do
     if depth > 128, do: invalid!()
-    bytes = Map.get(blocks, cid)
-
-    unless dag?(cid) and is_binary(bytes) and byte_size(bytes) <= 1_048_576 and
-             CID.verify(cid, bytes) == :ok,
-           do: invalid!()
+    {bytes, state} = read!(cid, state)
 
     with {:ok, %{"l" => left, "e" => entries} = node} <- CBOR.decode(bytes),
          true <- map_size(node) == 2 and is_list(entries) and length(entries) <= 10_000,
@@ -33,17 +48,32 @@ defmodule Atoll.MST.Proof do
       cond do
         entries == [] and depth == 0 ->
           if left != nil, do: invalid!()
-          nil
+          {nil, state}
 
         entries == [] ->
           if left == nil or not is_integer(level) or level < 0, do: invalid!()
-          descend(left, key, blocks, low, high, level, depth)
+          descend(left, key, state, low, high, level, depth)
 
         true ->
-          search(entries, left, key, blocks, low, high, level, depth)
+          search(entries, left, key, state, low, high, level, depth)
       end
     else
       _ -> invalid!()
+    end
+  end
+
+  defp read!(cid, state) do
+    unless dag?(cid) and not Map.has_key?(state.blocks, cid), do: invalid!()
+
+    case state.reader.(cid) do
+      {:ok, bytes} when is_binary(bytes) and byte_size(bytes) <= 1_048_576 ->
+        total = state.bytes + byte_size(bytes)
+        if total > state.limit, do: throw(:mst_proof_too_large)
+        if CID.verify(cid, bytes) != :ok, do: invalid!()
+        {bytes, %{state | blocks: Map.put(state.blocks, cid, bytes), bytes: total}}
+
+      _ ->
+        invalid!()
     end
   end
 
@@ -73,21 +103,21 @@ defmodule Atoll.MST.Proof do
     {Enum.reverse(decoded), level}
   end
 
-  defp search([], child, key, blocks, low, high, level, depth),
-    do: descend(child, key, blocks, low, high, level, depth)
+  defp search([], child, key, state, low, high, level, depth),
+    do: descend(child, key, state, low, high, level, depth)
 
-  defp search([{current, value, right} | rest], left, key, blocks, low, high, level, depth) do
+  defp search([{current, value, right} | rest], left, key, state, low, high, level, depth) do
     cond do
-      key == current -> value
-      key < current -> descend(left, key, blocks, low, current, level, depth)
-      true -> search(rest, right, key, blocks, current, high, level, depth)
+      key == current -> {value, state}
+      key < current -> descend(left, key, state, low, current, level, depth)
+      true -> search(rest, right, key, state, current, high, level, depth)
     end
   end
 
-  defp descend(nil, _, _, _, _, _, _), do: nil
+  defp descend(nil, _, state, _, _, _, _), do: {nil, state}
 
-  defp descend(%Link{cid: cid}, key, blocks, low, high, level, depth),
-    do: walk(cid, key, blocks, low, high, level - 1, depth + 1)
+  defp descend(%Link{cid: cid}, key, state, low, high, level, depth),
+    do: walk(cid, key, state, low, high, level - 1, depth + 1)
 
   defp child?(nil), do: true
   defp child?(%Link{cid: cid}), do: dag?(cid)
