@@ -947,6 +947,7 @@ observations do not produce duplicate events. The
 - [ ] Comprehensive operational monitoring and alerting.
 - [x] Offline MST and compact-proof interoperability against pinned `@atproto/repo` 0.8.10 fixtures.
 - [x] Opt-in live HTTP integration with the official ATProto client, including signed repository and record-proof verification.
+- [x] Opt-in official OAuth SDK integration covering discovery, PAR, browser consent, DPoP resources, refresh and source-session revocation.
 - [x] Upstream WebSocket firehose decoding, signed commit application, live delivery, cursor resumption and error-frame integration tests.
 - [ ] End-to-end compatibility tests with existing ATProto clients and servers.
 
@@ -1185,6 +1186,35 @@ mix precommit
 ```
 
 The test alias creates the test database and applies pending migrations. Database tests use Ecto's SQL sandbox to roll back their changes.
+
+### Official OAuth client integration
+
+An optional `interop` test uses the existing `@atproto/oauth-client-node` **0.3.16**
+package against a supervised Atoll server on a random localhost HTTP port:
+
+```sh
+ATOLL_ATPROTO_OAUTH_CLIENT_PATH=/absolute/path/node_modules/@atproto/oauth-client-node \
+  mix test --include interop test/atoll_web/atproto_oauth_e2e_test.exs
+```
+
+The harness checks the package name/version without installing dependencies. The
+SDK performs resource and authorization discovery, PKCE/PAR with server nonce
+retry, authorization-code exchange and issuer verification, DPoP resource access
+with nonce retry, and refresh rotation. The HTTP browser harness follows login
+and explicit consent with cookies and CSRF fields; it then logs out the source
+session and verifies that SDK resource access fails. Callback URLs are inspected
+and passed to the SDK, never fetched. Requests are restricted to the temporary
+server origin, with five-second request and 45-second overall deadlines. Test
+accounts, tokens and keys are disposable and database changes roll back.
+
+Identity resolution uses a fixed synthetic DID document pointing at the temporary
+server; the SDK still checks that document's PDS against discovered issuer metadata.
+This test covers a localhost public client with base `atproto` scope. It does not
+establish live DID/handle resolution, confidential-client interoperability, granular
+permission interoperability, browser rendering, or complete OAuth profile compliance.
+The development-only HTTP identity exception is enabled only for this test and
+restored afterward. The `interop` tag remains excluded from default tests and CI
+because the SDK must be installed separately.
 
 ### Official ATProto client integration
 
@@ -5012,7 +5042,7 @@ the `ClientKeys` loader below adds key validation and remote JWKS retrieval, whi
 the assertion guard below adds signature, replay, and supplied key-binding checks.
 The code exchange below persists session bindings. Metadata branding is untrusted
 and must not be displayed as verified application identity. Localhost virtual
-clients are supported as described below; browser authorization remains pending.
+clients and browser authorization are supported as described below.
 
 The declaration rules follow the
 [ATProto OAuth client profile](https://atproto.com/specs/oauth#clients).
@@ -5255,7 +5285,7 @@ Pending codes expire after two minutes and retain the account DID, issuer,
 client ID, exact redirect, granted scope, PKCE challenge, DPoP key, any confidential
 client key binding, and whether the refreshed client declaration allows refresh
 tokens. Plaintext codes are returned only to the caller; they are not stored.
-The response also returns the original callback, state, and issuer for the future
+The response also returns the original callback, state, and issuer for the
 browser redirect adapter. Foreign keys remove pending codes when the account or
 authorizing password session is deleted, including session revocation/recovery.
 
@@ -5347,8 +5377,8 @@ Rate exhaustion returns 429; unavailable configuration or storage returns 503.
 HTTP tests cover issuance, nonce retry, code-reuse revocation, proof replay,
 malformed forms, CORS, peer limits, and configured-host binding. Response and
 error shapes follow [RFC 6749 sections 5.1–5.2](https://www.rfc-editor.org/rfc/rfc6749.html#section-5.1).
-Discovery remains pending; the token route and browser consent alone do not yet make Atoll
-a complete OAuth server. The refresh grant is described below.
+Discovery and the public-client SDK flow are covered above; complete OAuth profile
+interoperability auditing remains pending. The refresh grant is described below.
 
 
 ### Refresh rotation and token-family revocation
