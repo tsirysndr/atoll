@@ -834,6 +834,7 @@ locking protects shared objects when collectors overlap.
 - [x] Phase-1 service-auth audiences: proxied grants are checked against the `did#service` form while outbound JWTs carry the bare DID the receiving services verify.
 - [x] `app.bsky.feed.getFeed` proxying that resolves the feed's published generator record and mints `getFeedSkeleton` tokens for the generator DID, with dual RPC grant checks for OAuth callers.
 - [x] Push-notification registration whose token audience is the body's `serviceDid`, delivered to the AppView or directly to the named notification service.
+- [x] Read-after-write munging of stale AppView responses: fresh local posts, profile edits and unindexed own threads spliced into the six reference-munged read methods, with upstream-lag reporting and bounded local reads.
 - [x] Default moderation-report and ozone method routing to configured moderation/report services.
 
 The internal `Atoll.Proxy.Target` resolver requires a concrete DID with a service
@@ -7074,14 +7075,21 @@ asserts. Missing, malformed, or unresolvable feed references return
 `400 UnknownFeed` after authorization, and the feed lookup happens only for
 admitted callers.
 
-Proxied AppView reads are transparent: Atoll does not re-implement the
-reference server's read-after-write munging, which splices locally written
-posts and profile edits into `getTimeline`, `getProfile` and thread responses
-until the AppView has indexed them. Repository writes reach the firehose
-atomically with their commit, AppViews index within moments, and official
-clients render their own writes optimistically, so the trade is brief eventual
-consistency in exchange for never fabricating partially hydrated view records.
-This is a deliberate scope decision, recorded here rather than left implicit.
+Proxied AppView reads apply the reference server's read-after-write munging.
+When the response's `atproto-repo-rev` trails recent local commits, Atoll
+splices the requester's own not-yet-indexed writes into `getTimeline`,
+`getAuthorFeed` (own feeds only), `getPostThread`, `getProfile`, `getProfiles`
+and `getActorLikes`: fresh posts appear with zero counts and locally formatted
+image/external embeds, record embeds render as not-yet-found exactly like the
+reference viewer without an AppView back-channel, profile edits overlay
+display name, description, avatar and banner, and an entirely unindexed
+thread the requester wrote is served from local records. Munged responses
+carry `atproto-upstream-lag`; any parse or munge failure returns the upstream
+body untouched. Local reads are bounded to the newest thirty commits and ten
+records, and a revision at or before the AppView's clock must exist locally so
+migrated repositories are never munged against a foreign clock. Image URLs use
+`ATOLL_IMAGE_CDN_URL_PATTERN` (an HTTPS pattern with three `%s` slots for
+preset, DID and CID) or fall back to this server's public `getBlob` route.
 
 `app.bsky.notification.registerPush` and `unregisterPush` follow the same
 upstream model: the service is named by the request body's `serviceDid`, so

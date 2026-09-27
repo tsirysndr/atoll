@@ -100,6 +100,11 @@ defmodule AtollWeb.ProxyPlug do
              jwt,
              opts
            ) do
+      response =
+        if conn.method == "GET",
+          do: Atoll.Proxy.ReadAfterWrite.munge(nsid, response, issuer(jwt), conn.query_string),
+          else: response
+
       response.headers
       |> Enum.reduce(prepared.conn, fn {name, values}, acc ->
         put_resp_header(acc, name, Enum.join(values, ", "))
@@ -113,6 +118,20 @@ defmodule AtollWeb.ProxyPlug do
     _ in [Postgrex.Error, DBConnection.ConnectionError] ->
       error(conn, 503, "ServiceUnavailable", "Proxy authorization is temporarily unavailable.")
   end
+
+  # The service JWT was signed moments ago for this request; its issuer is the
+  # authenticated account and needs no re-verification for local munging.
+  defp issuer(jwt) when is_binary(jwt) do
+    with [_, payload, _] <- String.split(jwt, "."),
+         {:ok, decoded} <- Base.url_decode64(payload, padding: false),
+         {:ok, %{"iss" => issuer}} when is_binary(issuer) <- Jason.decode(decoded) do
+      issuer
+    else
+      _ -> nil
+    end
+  end
+
+  defp issuer(_), do: nil
 
   defp audience(conn, nsid) do
     case get_req_header(conn, "atproto-proxy") do
