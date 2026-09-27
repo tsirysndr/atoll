@@ -368,6 +368,7 @@ mutation. Deletes and empty batches need no record schema, even with `validate: 
 - [x] Internal bidirectional handle verification against the resolved DID document.
 - [x] Public `com.atproto.identity.resolveHandle` forward lookup (does not assert bidirectional verification).
 - [x] Public `resolveDid` and `resolveIdentity` queries for remote DID documents and verified identity information.
+- [x] Distinct `DidDeactivated` errors for PLC directory tombstones and independently verified tombstones, including owner refresh and cache invalidation.
 - [x] Handle-based repository reads with bidirectional verification and canonical DID record URIs.
 - [x] HTTPS handle-resolution redirects with per-hop address validation and bounded hops.
 - [x] Bounded positive handle caching with forced refresh for authorization and identity updates.
@@ -2523,7 +2524,8 @@ The response contains `did`, the bidirectionally verified `handle` (or
 node-local cache. DNS/HTTPS resolution retains the existing public-address checks,
 timeouts and response limits. DID redirects are rejected; handle redirects follow
 the bounded HTTPS policy described below. Missing identities return
-`DidNotFound` or `HandleNotFound`; other resolution failures preserve the previous
+`DidNotFound` or `HandleNotFound`; confirmed PLC tombstones return `DidDeactivated`.
+Resolution failures and tombstones preserve the previous
 observation and return an error. PLC-log verification follows the configured
 resolution policy.
 
@@ -2558,11 +2560,16 @@ cannot override resolver options. Resolution performs
 no account mutation and emits no identity event. Owner `refreshIdentity` remains
 the explicit fresh-resolution and observation-update path.
 
-A missing DID or handle returns `DidNotFound` or `HandleNotFound`; invalid documents
+A missing DID or handle returns `DidNotFound` or `HandleNotFound`. PLC directory
+HTTP 410 responses and surviving signed tombstones in audit mode return
+`DidDeactivated`, as specified by the [identity Lexicons](https://github.com/bluesky-social/atproto/tree/main/lexicons/com/atproto/identity).
+This distinction applies to `resolveDid`, `resolveIdentity`, and owner-authenticated
+`refreshIdentity`. An HTTP 410 from did:web, an audit-log fetch, a handle lookup or
+an OAuth/Lexicon endpoint does not prove a PLC tombstone and remains a resolution
+failure. Responses do not include upstream response bodies. Invalid documents
 and upstream failures return `InvalidRequest` without upstream response bodies.
-The resolver does not currently distinguish a deactivated PLC DID from a missing
-DID. Audit mode independently verifies the operation log before deriving the
-DID document.
+Audit mode independently verifies the operation log before deriving the DID
+document or reporting a tombstone.
 
 All three public identity queries (`resolveDid`, `resolveIdentity`, `resolveHandle`)
 share a per-node limit of 60 requests per five minutes per direct client IP, return
@@ -3189,9 +3196,16 @@ attempted on invalid, unavailable, or oversized history.
 
 The surviving operation supplies the aliases, Multikey verification methods, and
 services. Legacy genesis operations are normalized to those document fields.
-A surviving tombstone resolves as `did_not_found`; a properly recovered tombstone
+A surviving tombstone resolves as `did_deactivated`; a properly recovered tombstone
 can resolve normally. Invalid logs become `invalid_did_document`. The ordinary
 ATProto key/PDS extraction and bidirectional handle checks still apply afterward.
+Ordinary lookups may use an unexpired
+positive cache entry; forced refresh bypasses it and evicts it when a tombstone
+is observed. Deactivation errors are not cached, allowing subsequent recovery to
+resolve without a negative-cache delay. Directory mode distinguishes the PLC
+[document endpoint's HTTP 410 response](https://github.com/did-method-plc/did-method-plc/blob/main/website/spec/plc-server-openapi3.yaml)
+from HTTP 404; audit mode requires the surviving tombstone's verified signature
+and history, with no fallback to the directory's rendered document.
 
 Verified and directory-trusted documents have separate keys in the bounded positive
 cache. Switching to audit mode cannot reuse a document cached under the directory

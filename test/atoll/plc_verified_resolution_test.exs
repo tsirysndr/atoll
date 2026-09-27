@@ -70,7 +70,7 @@ defmodule Atoll.PLCVerifiedResolutionTest do
 
   test "tombstones and forged logs fail without falling back to rendered documents" do
     for {name, expected} <- [
-          {"log_tombstone", :did_not_found},
+          {"log_tombstone", :did_deactivated},
           {"log_invalid_nullification_too_slow", :invalid_did_document}
         ] do
       entries = fixture(name)
@@ -86,6 +86,25 @@ defmodule Atoll.PLCVerifiedResolutionTest do
 
       assert {:error, ^expected} = Resolver.resolve_document(did, lookup: &lookup/1, request: req)
     end
+  end
+
+  test "verified tombstones evict stale documents and nullified tombstones remain resolvable" do
+    entries = fixture("log_tombstone")
+    did = hd(entries)["did"]
+    cache = start_supervised!({Cache, []})
+    opts = [cache: cache, lookup: &lookup/1, request: request(Enum.drop(entries, -1))]
+    assert {:ok, document} = Resolver.resolve_document(did, opts)
+    dead = Keyword.put(opts, :request, request(entries))
+    assert {:ok, ^document} = Resolver.resolve_document(did, dead)
+
+    assert {:error, :did_deactivated} =
+             Resolver.resolve_document(did, Keyword.put(dead, :force_refresh, true))
+
+    assert {:error, :did_deactivated} = Resolver.resolve_document(did, dead)
+
+    entries = fixture("log_nullified_tombstone")
+    did = hd(entries)["did"]
+    assert {:ok, %{"id" => ^did}} = AuditLog.document(did, entries)
   end
 
   test "audit fetching preserves address, redirect and response-size limits" do

@@ -88,7 +88,7 @@ defmodule Atoll.Identity.Resolver do
   end
 
   defp load_document(did, url, opts) do
-    with {:ok, body} <- fetch(url, opts),
+    with {:ok, body} <- fetch(url, opts, @max_bytes, 0, String.starts_with?(did, "did:plc:")),
          {:ok, doc} <- Jason.decode(body),
          %{"id" => ^did} <- doc do
       {:ok, doc}
@@ -192,7 +192,7 @@ defmodule Atoll.Identity.Resolver do
     end
   end
 
-  defp fetch(url, opts, max_bytes \\ @max_bytes, redirects \\ 0) do
+  defp fetch(url, opts, max_bytes, redirects \\ 0, plc_document? \\ false) do
     uri = URI.parse(url)
     lookup = Keyword.get(opts, :lookup, &lookup/1)
 
@@ -259,6 +259,9 @@ defmodule Atoll.Identity.Resolver do
           with {:ok, target} <- redirect_target(url, headers) do
             fetch(target, opts, max_bytes, redirects - 1)
           end
+
+        {:ok, %{status: 410}} when plc_document? ->
+          {:error, :did_deactivated}
 
         {:ok, %{status: 404}} ->
           {:error, :did_not_found}

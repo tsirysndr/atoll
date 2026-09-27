@@ -234,6 +234,47 @@ defmodule Atoll.IdentityResolverTest do
              end)
   end
 
+  test "HTTP 410 means deactivation only for the PLC document endpoint" do
+    request = Req.new(plug: &Plug.Conn.send_resp(&1, 410, "private upstream body"))
+    opts = [request: request, lookup: fn _ -> {:ok, {8, 8, 8, 8}} end]
+    did = "did:plc:ewvi7nxzyoun6zhxrhs64oiz"
+    assert Resolver.resolve_document(did, opts) == {:error, :did_deactivated}
+    assert Resolver.resolve_document(@did, opts) == {:error, :resolution_failed}
+
+    assert Resolver.resolve_document(did, Keyword.put(opts, :plc_resolution_mode, :audit)) ==
+             {:error, :resolution_failed}
+
+    assert Resolver.fetch_handle("alice.example.com", opts) == {:error, :resolution_failed}
+
+    assert Resolver.fetch_oauth_document("https://client.example.com/metadata", opts) ==
+             {:error, :resolution_failed}
+
+    assert Resolver.fetch_lexicon("https://pds.example.com", did, "com.example.record", opts) ==
+             {:error, :resolution_failed}
+  end
+
+  test "forced directory tombstones evict stale documents and do not cache negative results" do
+    did = "did:plc:ewvi7nxzyoun6zhxrhs64oiz"
+    cache = start_supervised!({Atoll.Identity.Cache, []})
+    old = %{"id" => did, "alsoKnownAs" => ["at://old.example.com"]}
+    assert {:ok, ^old} = Atoll.Identity.Cache.fetch(cache, did, false, fn -> {:ok, old} end)
+
+    opts = [
+      cache: cache,
+      lookup: fn _ -> {:ok, {8, 8, 8, 8}} end,
+      request: Req.new(plug: &Plug.Conn.send_resp(&1, 410, "gone"))
+    ]
+
+    assert {:ok, ^old} = Resolver.resolve_document(did, opts)
+
+    assert {:error, :did_deactivated} =
+             Resolver.resolve_document(did, Keyword.put(opts, :force_refresh, true))
+
+    recovered = %{"id" => did, "alsoKnownAs" => ["at://recovered.example.com"]}
+    opts = Keyword.put(opts, :request, Req.new(plug: &Req.Test.json(&1, recovered)))
+    assert {:ok, ^recovered} = Resolver.resolve_document(did, opts)
+  end
+
   test "rejects redirects, oversized bodies, bad JSON and mismatched identities", %{doc: doc} do
     for {status, body, expected} <- [
           {302, "", :resolution_failed},

@@ -58,6 +58,7 @@ defmodule AtollWeb.IdentityController do
       {:error, reason}
       when reason in [
              :did_not_found,
+             :did_deactivated,
              :resolution_failed,
              :unsafe_destination,
              :invalid_did_document,
@@ -96,6 +97,9 @@ defmodule AtollWeb.IdentityController do
          {:ok, result} <- Atoll.Identity.Updates.refresh_authenticated(token, params, opts) do
       json(conn, result)
     else
+      {:error, :did_deactivated} ->
+        resolve_result(conn, {:error, :did_deactivated})
+
       {:error, :did_not_found} ->
         conn |> put_status(400) |> json(%{error: "DidNotFound", message: "DID not found."})
 
@@ -133,6 +137,10 @@ defmodule AtollWeb.IdentityController do
   defp resolution_options, do: Application.get_env(:atoll, :identity_resolution_options, [])
 
   defp resolve_result(conn, {:ok, result}), do: json(conn, result)
+
+  defp resolve_result(conn, {:error, :did_deactivated}),
+    do:
+      conn |> put_status(400) |> json(%{error: "DidDeactivated", message: "DID is deactivated."})
 
   defp resolve_result(conn, {:error, :did_not_found}),
     do: conn |> put_status(400) |> json(%{error: "DidNotFound", message: "DID not found."})

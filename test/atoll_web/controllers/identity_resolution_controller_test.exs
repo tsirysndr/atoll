@@ -80,6 +80,7 @@ defmodule AtollWeb.IdentityResolutionControllerTest do
        c do
     for {status, error} <- [
           {404, "DidNotFound"},
+          {410, "DidDeactivated"},
           {503, "InvalidRequest"},
           {302, "InvalidRequest"}
         ] do
@@ -92,7 +93,11 @@ defmodule AtollWeb.IdentityResolutionControllerTest do
 
       Application.put_env(:atoll, :identity_resolution_options, opts)
 
-      for {route, params} <- [{@did_route, %{did: @did}}, {@identity_route, %{identifier: @did}}] do
+      for {route, params} <- [
+            {@did_route, %{did: @did}},
+            {@identity_route, %{identifier: @did}},
+            {@identity_route, %{identifier: @handle}}
+          ] do
         result = get(c.conn, route, params) |> json_response(400)
         assert result["error"] == error
         refute Jason.encode!(result) =~ "private upstream body"
@@ -110,6 +115,28 @@ defmodule AtollWeb.IdentityResolutionControllerTest do
     assert get(c.conn, @identity_route, %{identifier: @handle})
            |> json_response(400)
            |> Map.fetch!("error") == "HandleNotFound"
+  end
+
+  test "public identity queries distinguish verified PLC tombstones from invalid audit logs", c do
+    entries =
+      File.read!(Path.expand("../../fixtures/plc/log_tombstone.json", __DIR__)) |> Jason.decode!()
+
+    did = hd(entries)["did"]
+
+    forged =
+      List.update_at(entries, -1, fn entry -> put_in(entry, ["operation", "sig"], "invalid") end)
+
+    for {history, error} <- [{entries, "DidDeactivated"}, {forged, "InvalidRequest"}] do
+      Application.put_env(:atoll, :identity_resolution_options,
+        plc_resolution_mode: :audit,
+        lookup: fn _ -> {:ok, {8, 8, 8, 8}} end,
+        request: Req.new(plug: &Req.Test.json(&1, history))
+      )
+
+      for {route, params} <- [{@did_route, %{did: did}}, {@identity_route, %{identifier: did}}] do
+        assert get(c.conn, route, params) |> json_response(400) |> Map.fetch!("error") == error
+      end
+    end
   end
 
   test "validates query schemas, rejects request bodies, and shares a rate budget across identity queries",

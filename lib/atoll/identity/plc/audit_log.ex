@@ -45,7 +45,7 @@ defmodule Atoll.Identity.PLC.AuditLog do
   def document(did, entries) do
     with {:ok, result} <- verify(did, entries) do
       if result.tombstoned,
-        do: {:error, :did_not_found},
+        do: {:error, :did_deactivated},
         else: {:ok, format_document(did, result.operation)}
     end
   end

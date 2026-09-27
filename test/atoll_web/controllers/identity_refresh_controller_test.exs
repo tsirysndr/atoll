@@ -134,7 +134,11 @@ defmodule AtollWeb.IdentityRefreshControllerTest do
     before = Repo.get!(Observation, @did)
     seq = Events.latest_seq()
 
-    for {status, error} <- [{404, "DidNotFound"}, {503, "InvalidRequest"}] do
+    for {status, error} <- [
+          {404, "DidNotFound"},
+          {410, "DidDeactivated"},
+          {503, "InvalidRequest"}
+        ] do
       opts =
         Keyword.put(
           options(c.doc),
@@ -148,6 +152,7 @@ defmodule AtollWeb.IdentityRefreshControllerTest do
 
     assert Repo.get!(Observation, @did) == before
     assert Events.latest_seq() == seq
+    assert {:ok, %{status: :active}} = Repositories.get_head(@did)
   end
 
   test "bounds JSON and applies the existing strict request budget", c do

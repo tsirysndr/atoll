@@ -12,6 +12,7 @@ defmodule Atoll.Accounts.AdminHandle do
       {:error, reason}
       when reason in [
              :did_not_found,
+             :did_deactivated,
              :resolution_failed,
              :unsafe_destination,
              :invalid_did_document,
