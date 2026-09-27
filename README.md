@@ -923,6 +923,7 @@ observations do not produce duplicate events. The
 - [x] `GET /health/ready` database connectivity readiness with bounded queries and outcome telemetry.
 - [x] Opt-in supervised cleanup of expired sessions and service-token replay markers, with bounded batches and outcome telemetry.
 - [ ] Comprehensive operational monitoring and alerting.
+- [x] Offline MST and compact-proof interoperability against pinned `@atproto/repo` 0.8.10 fixtures.
 - [ ] End-to-end compatibility tests with existing ATProto clients and servers.
 
 ## Local development
@@ -3482,7 +3483,13 @@ commits need only the root proof; deletion proofs include required merge/split
 boundaries. Historical replay uses immutable retained blocks, not the current head.
 Tests reverse emitted partial slices, reject tampered operation metadata, and show
 that a mixed edit in a 2,000-record repository uses less than one tenth of its full
-export. External relay/client interoperability remains a separate pending suite.
+export. Eight offline cases have additionally been verified by the independent
+TypeScript `@atproto/repo` 0.8.10 implementation: it reconstructs prior roots from
+Atoll's exact partial proof slices, including a maximum mixed batch. Normal tests
+pin the reference roots and verified slices without requiring Node. See
+[test/fixtures/mst/README.md](test/fixtures/mst/README.md) for provenance, scope and
+reproduction commands. Signed event transport and live relay/client interoperability
+remain separate pending suites.
 
 `Atoll.Repositories.RecordProof.verify/5` accepts a CAR of at most 2 MiB, an
 expected DID/path, and a trusted signing curve/public key. It checks the first CAR
