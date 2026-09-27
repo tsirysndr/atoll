@@ -32,6 +32,28 @@ defmodule Atoll.Accounts.AdminSigningKey do
 
   def update(_, _), do: {:error, :invalid_request}
 
+  @doc "Complete an accepted directory-key intent at a reviewed surviving head, without publication."
+  def reconcile(did, cid, expected_head, opts \\ []) do
+    with false <- Repo.in_transaction?(),
+         true <-
+           Syntax.did?(did) and is_binary(cid) and byte_size(cid) in 1..128 and
+             is_binary(expected_head) and byte_size(expected_head) in 1..128,
+         %Update{directory_key_update: true, nullified_at: nil} = row <-
+           Repo.get_by(Update, did: did, cid: cid),
+         {:ok, %{entries: entries, state: %{tombstoned: false} = state}} <-
+           Client.fetch_audit(did, opts),
+         true <- state.cid == expected_head and cid in state.active_cids,
+         true <- Enum.any?(entries, &(&1["cid"] == cid and &1["operation"] == row.operation)),
+         true <- target(state.operation) == target(row.operation),
+         {:ok, :updated} <- finish(row, state.cid, true, "operator") do
+      {:ok, %{did: did, cid: cid, directoryHead: state.cid, result: :completed}}
+    else
+      true -> {:error, :plc_update_inside_transaction}
+      {:error, _} = error -> error
+      _ -> {:error, :plc_conflict}
+    end
+  end
+
   defp prepare(_, key, %Update{directory_key_update: true} = row, _) do
     if target(row.operation) == key, do: {:ok, row}, else: {:error, :plc_update_pending}
   end
@@ -84,38 +106,49 @@ defmodule Atoll.Accounts.AdminSigningKey do
     with {:ok, _} <- Updates.submit(row.did, row.cid, opts),
          {:ok, %{state: %{tombstoned: false} = state}} <- Client.fetch_audit(row.did, opts),
          true <- state.cid == row.cid and state.operation == row.operation do
-      transaction(fn ->
-        head = lock!(row.did)
-
-        current =
-          Repo.get_by(Update, did: row.did, cid: row.cid) || Repo.rollback(:plc_update_not_found)
-
-        unless current.directory_key_update and is_nil(current.nullified_at) and
-                 current.operation == row.operation and current.confirmed_at,
-               do: Repo.rollback(:plc_conflict)
-
-        unless current.completed_at do
-          Atoll.Moderation.Audit.directory_signing_key!(
-            row.did,
-            row.cid,
-            target(row.previous),
-            target(row.operation),
-            :completed
-          )
-
-          # The notification asks consumers to re-resolve the DID without making
-          # a new claim about a handle or changing local repository key custody.
-          Events.append!(:identity, head, %{})
-          Updates.complete!(row.did, row.cid)
-        end
-
-        :updated
-      end)
+      finish(row, state.cid, false)
     else
       false -> {:error, :plc_conflict}
       {:ok, _} -> {:error, :plc_conflict}
       error -> error
     end
+  end
+
+  defp finish(row, observed_head, from_history?, actor \\ "admin") do
+    transaction(fn ->
+      head = lock!(row.did)
+
+      current =
+        Repo.get_by(Update, did: row.did, cid: row.cid) || Repo.rollback(:plc_update_not_found)
+
+      unless current.directory_key_update and is_nil(current.nullified_at) and
+               current.operation == row.operation and current.previous == row.previous,
+             do: Repo.rollback(:plc_conflict)
+
+      unless current.confirmed_at do
+        unless from_history?, do: Repo.rollback(:plc_conflict)
+        current |> Ecto.Changeset.change(confirmed_at: DateTime.utc_now()) |> Repo.update!()
+      end
+
+      unless current.completed_at do
+        Atoll.Moderation.Audit.directory_signing_key!(
+          row.did,
+          row.cid,
+          target(row.previous),
+          target(row.operation),
+          :completed,
+          observed_head,
+          actor
+        )
+
+        # The notification asks consumers to re-resolve the DID without making
+        # a new claim about a handle or changing local repository key custody.
+        Events.append!(:identity, head, %{})
+        Updates.complete!(row.did, row.cid)
+      end
+
+      :updated
+    end)
   end
 
   defp pending(did),

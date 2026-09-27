@@ -2549,7 +2549,15 @@ is reused and an already accepted operation is not posted again. A different
 pending key or a pending owner/key-rotation workflow returns a conflict; generic
 submission and active-update reconciliation cannot take over this intent. If the
 directory advances away from the exact accepted head, the journal stays pending
-for operator review. Never delete or re-sign an unresolved journal. Requests for
+for operator review. After review, `mix atoll.plc.reconcile_directory_key DID
+PENDING_OPERATION_CID EXPECTED_DIRECTORY_HEAD_CID` completes the intent when the
+accepted operation survives un-nullified in fresh verified audit history, the
+reviewed head is current and the head still targets the requested key. It never
+posts to the directory, re-signs, or touches private custody; the operator-actor
+completion audit records the observed head, and the journal completion plus
+identity event are atomic and idempotent. Any other state — nullified or replaced
+operations, a moved head, or a head carrying a different key — is a conflict and
+leaves the journal pending. Never delete or re-sign an unresolved journal. Requests for
 the key already present in a verified current directory document are audited as
 unchanged and do not emit another identity event.
 

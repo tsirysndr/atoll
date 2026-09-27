@@ -306,7 +306,8 @@ defmodule AtollWeb.AdminSigningKeyControllerTest do
     assert Repo.aggregate(Atoll.Moderation.AuditEntry, :count) == 0
   end
 
-  test "directory advancement preserves the exact unresolved journal instead of re-signing", c do
+  test "reviewed surviving history completes an advanced directory-key intent without re-signing",
+       c do
     params = params(c)
     Agent.update(c.directory, &%{&1 | ambiguous: true})
     assert {:error, :plc_unavailable} = AdminSigningKey.update(params, c.opts)
@@ -345,6 +346,88 @@ defmodule AtollWeb.AdminSigningKeyControllerTest do
     assert is_nil(Repo.one!(Update).completed_at)
     assert Agent.get(c.directory, & &1.posts) == 1
     assert Repo.aggregate(Atoll.Moderation.AuditEntry, :count) == 1
+    seq = Events.latest_seq()
+    {:ok, head} = Repositories.get_head(c.did)
+    assert {:error, :plc_conflict} = AdminSigningKey.reconcile(c.did, row.cid, row.cid, c.opts)
+
+    # A current head which changed the requested key cannot complete this intent.
+    preserved = Agent.get(c.directory, & &1)
+    {:ok, replacement_key} = Multikey.to_did_key(:k256, SigningKey.generate().public)
+    {:ok, unsigned} = Operation.successor(advanced)
+
+    {:ok, replaced} =
+      Operation.sign(
+        put_in(unsigned, ["verificationMethods", "atproto"], replacement_key),
+        c.rotation
+      )
+
+    {:ok, replaced_cid} = Operation.cid(replaced)
+
+    Agent.update(
+      c.directory,
+      &%{
+        &1
+        | last: replaced,
+          audit:
+            &1.audit ++
+              [
+                %{
+                  "did" => c.did,
+                  "cid" => replaced_cid,
+                  "operation" => replaced,
+                  "nullified" => false,
+                  "createdAt" => "2026-01-04T00:00:00Z"
+                }
+              ]
+      }
+    )
+
+    assert {:error, :plc_conflict} =
+             AdminSigningKey.reconcile(c.did, row.cid, replaced_cid, c.opts)
+
+    Agent.update(c.directory, fn _ -> preserved end)
+
+    Repo.query!(
+      "ALTER TABLE moderation_audit_entries ADD CONSTRAINT reject_key_reconciliation CHECK (requested->>'phase' <> 'completed')"
+    )
+
+    assert_raise Ecto.ConstraintError, fn ->
+      AdminSigningKey.reconcile(c.did, row.cid, cid, c.opts)
+    end
+
+    assert is_nil(Repo.one!(Update).confirmed_at)
+    assert is_nil(Repo.one!(Update).completed_at)
+    assert Events.latest_seq() == seq
+    Repo.query!("ALTER TABLE moderation_audit_entries DROP CONSTRAINT reject_key_reconciliation")
+    Application.put_env(:atoll, :plc_submission_options, c.opts)
+
+    output =
+      ExUnit.CaptureIO.capture_io(fn ->
+        Mix.Tasks.Atoll.Plc.ReconcileDirectoryKey.run([c.did, row.cid, cid])
+      end)
+      |> Jason.decode!()
+
+    assert output == %{
+             "did" => c.did,
+             "cid" => row.cid,
+             "directoryHead" => cid,
+             "result" => "completed"
+           }
+
+    assert Repo.one!(Update).completed_at
+    assert {:ok, ^head} = Repositories.get_head(c.did)
+    assert KeyVault.fetch(c.did) == {:ok, c.old}
+    assert Agent.get(c.directory, & &1.posts) == 1
+    {:ok, [event]} = Events.list_after(seq)
+    assert event.kind == :identity and event.payload == %{}
+    audits = Repo.all(Atoll.Moderation.AuditEntry)
+    assert length(audits) == 2
+    completed = Enum.find(audits, &(&1.requested["phase"] == "completed"))
+    assert completed.actor == "operator"
+    assert completed.requested["directoryHead"] == cid
+    assert {:ok, _} = AdminSigningKey.reconcile(c.did, row.cid, cid, c.opts)
+    assert Repo.aggregate(Atoll.Moderation.AuditEntry, :count) == 2
+    assert Events.latest_seq() == event.seq
   end
 
   defp params(c) do

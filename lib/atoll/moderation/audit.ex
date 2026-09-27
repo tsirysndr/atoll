@@ -184,18 +184,31 @@ defmodule Atoll.Moderation.Audit do
   end
 
   @doc "Records directory-only public signing-key intent and completion without private custody."
-  def directory_signing_key!(did, cid, previous, requested, phase) do
+  def directory_signing_key!(
+        did,
+        cid,
+        previous,
+        requested,
+        phase,
+        observed_head \\ nil,
+        actor \\ "admin"
+      ) do
     insert!(
       "com.atproto.admin.updateAccountSigningKey",
       did,
       %{"$type" => "com.atproto.admin.defs#repoRef", "did" => did},
-      %{signingKey: requested, cid: cid, phase: Atom.to_string(phase)},
+      %{
+        signingKey: requested,
+        cid: cid,
+        directoryHead: observed_head || cid,
+        phase: Atom.to_string(phase)
+      },
       %{signingKey: previous},
       %{
         signingKey: if(phase == :staged, do: previous, else: requested),
         phase: Atom.to_string(phase)
       },
-      "admin"
+      actor
     )
   end
 
