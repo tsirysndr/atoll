@@ -235,6 +235,42 @@ defmodule AtollWeb.RepoImportControllerTest do
     assert {:ok, %{value: %{"text" => "imported"}}} = Repositories.get_record(@did, @path)
   end
 
+  test "staged publication streams multiple record batches and deduplicates retained membership",
+       c do
+    bytes = CBOR.encode!(%{"$type" => "com.example.record", "shared" => true})
+    cid = CID.create(bytes, :dag_cbor)
+    records = Map.new(1..1200, &{"com.example.record/r#{&1}", cid})
+    {:ok, tree} = MST.new(records)
+    {:ok, rev} = TID.next(c.head.rev)
+    {:ok, commit} = Commit.create(@did, tree.root, rev, c.key)
+    blocks = tree.blocks |> Map.put(cid, bytes) |> Map.put(commit.cid, commit.bytes)
+    {:ok, chunks} = CAR.encode_stream([commit.cid], blocks)
+
+    assert {:ok, imported} =
+             Atoll.CAR.Stage.with_chunks(chunks, fn stage ->
+               assert {:ok, snapshot} =
+                        Atoll.Repositories.Snapshot.from_stage(
+                          stage,
+                          @did,
+                          c.key.curve,
+                          c.key.public
+                        )
+
+               refute is_map(snapshot.records) and not is_struct(snapshot.records)
+               assert Map.new(snapshot.records) == records
+               assert Enum.count(snapshot.records) == 1200
+               Repositories.import_staged(c.pair.access_jwt, stage, c.head.head)
+             end)
+
+    assert imported.head == commit.cid
+    assert Repo.aggregate(Atoll.Repositories.Record, :count) == 1200
+    revision = Repo.get_by!(Atoll.Repositories.Revision, did: @did, rev: rev)
+    assert MapSet.new(revision.blocks) == MapSet.new(Map.keys(blocks))
+    assert length(revision.blocks) == map_size(blocks)
+    assert {:ok, exported} = Repositories.export(@did)
+    assert {:ok, %{blocks: ^blocks}} = CAR.decode(exported)
+  end
+
   test "staged publication rolls back blocks, references and events when quota rejects it", c do
     prior = Application.fetch_env(:atoll, :repository_quota)
 

@@ -15,7 +15,8 @@ defmodule Atoll.Repositories.Snapshot do
       {:ok,
        snapshot
        |> Map.delete(:block_cids)
-       |> Map.put(:blocks, Map.take(blocks, snapshot.block_cids))}
+       |> Map.put(:records, Map.new(snapshot.records))
+       |> Map.put(:blocks, Map.take(blocks, Enum.to_list(snapshot.block_cids)))}
     else
       {:error, :car_too_large} = error -> error
       _ -> {:error, :invalid_snapshot}
@@ -25,7 +26,8 @@ defmodule Atoll.Repositories.Snapshot do
   @doc """
   Validate staged blocks without retaining record bodies. The returned reader is
   valid only inside the Stage.with_chunks callback. No repository data is published.
-  Metadata and the reconstructed MST still scale with repository size.
+  Records and reachable CIDs are replayable bounded traversal streams, not maps.
+  The stage itself still holds its CID/offset index in memory.
   """
   def from_stage(%Atoll.CAR.Stage{} = stage, did, curve, public) do
     reader = &Atoll.CAR.Stage.read(stage, &1)
@@ -40,19 +42,33 @@ defmodule Atoll.Repositories.Snapshot do
          {:ok, commit} <- Commit.verify(bytes, did, curve, public),
          {:ok, revision} <- TID.decode(commit["rev"]),
          true <- div(revision, 1024) <= System.system_time(:microsecond) + 300_000_000,
-         {:ok, tree} <- MST.load(commit["data"].cid, reader),
-         :ok <- validate_records(tree.records, reader) do
+         traversal = MST.Traversal.stream(commit["data"].cid, reader),
+         records =
+           Stream.flat_map(traversal, fn
+             {:record, path, cid} -> [{path, cid}]
+             {:node, _, _} -> []
+           end),
+         :ok <- validate_records(records, reader) do
       {:ok,
        %{
          head: root,
-         data: tree.root,
+         data: commit["data"].cid,
          rev: commit["rev"],
-         records: tree.records,
-         block_cids: Enum.uniq([root | Map.keys(tree.blocks) ++ Map.values(tree.records)])
+         records: records,
+         block_cids:
+           Stream.concat(
+             [root],
+             Stream.map(traversal, fn
+               {:node, cid, _} -> cid
+               {:record, _, cid} -> cid
+             end)
+           )
        }}
     else
       _ -> {:error, :invalid_snapshot}
     end
+  rescue
+    Atoll.MST.TraversalError -> {:error, :invalid_snapshot}
   end
 
   defp validate(_, _, _, _, _), do: {:error, :invalid_snapshot}
@@ -63,6 +79,7 @@ defmodule Atoll.Repositories.Snapshot do
 
       with {:ok, bytes} <- reader.(cid),
            true <- byte_size(bytes) <= 1_000_000,
+           :ok <- CID.verify(cid, bytes),
            {:ok, %{"$type" => ^collection} = record} <- CBOR.decode(bytes),
            {:ok, _} <- DataModel.to_json(record) do
         {:cont, :ok}

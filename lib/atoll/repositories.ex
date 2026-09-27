@@ -198,8 +198,8 @@ defmodule Atoll.Repositories do
           Repo.delete_all(from r in Record, where: r.did == ^did)
 
           snapshot.records
-          |> Enum.map(fn {path, cid} -> %{did: did, path: path, cid: cid} end)
-          |> Enum.chunk_every(1000)
+          |> Stream.map(fn {path, cid} -> %{did: did, path: path, cid: cid} end)
+          |> Stream.chunk_every(1000)
           |> Enum.each(&Repo.insert_all(Record, &1))
 
           updated =
@@ -207,11 +207,13 @@ defmodule Atoll.Repositories do
             |> Ecto.Changeset.change(head: snapshot.head, rev: snapshot.rev)
             |> Repo.update!()
 
-          remember_revision!(updated, snapshot_cids(snapshot))
+          Atoll.Repositories.RevisionMembership.insert!(updated, snapshot_cids(snapshot))
           Events.append!(:sync, updated, event_head(updated, head))
           updated
       end
     end)
+  rescue
+    Atoll.MST.TraversalError -> {:error, :invalid_snapshot}
   end
 
   defp authenticated_snapshot(head, archive) do
@@ -277,7 +279,7 @@ defmodule Atoll.Repositories do
   defp snapshot_cids(%{blocks: blocks}), do: Map.keys(blocks)
 
   defp replace_import_commit(%{read_block: reader} = snapshot, commit, rev) do
-    cids = [commit.cid | Enum.reject(snapshot.block_cids, &(&1 == snapshot.head))]
+    cids = Stream.concat([commit.cid], Stream.reject(snapshot.block_cids, &(&1 == snapshot.head)))
     read = fn cid -> if cid == commit.cid, do: {:ok, commit.bytes}, else: reader.(cid) end
     %{snapshot | head: commit.cid, rev: rev, block_cids: cids, read_block: read}
   end

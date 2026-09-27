@@ -34,8 +34,10 @@ defmodule Atoll.StagedSnapshotTest do
                assert {:ok, snapshot} =
                         Snapshot.from_stage(stage, @did, f.key.curve, f.key.public)
 
-               assert Map.take(snapshot, [:head, :data, :rev, :records]) ==
-                        Map.drop(expected, [:blocks])
+               assert Map.take(snapshot, [:head, :data, :rev]) ==
+                        Map.take(expected, [:head, :data, :rev])
+
+               assert Map.new(snapshot.records) == expected.records
 
                assert MapSet.new(snapshot.block_cids) == MapSet.new(Map.keys(expected.blocks))
                refute f.extra in snapshot.block_cids

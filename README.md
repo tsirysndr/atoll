@@ -191,6 +191,7 @@ record Lexicons or grant access to account data.
 - [x] Request-scoped private disk staging for incrementally validated CAR blocks.
 - [x] Supervised staging cleanup on request exit and configurable per-node concurrency admission.
 - [x] Signed repository snapshot validation over staged block readers without collecting record bodies.
+- [x] Bounded MST validation and lazy record/CID enumeration for staged import publication.
 - [x] Transactional staged snapshot publication with migration re-signing and quota rollback.
 - [x] Lazy CARv1 encoding with per-block validation and upstream cancellation cleanup.
 
@@ -1030,8 +1031,9 @@ a five-second per-read timeout, and a 30-second overall read budget. The declare
 length must match the actual bytes. Imports allow ten attempts per peer IP per
 five minutes using the configured memory, PostgreSQL, or Redis request limiter.
 Blob bytes must be transferred separately. Record bodies are read individually
-from private staging during validation and atomic publication; repository metadata
-and the reconstructed MST still scale in memory with the record count. Normal
+from private staging during validation and atomic publication. Tree traversal and
+record publication are bounded; the stage CID/offset index and prior blob-reference
+cleanup lists still scale with repository size. Normal
 completion, malformed input, read errors, and publication failures close and remove
 the staging files. A VM/host crash may leave private files behind; monitor
 temporary-disk capacity and clean stale files operationally.
@@ -3402,8 +3404,20 @@ indexes or accumulate tree/membership maps in Elixir. The database role needs th
 end; quota checks, custody changes and sync events remain atomic. PostgreSQL still
 materializes the revision array and its indexes, and large repositories incur
 multiple traversal passes while holding the write lock.
-Imports and ordinary record mutations still hold metadata in memory. Compact
-commit-event inversion proofs remain pending.
+Staged imports validate canonical MST nodes and each record through bounded
+traversal, then replay lazy record/CID streams during atomic publication. Record
+rows insert in batches of 1,000; revision membership uses the same PostgreSQL
+staging mechanism as key transitions. Migration re-signing replaces the commit
+without collecting reachable CIDs. Validation still exhausts every branch before
+publication, verifies record hashes/types/data-model limits, and rejects missing
+blocks even when public storage contains them. Repeated traversal trades extra
+reads for bounded tree metadata. The stage must remain open through publication.
+
+Import memory work remains: the private CAR staging file's CID/offset index and
+prior blob-reference cleanup lists still scale with repository size. The legacy
+buffered snapshot API deliberately collects its archive, records and blocks.
+Ordinary record mutations also retain whole-tree metadata. Compact commit-event
+inversion proofs remain pending.
 
 `Atoll.Repositories.RecordProof.verify/5` accepts a CAR of at most 2 MiB, an
 expected DID/path, and a trusted signing curve/public key. It checks the first CAR
@@ -3481,7 +3495,8 @@ collecting chunks. It retains the encoded output but does not reconstruct a whol
 MST, record map or revision membership set. Its CAR now uses the stream's block
 order (commit first), and corrupt stored nodes fail rather than being rebuilt from
 the record index. Lazy corruption becomes an error result without returning partial
-bytes. Imports and ordinary record mutations retain their existing metadata costs. The streaming callback must finish
+bytes. Import staging indexes, blob cleanup and ordinary record mutations retain
+the metadata costs described above. The streaming callback must finish
 consuming the enumerable before returning. The legacy `CAR.decode/1` and `import_archive/3` APIs remain buffered;
 HTTP imports use incremental decoding and staging. Tests compare full and incremental block sets with the buffered codec,
 exercise cancellation/corruption, and stream a repository larger than 64 MiB.
@@ -3573,16 +3588,17 @@ repository signatures, complete MST membership, account authorization, and quota
 must still pass before publication. Public HTTP imports now use this staging path.
 
 `Atoll.Repositories.Snapshot.from_stage/4` validates a staged repository using the
-same signature, five-minute future-revision bound, canonical MST reconstruction,
+same signature, five-minute future-revision bound, bounded canonical MST traversal,
 complete reachable-block membership, and record data-model checks as the buffered
-snapshot decoder. It returns repository metadata, the reachable block CID list,
-and a `read_block` callback instead of a map of all block bodies. Unreferenced
-staged blocks are omitted from that CID list. Records are checked individually
+snapshot decoder. It returns repository metadata, replayable record and reachable
+CID streams, and a `read_block` callback instead of maps of records or block bodies.
+Unreferenced staged blocks are omitted; shared record CIDs can occur repeatedly
+in the CID stream and are deduplicated during revision staging. Records are checked individually
 against the 1,000,000-byte limit and their collection's `$type`.
 
 The callback remains valid only inside `Stage.with_chunks/3`; publishing imports
-must finish all staged reads there. The record/CID map and reconstructed MST still
-occupy memory proportional to repository metadata. This validator does not publish
+must finish all staged reads there. The stage file index remains proportional to
+the staged block count, but validation does not retain a reconstructed MST. This validator does not publish
 blocks or update accounts, blob references, quotas, or event streams. The HTTP importer uses this validator before staged publication.
 
 `Atoll.Repositories.import_staged/3` publishes a stage inside its owning callback.
@@ -4025,8 +4041,8 @@ Restoration requires the expected current head and a valid private/public key
 pair. Under normal event/account locks it verifies the current commit signature,
 revision and MST root, then reads and hash-checks every referenced record body
 before installing custody. Record bodies are checked one at a time; repository
-metadata and the reconstructed MST remain in memory. This is an operator path
-whose cost grows with repository size. Suspended and taken-down accounts are
+metadata uses bounded traversal and PostgreSQL revision staging. This operator
+path still performs work proportional to repository size. Suspended and taken-down accounts are
 rejected; active/deactivated status is preserved.
 
 A different key installs an envelope under the active encryption master key and

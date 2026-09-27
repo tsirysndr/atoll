@@ -22,7 +22,11 @@ defmodule Atoll.Blobs.References do
   def import!(did, records, blocks, rev) do
     prior = Repo.all(from r in Reference, where: r.did == ^did, select: r.cid)
     Repo.delete_all(from r in Reference, where: r.did == ^did)
-    for {path, cid} <- records, do: insert_record!(did, path, read_block!(blocks, cid), rev, true)
+
+    Enum.each(records, fn {path, cid} ->
+      insert_record!(did, path, read_block!(blocks, cid), rev, true)
+    end)
+
     withdraw!(did, prior)
   end
 
