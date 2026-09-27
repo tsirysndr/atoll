@@ -758,9 +758,10 @@ A minimal Caddyfile:
     }
 
 Wildcard user-domain hosts need DNS and certificates at the proxy (Caddy's
-on-demand TLS or a wildcard certificate). Set `ATOLL_FORCE_SSL=true` to add
-HSTS and redirect any plain-HTTP request that reaches Atoll itself, using the
-proxy's `X-Forwarded-Proto`. Health endpoints for orchestration are
+on-demand TLS or a wildcard certificate). Production releases add HSTS and
+redirect any plain-HTTP request that reaches Atoll itself through the
+compile-time `force_ssl` in `config/prod.exs`, using the proxy's
+`X-Forwarded-Proto` and excluding localhost probes. Health endpoints for orchestration are
 `GET /health` (liveness) and `GET /health/ready` (database readiness);
 `GET /metrics` serves operator-authenticated Prometheus metrics with the alert
 rules and runbook in `ops/prometheus`. Backup and recovery-set tooling lives in

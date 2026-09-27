@@ -348,17 +348,6 @@ if config_env() == :prod do
       """
   end
 
-  case System.get_env("ATOLL_FORCE_SSL", "false") do
-    "true" ->
-      config :atoll, AtollWeb.Endpoint, force_ssl: [hsts: true, rewrite_on: [:x_forwarded_proto]]
-
-    "false" ->
-      :ok
-
-    _ ->
-      raise "ATOLL_FORCE_SSL must be true or false"
-  end
-
   host = server.host
 
   config :atoll, :dns_cluster_query, System.get_env("DNS_CLUSTER_QUERY")
@@ -372,8 +361,8 @@ if config_env() == :prod do
     ],
     secret_key_base: secret_key_base
 
-  # TLS is expected at a terminating reverse proxy; see the production
-  # runbook in docs/deploy.md, including ATOLL_FORCE_SSL above.
+  # TLS is expected at a terminating reverse proxy; HTTPS enforcement is
+  # compile-time in config/prod.exs (localhost excluded). See docs/deploy.md.
 end
 
 case System.get_env("ATOLL_PASSKEYS_ENABLED") do

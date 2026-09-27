@@ -77,25 +77,6 @@ defmodule Atoll.ServerRuntimeConfigTest do
     end
   end
 
-  test "production HSTS enforcement is opt-in and validated" do
-    config = Config.Reader.read!("config/runtime.exs", env: :prod, target: :host)
-    refute config[:atoll][AtollWeb.Endpoint][:force_ssl]
-    System.put_env("ATOLL_FORCE_SSL", "true")
-    on_exit(fn -> System.delete_env("ATOLL_FORCE_SSL") end)
-    config = Config.Reader.read!("config/runtime.exs", env: :prod, target: :host)
-
-    assert config[:atoll][AtollWeb.Endpoint][:force_ssl] == [
-             hsts: true,
-             rewrite_on: [:x_forwarded_proto]
-           ]
-
-    System.put_env("ATOLL_FORCE_SSL", "never")
-
-    assert_raise RuntimeError, "ATOLL_FORCE_SSL must be true or false", fn ->
-      Config.Reader.read!("config/runtime.exs", env: :prod, target: :host)
-    end
-  end
-
   test "invalid session limits fail at boot" do
     for limit <- ["-1", "1001", "bad", ""] do
       System.put_env("ATOLL_SESSION_MAX_COUNT", limit)

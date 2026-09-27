@@ -1046,7 +1046,7 @@ observations do not produce duplicate events. The
 - [x] Operator account messages through the configurable email Worker, with attempt/outcome history.
 - [x] Atomic operator audit entries for PLC key installation, replacement, and unchanged retries, without private-key material.
 - [x] The complete `com.atproto.admin` endpoint surface at the pinned upstream revision, with transactional audit history for every mutating operator action.
-- [x] Production boot requiring the database, cookie, key-encryption and session secrets, opt-in HSTS/HTTPS enforcement behind a TLS proxy, release migrations, and a deployment guide covering reverse-proxy WebSockets and signing-key custody.
+- [x] Production boot requiring the database, cookie, key-encryption and session secrets, compile-time HSTS/HTTPS enforcement behind a TLS proxy, release migrations, and a deployment guide covering reverse-proxy WebSockets and signing-key custody.
 - [x] Logical PostgreSQL archive/restore helper with checksums, empty-target protection, and disposable-database integration checks.
 - [x] Disposable full-schema PostgreSQL restore drill covering signed repositories, encrypted custody, sessions, blobs, private preferences, audit history and replay boundaries.
 - [x] Offline S3 blob archives with CID verification, empty-prefix restoration, and a real MinIO round trip.

@@ -119,7 +119,7 @@ Self-service signup refuses operational first labels (`www`, `admin`, `mail`,
 Verify the moderation-service DIDs yourself before relying on them; service
 DIDs are operator configuration, not protocol constants.
 
-Recommended from day one: `ATOLL_FORCE_SSL=true`, `ATOLL_METRICS_ENABLED=true`
+Recommended from day one: `ATOLL_METRICS_ENABLED=true`
 (with monitoring from `ops/prometheus`), the background workers
 (`ATOLL_BLOB_CLEANUP_ENABLED`, `ATOLL_ACCOUNT_CLEANUP_ENABLED`,
 `ATOLL_IDENTITY_REFRESH_ENABLED`, `ATOLL_EVENT_RETENTION_ENABLED` with
@@ -140,7 +140,9 @@ passkeys (`ATOLL_PASSKEYS_ENABLED=true`), verified PLC resolution
 
 ## 6. Reverse proxy
 
-TLS terminates at the proxy; Atoll listens on plain HTTP behind it. The proxy
+TLS terminates at the proxy; Atoll listens on plain HTTP behind it, and
+production releases enforce HTTPS themselves through the compile-time
+`force_ssl` in `config/prod.exs` (HSTS on, localhost excluded). The proxy
 must pass WebSocket upgrades (the firehose) and preserve client addresses.
 Caddy does both by default:
 
@@ -306,8 +308,8 @@ Boot and identity
 
 Transport
 
-- [ ] TLS at the proxy with a valid wildcard certificate;
-      `ATOLL_FORCE_SSL=true`.
+- [ ] TLS at the proxy with a valid wildcard certificate (releases enforce
+      HTTPS/HSTS at compile time, localhost excluded).
 - [ ] WebSocket upgrade verified through the proxy on `subscribeRepos`.
 - [ ] `ATOLL_TRUSTED_PROXY_CIDRS` lists exactly the proxy addresses.
 - [ ] Database connections use TLS if the database is remote.
