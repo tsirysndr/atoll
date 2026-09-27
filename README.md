@@ -618,7 +618,7 @@ inventory to assess transfer progress first.
 - [x] Lexicon MIME and size constraints for supported post/profile blob fields.
 - [x] Bounded signature-based MIME detection for common binary media uploads.
 - [x] MIME and size constraints for blobs in configured custom record Lexicons.
-- [ ] Full media decoding/validation.
+- [x] Opt-in bounded structural image validation with dimension budgets and declared/detected type coherence (pixel data is never decoded or transformed).
 - [x] Atomic nested record-reference tracking, ownership/metadata checks on writes, and withdrawal when the last reference is removed.
 - [x] Public `com.atproto.sync.getBlob` and paginated `listBlobs`, with `since` filtering, repository status checks, and restrictive content headers.
 - [x] Authenticated `com.atproto.repo.listMissingBlobs` with account-scoped CID pagination and referencing record URIs.
@@ -650,7 +650,9 @@ total read budget; the bounded body is assembled in memory before storage.
 Compressed request bodies are rejected. Uploads have a separate limit of 60
 attempts per direct peer IP per five minutes, using the same bounded per-node
 limiter as sessions. Byte/count quotas cover both PostgreSQL and S3 uploads.
-Media types are syntax-checked only; bytes are not inspected or transformed.
+Media types are syntax-checked by default; the opt-in structural validation
+mode below additionally parses supported image containers. Bytes are never
+transformed.
 
 ### Blob storage configuration
 
@@ -6927,3 +6929,21 @@ nullified operations (use `mix atoll.plc.reconcile_nullified`), locally
 completed work, and recovery journals with their own expected-head workflow are
 all rejected. The operator audit entry records the observed head, the tombstone
 flag, and the released reservations; repeated runs are idempotent.
+
+### Structural media validation
+
+`ATOLL_MEDIA_VALIDATION=images` enables bounded structural checks for image
+uploads; the default (`off`) matches the reference PDS, which stores bytes
+verbatim. When enabled, blobs detected as PNG, JPEG, GIF, WebP, or BMP must
+parse structurally — signature, header shape, chunk/segment walk to the
+required trailer — and their declared dimensions must not exceed
+`ATOLL_MEDIA_MAX_PIXELS` (default 268,435,456). A declared MIME type among
+these formats must also match the detected signature, so mislabeled uploads
+fail with `400 InvalidMedia` before any bytes are stored.
+
+Parsing reads container structure only: no pixel decoding, decompression, or
+byte transformation occurs, adversarial marker-stuffing runs in linear time
+inside the existing 5 MiB body bound, and formats outside the supported set
+(other images, audio, video, documents) continue to be stored verbatim. This
+is not a malware scanner. Both settings are also available per call site
+through the internal staging options for tests and embedding.

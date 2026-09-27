@@ -80,6 +80,13 @@ defmodule Atoll.Blobs do
     with :ok <- size(bytes, Keyword.get(opts, :content_length)),
          {:ok, declared_mime} <- normalize_mime(content_type),
          mime = Atoll.Blobs.MimeSniffer.detect(bytes, declared_mime),
+         :ok <-
+           Atoll.Blobs.MediaValidation.check(
+             bytes,
+             declared_mime,
+             mime,
+             Keyword.get(opts, :media_validation, [])
+           ),
          {:ok, _} <- Repositories.get_head(did),
          cid = CID.create(bytes, :raw) do
       Repo.transaction(fn ->

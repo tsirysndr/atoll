@@ -76,6 +76,22 @@ if value = System.get_env("ATOLL_APPVIEW_PROXY") do
   config :atoll, :appview_proxy, AtollWeb.ProxyPlug.appview_from_env!(value)
 end
 
+case Atoll.Blobs.MediaValidation.mode_from_env!(System.get_env("ATOLL_MEDIA_VALIDATION")) do
+  [] ->
+    :ok
+
+  mode ->
+    config :atoll,
+           :media_validation,
+           mode ++
+             [
+               max_pixels:
+                 Atoll.Blobs.MediaValidation.max_pixels_from_env!(
+                   System.get_env("ATOLL_MEDIA_MAX_PIXELS")
+                 )
+             ]
+end
+
 if value = System.get_env("ATOLL_MOD_SERVICE_PROXY") do
   config :atoll, :mod_service_proxy, AtollWeb.ProxyPlug.appview_from_env!(value)
 end

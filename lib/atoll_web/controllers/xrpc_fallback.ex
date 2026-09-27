@@ -242,6 +242,15 @@ defmodule AtollWeb.XRPCFallback do
   def call(conn, {:error, :record_rate_limited}),
     do: error(conn, 429, "RateLimitExceeded", "Too many record writes.")
 
+  def call(conn, {:error, :invalid_media}),
+    do:
+      error(
+        conn,
+        400,
+        "InvalidMedia",
+        "Media failed structural validation for its declared or detected type."
+      )
+
   def call(conn, {:error, :blob_too_large}),
     do: error(conn, 413, "BlobTooLarge", "Blob exceeds the 5 MiB limit.")
 
