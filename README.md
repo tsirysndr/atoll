@@ -430,7 +430,8 @@ mutation. Deletes and empty batches need no record schema, even with `validate: 
 - [x] Granular RPC OAuth permissions for service tokens, with audience/method restrictions, consent and refresh narrowing.
 - [x] Granular account permissions for email read/manage and signed repository import.
 - [x] Granular OAuth identity permissions for handle changes, PLC signature requests, signing and submission.
-- [ ] Dynamically resolved permission sets and RPC proxy integration.
+- [x] Internal namespace-restricted permission-set expansion and authenticated PostgreSQL resolution cache.
+- [ ] Permission-set consent, per-token permission snapshots, refresh integration, and RPC proxy integration.
 - [x] DPoP blob uploads with transitional generic scope, pre-body proof admission, and transactional authorization rechecks.
 - [x] DPoP service-token issuance with current generic/chat scope checks and authorization locks held through signing.
 - [x] DPoP authentication on public repository/blob export routes without granting inactive-account export privileges.
@@ -5155,6 +5156,40 @@ follows the [repository permission specification](https://atproto.com/specs/perm
 `putRecord` follows the reference PDS requirement for both create and update.
 Granular blob, RPC, account and identity permissions are described below.
 `include:` permission sets remain pending and are rejected at PAR admission.
+
+### Permission-set resolution foundation
+
+`Atoll.OAuth.PermissionSets.resolve/2` resolves an `include:<nsid>` invocation through
+the existing authenticated Lexicon fetcher: DNS namespace delegation, fresh DID/PDS
+resolution, record CID verification and a signed CAR inclusion proof under the
+resolved repository key. HTTPS public-address checks and fetch size/time bounds
+are inherited from that fetcher. Inclusion authenticates the record under that
+key; it does not prove that the signed commit is the latest. No network resolution
+runs inside a database transaction.
+
+`Atoll.OAuth.PermissionSet` validates bounded `permission-set` documents and
+expands only understood repository/RPC declarations. Every referenced collection
+or method must be in the set's NSID group or a child group. Wildcard resources,
+sibling/parent namespaces, fixed RPC audiences, unsupported resources and unknown
+permission fields grant nothing. A mixed valid/invalid declaration is ignored in
+full. RPC audiences can be `*` in the document or inherited from an explicit DID
+service reference on the include invocation. Missing inherited audiences grant
+no permission. Titles, details and localized text are preserved and bounded.
+
+Migration `20260927005341` stores at most 1,000 cached documents, each limited to
+256 KiB encoded JSON and 256 declarations (128 resource names per declaration).
+Fresh entries avoid resolution for 24 hours. Failed refreshes retain the last
+verified document and back off for five minutes without renewing its original
+age. New-session lookup expires at 90 days; callers resolving an existing session
+may use older cached data. Expired entries can be reclaimed when adding a new
+entry. Cache writes serialize briefly and do not overwrite a concurrent update.
+
+This is an internal foundation, not live OAuth permission-set authorization.
+`include:` remains rejected by PAR until consent and fixed per-access-token
+snapshots are connected. Those snapshots must survive cache expiry/eviction;
+refresh may recompute them within the original include grant. Reading the mutable
+cache directly during resource authorization would violate the
+[permission-set token semantics](https://atproto.com/specs/permission#permission-sets).
 
 ### OAuth identity permissions
 

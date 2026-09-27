@@ -64,6 +64,20 @@ defmodule Atoll.OAuth.Permissions do
     end
   end
 
+  @doc "Parse an include invocation; admission remains disabled until set snapshots are integrated."
+  def include(value) do
+    with {:ok, positional, params} <- syntax(value, "include", ~w(nsid aud)),
+         true <- is_nil(positional) or not Map.has_key?(params, "nsid"),
+         [nsid] <- if(positional, do: [positional], else: params["nsid"]),
+         true <- Atoll.Syntax.nsid?(nsid),
+         [audience] <- Map.get(params, "aud", [nil]),
+         true <- is_nil(audience) or service_reference?(audience) do
+      {:ok, %{nsid: nsid, audience: audience}}
+    else
+      _ -> {:error, :invalid_scope}
+    end
+  end
+
   def identity(value) do
     with {:ok, positional, params} <- syntax(value, "identity", ["attr"]),
          true <- is_nil(positional) or not Map.has_key?(params, "attr"),
