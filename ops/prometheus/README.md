@@ -113,6 +113,32 @@ failed/stale inventory, disabled polling and failed scrapes suppress this alert.
 Stale inventory has its own alert; clearing the backlog alert alone is not proof
 that jobs were deleted. These timestamps depend on synchronized clocks.
 
+## Firehose capacity
+
+`AtollFirehoseCapacity` fires when active streams plus pending upgrades exceed
+80% of the node connection quota for five minutes. It requires a positive quota,
+a successful scrape and a successful snapshot within 120 seconds. Inspect active
+consumer demand, pending handshakes and admission counters before raising limits;
+increasing capacity also increases database polling, sockets and VM resources.
+Counts and limits apply to one node, even when HTTP request budgets use Redis or
+PostgreSQL. A quota reduction can temporarily put existing connections above the
+new maximum; it only restricts new admission.
+
+`AtollFirehoseInventoryUnavailable` fires after two minutes of failed snapshots or
+snapshots older than 120 seconds while the scrape remains up. Inspect the quota
+manager, telemetry poller and mailbox/VM pressure. The aggregate query has a 100 ms
+timeout and runs every ten seconds outside the metrics endpoint. Failed snapshots
+retain old gauges, so read availability and timestamp alongside occupancy. Scrape
+failure suppresses these alerts in favor of the scrape alert; missing series are
+not a substitute for an expected-target inventory.
+
+`atoll_firehose_admissions_total{outcome="full"}` counts rejected reservations;
+`unavailable` covers failed admission caused by manager/configuration failure.
+`accepted` counts admitted upgrades even if their handshake later fails. Use
+`rate()` before aggregating counters across instances. A per-IP quota can be full
+while total occupancy is low; no IP labels or high-cardinality peer inventory are
+exported. Gauge sampling does not retain peaks between observations.
+
 ## Latency percentiles
 
 For per-instance completed HTTP request p95 over five minutes:
@@ -151,7 +177,8 @@ read-only, and disables networking inside each test container. No application
 database or credentials are used. It also compiles in the test environment and
 runs `scripts/metrics_fixture.exs` with `mix run --no-start`: only telemetry and
 the collector start, without Repo, the endpoint or background workers. Synthetic
-timings exercise zero durations, finite buckets and overflow. The actual emitted
+timings exercise zero durations, finite buckets and overflow; synthetic firehose
+snapshots and outcomes exercise the capacity gauges and admission counters. The actual emitted
 text passes through `promtool check metrics` to validate metric metadata and
 exposition framing. GitHub Actions runs the same checks on pushes.
 
@@ -159,7 +186,8 @@ exposition framing. GitHub Actions runs the same checks on pushes.
 jobs, low volume, idle and missing series, failed items, failed/timed-out runs,
 duplicate suppression, counter resets, stalled progress, idle scheduling and
 deadline resets, absent enabled workers, process-registration recovery and database
-pool/total latency, inventory failure/staleness and aged blob cleanup queues.
+pool/total latency, inventory failure/staleness, aged blob cleanup queues, and
+firehose capacity (including pending upgrades), snapshot failure and recovery.
 These are synthetic rule tests, not a
 live scrape or notification delivery test. With a compatible local `promtool`,
 you can also run `promtool check rules alerts.yml` and

@@ -5,7 +5,26 @@ defmodule AtollWeb.StreamConnections do
   def start_link(opts \\ []),
     do: GenServer.start_link(__MODULE__, opts, name: Keyword.get(opts, :name, __MODULE__))
 
-  def reserve(peer, server \\ __MODULE__), do: call(server, {:reserve, peer})
+  def reserve(peer, server \\ __MODULE__) do
+    result = call(server, {:reserve, peer})
+
+    outcome =
+      case result do
+        {:ok, _} -> :accepted
+        {:error, :full} -> :full
+        _ -> :unavailable
+      end
+
+    :telemetry.execute([:atoll, :firehose, :admission], %{count: 1}, %{outcome: outcome})
+    result
+  end
+
+  def snapshot(server \\ __MODULE__) do
+    GenServer.call(server, :snapshot, 100)
+  catch
+    :exit, _ -> {:error, :unavailable}
+  end
+
   def claim({server, token}), do: call(server, {:claim, token})
   def release({server, token}), do: GenServer.cast(server, {:release, token, self()})
 
@@ -30,10 +49,27 @@ defmodule AtollWeb.StreamConnections do
          Application.get_env(:atoll, :firehose_max_connections_per_ip, 16)}
       end)
 
-    {:ok, %{entries: %{}, monitors: %{}, peers: %{}, limits: limits}}
+    {:ok, %{entries: %{}, monitors: %{}, peers: %{}, active: 0, limits: limits}}
   end
 
   @impl true
+  def handle_call(:snapshot, _, state) do
+    {total, per_ip} = state.limits.()
+
+    if is_integer(total) and total in 1..100_000 and is_integer(per_ip) and per_ip in 1..100_000 do
+      {:reply,
+       {:ok,
+        %{
+          active: state.active,
+          pending: map_size(state.entries) - state.active,
+          max_connections: total,
+          max_connections_per_ip: per_ip
+        }}, state}
+    else
+      {:reply, {:error, :unavailable}, state}
+    end
+  end
+
   def handle_call({:reserve, peer}, {owner, _}, state) do
     {total, per_ip} = state.limits.()
 
@@ -73,6 +109,7 @@ defmodule AtollWeb.StreamConnections do
         state = %{
           state
           | entries: Map.put(state.entries, token, updated),
+            active: state.active + 1,
             monitors: state.monitors |> Map.delete(entry.monitor) |> Map.put(monitor, token)
         }
 
@@ -121,6 +158,7 @@ defmodule AtollWeb.StreamConnections do
         %{
           state
           | entries: entries,
+            active: state.active - if(entry.claimed, do: 1, else: 0),
             peers: peers,
             monitors: Map.delete(state.monitors, entry.monitor)
         }

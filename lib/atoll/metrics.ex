@@ -3,6 +3,17 @@ defmodule Atoll.Metrics do
   use GenServer
 
   @help %{
+    "atoll_firehose_admissions_total" => "Firehose upgrade admissions by fixed outcome.",
+    "atoll_firehose_inventory_available" =>
+      "Whether the latest live firehose inventory succeeded.",
+    "atoll_firehose_inventory_success_time_seconds" =>
+      "Unix timestamp of the last successful firehose inventory; zero means unobserved.",
+    "atoll_firehose_active" => "Claimed firehose connections at the last successful inventory.",
+    "atoll_firehose_pending" => "Pending firehose upgrades at the last successful inventory.",
+    "atoll_firehose_max_connections" =>
+      "Configured node connection quota at the last successful inventory.",
+    "atoll_firehose_max_connections_per_ip" =>
+      "Configured per-IP connection quota at the last successful inventory.",
     "atoll_database_inventory_enabled" => "Whether periodic database inventory is enabled.",
     "atoll_database_inventory_available" =>
       "Whether the latest database inventory poll succeeded.",
@@ -73,7 +84,9 @@ defmodule Atoll.Metrics do
             [:atoll, :repo, :query],
             [:atoll, :readiness, :check],
             [:atoll, :worker, :scheduled],
-            [:atoll, :metrics, :database]
+            [:atoll, :metrics, :database],
+            [:atoll, :metrics, :firehose],
+            [:atoll, :firehose, :admission]
           ] ++
             Map.keys(@workers)
 
@@ -94,6 +107,7 @@ defmodule Atoll.Metrics do
 
     state = %{
       server: self(),
+      firehose: %{available: 0, success: 0, rows: %{}},
       inventory: %{available: 0, success: 0, rows: %{}},
       histograms:
         Map.new(@histograms, fn {key, _} ->
@@ -144,6 +158,15 @@ defmodule Atoll.Metrics do
     add(state, {:readiness, result}, 1)
   end
 
+  def handle_event([:atoll, :metrics, :firehose], _, metadata, state) do
+    GenServer.cast(state.server, {:firehose_inventory, metadata[:result]})
+  end
+
+  def handle_event([:atoll, :firehose, :admission], _, metadata, state) do
+    if metadata[:outcome] in [:accepted, :full, :unavailable],
+      do: add(state, {:firehose, metadata[:outcome]}, 1)
+  end
+
   def handle_event([:atoll, :metrics, :database], _, metadata, state) do
     GenServer.cast(state.server, {:database_inventory, metadata[:result]})
   end
@@ -172,6 +195,21 @@ defmodule Atoll.Metrics do
   end
 
   @impl true
+  def handle_cast({:firehose_inventory, {:ok, rows, time}}, state)
+      when is_map(rows) and is_integer(time) and time > 0 do
+    keys = [:active, :pending, :max_connections, :max_connections_per_ip]
+
+    if Enum.all?(keys, fn key -> is_integer(rows[key]) and rows[key] >= 0 end) and
+         rows[:max_connections] in 1..100_000 and rows[:max_connections_per_ip] in 1..100_000 do
+      {:noreply, %{state | firehose: %{available: 1, success: time, rows: Map.take(rows, keys)}}}
+    else
+      {:noreply, put_in(state.firehose.available, 0)}
+    end
+  end
+
+  def handle_cast({:firehose_inventory, _}, state),
+    do: {:noreply, put_in(state.firehose.available, 0)}
+
   def handle_cast({:database_inventory, {:ok, rows, time}}, state)
       when is_map(rows) and is_integer(time) and time > 0 do
     rows = Map.take(rows, ["postgres", "s3"])
@@ -226,7 +264,9 @@ defmodule Atoll.Metrics do
     output = [
       exposition(counters, "counter"),
       exposition(
-        gauges ++ deadlines ++ inventory ++ database_inventory(state.inventory),
+        gauges ++
+          deadlines ++
+          inventory ++ database_inventory(state.inventory) ++ firehose_inventory(state.firehose),
         "gauge"
       ),
       histograms(state)
@@ -254,6 +294,16 @@ defmodule Atoll.Metrics do
       end)
   end
 
+  defp firehose_inventory(inventory) do
+    [
+      {"atoll_firehose_inventory_available", inventory.available},
+      {"atoll_firehose_inventory_success_time_seconds", inventory.success}
+    ] ++
+      Enum.map([:active, :pending, :max_connections, :max_connections_per_ip], fn key ->
+        {"atoll_firehose_#{key}", Map.get(inventory.rows, key, 0)}
+      end)
+  end
+
   defp definitions do
     [
       {:http_time, "atoll_http_duration_seconds_total", 1_000_000},
@@ -261,6 +311,10 @@ defmodule Atoll.Metrics do
       {:query_time, "atoll_database_duration_seconds_total", 1_000_000},
       {:queue_time, "atoll_database_queue_seconds_total", 1_000_000}
     ] ++
+      Enum.map(
+        [:accepted, :full, :unavailable],
+        &{{:firehose, &1}, ~s(atoll_firehose_admissions_total{outcome="#{&1}"}), 1}
+      ) ++
       Enum.map(@classes, &{{:http, &1}, ~s(atoll_http_requests_total{status_class="#{&1}"}), 1}) ++
       Enum.map(
         [:ready, :unavailable, :other],

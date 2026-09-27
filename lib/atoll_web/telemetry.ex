@@ -92,7 +92,8 @@ defmodule AtollWeb.Telemetry do
 
   defp periodic_measurements do
     [
-      {Atoll.Metrics.Database, :poll, []}
+      {Atoll.Metrics.Database, :poll, []},
+      {Atoll.Metrics.Firehose, :poll, []}
     ]
   end
 end

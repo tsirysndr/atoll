@@ -1047,6 +1047,7 @@ observations do not produce duplicate events. The
 - [x] `GET /health/ready` database connectivity readiness with bounded queries and outcome telemetry.
 - [x] Opt-in supervised cleanup of expired sessions and service-token replay markers, with bounded batches and outcome telemetry.
 - [x] Opt-in operator-authenticated Prometheus endpoint with fixed-cardinality HTTP, database, readiness, worker and VM metrics.
+- [x] Firehose admission counters, bounded live-capacity inventory, and sustained-capacity/stale-inventory alerts.
 - [x] Fixed-bucket HTTP, database and pool-wait latency histograms, percentile query guidance and Prometheus exposition validation.
 - [x] Baseline Prometheus alert rules and operator runbook, with firing/recovery/counter-reset tests in CI.
 - [x] Scheduler progress-deadline gauges for all eight background workers, with an overdue-progress alert and rule tests.
@@ -1123,6 +1124,11 @@ and collects these metric families:
 | `atoll_collector_start_time_seconds` | Collector start time as Unix seconds. |
 | `atoll_vm_memory_bytes` | Current total Erlang VM memory. |
 | `atoll_vm_run_queue` | Current Erlang run queue length. |
+| `atoll_firehose_admissions_total{outcome}` | Upgrade admissions: `accepted`, `full`, or `unavailable`. |
+| `atoll_firehose_inventory_available` | Whether the latest live-connection snapshot succeeded. |
+| `atoll_firehose_inventory_success_time_seconds` | Last successful snapshot time; zero means unobserved. |
+| `atoll_firehose_active` / `atoll_firehose_pending` | Claimed streams and pending upgrades at the last successful snapshot. |
+| `atoll_firehose_max_connections` / `atoll_firehose_max_connections_per_ip` | Last observed node and per-IP quotas. |
 | `atoll_database_inventory_enabled` | Whether periodic database inventory is enabled (1 or 0). |
 | `atoll_database_inventory_available` | Whether the latest inventory poll succeeded (1 or 0); initially 0. |
 | `atoll_database_inventory_success_time_seconds` | Last successful inventory timestamp; initially 0. |
@@ -1137,6 +1143,23 @@ query text, credentials, or external URLs. Collection is always active in memory
 the setting controls HTTP exposure. Scrapes read counters, VM state, worker
 configuration and local process registration without messaging workers, querying
 PostgreSQL or contacting blob storage.
+
+Firehose capacity is sampled every ten seconds when metrics are enabled. The
+quota manager returns aggregate active/pending counts and configured limits in
+constant time; the caller allows at most 100 ms. Scrapes only read the collector's
+cached result. A failed snapshot marks inventory unavailable while retaining the
+last successful values and timestamp. Collector restart resets observations;
+quota-manager restart closes its tracked sockets and starts with empty counts.
+There are nine fixed firehose series and no IP, DID, client ID or lease labels.
+Admission counters count reservations, including ones whose subsequent handshake
+fails; they are not counts of successfully established streams. Per-IP saturation
+can therefore produce `full` outcomes while node-wide usage remains low. The
+sampled counts can miss short-lived connections between polls.
+
+The bundled alerts warn after node occupancy (active plus pending) exceeds 80%
+for five minutes, or inventory failure/staleness lasts two minutes. Capacity
+alerts require a fresh successful snapshot and a successful scrape. See the
+[monitoring runbook](ops/prometheus/README.md) for interpretation and recovery.
 
 When metrics are enabled, the existing telemetry poller samples the durable blob
 cleanup queue every ten seconds. Set

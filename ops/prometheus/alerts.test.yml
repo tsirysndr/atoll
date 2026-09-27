@@ -560,3 +560,119 @@ tests:
       - eval_time: "24h9m"
         alertname: "AtollBlobCleanupBacklog"
         exp_alerts: []
+
+  - interval: 1m
+    input_series:
+      - series: 'atoll_firehose_active{job="atoll",instance="high:443"}'
+        values: "90x5 0x10"
+      - series: 'atoll_firehose_pending{job="atoll",instance="high:443"}'
+        values: "0x15"
+      - series: 'atoll_firehose_max_connections{job="atoll",instance="high:443"}'
+        values: "100x15"
+      - series: 'atoll_firehose_inventory_available{job="atoll",instance="high:443"}'
+        values: "1x15"
+      - series: 'atoll_firehose_inventory_success_time_seconds{job="atoll",instance="high:443"}'
+        values: "0+60x15"
+      - series: 'up{job="atoll",instance="high:443"}'
+        values: "1x15"
+      - series: 'atoll_firehose_active{job="atoll",instance="pending:443"}'
+        values: "0x15"
+      - series: 'atoll_firehose_pending{job="atoll",instance="pending:443"}'
+        values: "90x15"
+      - series: 'atoll_firehose_max_connections{job="atoll",instance="pending:443"}'
+        values: "100x15"
+      - series: 'atoll_firehose_inventory_available{job="atoll",instance="pending:443"}'
+        values: "1x15"
+      - series: 'atoll_firehose_inventory_success_time_seconds{job="atoll",instance="pending:443"}'
+        values: "0+60x15"
+      - series: 'up{job="atoll",instance="pending:443"}'
+        values: "1x15"
+      - series: 'atoll_firehose_active{job="atoll",instance="low:443"}'
+        values: "10x15"
+      - series: 'atoll_firehose_pending{job="atoll",instance="low:443"}'
+        values: "0x15"
+      - series: 'atoll_firehose_max_connections{job="atoll",instance="low:443"}'
+        values: "100x15"
+      - series: 'atoll_firehose_inventory_available{job="atoll",instance="low:443"}'
+        values: "1x15"
+      - series: 'atoll_firehose_inventory_success_time_seconds{job="atoll",instance="low:443"}'
+        values: "0+60x15"
+      - series: 'up{job="atoll",instance="low:443"}'
+        values: "1x15"
+      - series: 'atoll_firehose_active{job="atoll",instance="stale:443"}'
+        values: "90x15"
+      - series: 'atoll_firehose_pending{job="atoll",instance="stale:443"}'
+        values: "0x15"
+      - series: 'atoll_firehose_max_connections{job="atoll",instance="stale:443"}'
+        values: "100x15"
+      - series: 'atoll_firehose_inventory_available{job="atoll",instance="stale:443"}'
+        values: "1x15"
+      - series: 'atoll_firehose_inventory_success_time_seconds{job="atoll",instance="stale:443"}'
+        values: "0x5 360+60x9"
+      - series: 'up{job="atoll",instance="stale:443"}'
+        values: "1x15"
+      - series: 'atoll_firehose_active{job="atoll",instance="failed:443"}'
+        values: "90x15"
+      - series: 'atoll_firehose_pending{job="atoll",instance="failed:443"}'
+        values: "0x15"
+      - series: 'atoll_firehose_max_connections{job="atoll",instance="failed:443"}'
+        values: "100x15"
+      - series: 'atoll_firehose_inventory_available{job="atoll",instance="failed:443"}'
+        values: "0x5 1x10"
+      - series: 'atoll_firehose_inventory_success_time_seconds{job="atoll",instance="failed:443"}'
+        values: "0+60x15"
+      - series: 'up{job="atoll",instance="failed:443"}'
+        values: "1x15"
+      - series: 'atoll_firehose_active{job="atoll",instance="down:443"}'
+        values: "90x15"
+      - series: 'atoll_firehose_pending{job="atoll",instance="down:443"}'
+        values: "0x15"
+      - series: 'atoll_firehose_max_connections{job="atoll",instance="down:443"}'
+        values: "100x15"
+      - series: 'atoll_firehose_inventory_available{job="atoll",instance="down:443"}'
+        values: "0x15"
+      - series: 'atoll_firehose_inventory_success_time_seconds{job="atoll",instance="down:443"}'
+        values: "0x15"
+      - series: 'up{job="atoll",instance="down:443"}'
+        values: "0x15"
+      - series: 'atoll_firehose_active{job="other",instance="unrelated:443"}'
+        values: "90x15"
+      - series: 'atoll_firehose_pending{job="other",instance="unrelated:443"}'
+        values: "0x15"
+      - series: 'atoll_firehose_max_connections{job="other",instance="unrelated:443"}'
+        values: "100x15"
+      - series: 'atoll_firehose_inventory_available{job="other",instance="unrelated:443"}'
+        values: "0x15"
+      - series: 'atoll_firehose_inventory_success_time_seconds{job="other",instance="unrelated:443"}'
+        values: "0x15"
+      - series: 'up{job="other",instance="unrelated:443"}'
+        values: "1x15"
+    alert_rule_test:
+      - eval_time: "4m"
+        alertname: "AtollFirehoseCapacity"
+        exp_alerts: []
+      - eval_time: "5m"
+        alertname: "AtollFirehoseCapacity"
+        exp_alerts:
+          - exp_labels: {job: atoll, instance: "high:443", severity: warning}
+            exp_annotations: {summary: "Atoll firehose connections exceed 80 percent of node capacity"}
+          - exp_labels: {job: atoll, instance: "pending:443", severity: warning}
+            exp_annotations: {summary: "Atoll firehose connections exceed 80 percent of node capacity"}
+      - eval_time: "7m"
+        alertname: "AtollFirehoseCapacity"
+        exp_alerts:
+          - exp_labels: {job: atoll, instance: "pending:443", severity: warning}
+            exp_annotations: {summary: "Atoll firehose connections exceed 80 percent of node capacity"}
+      - eval_time: "1m"
+        alertname: "AtollFirehoseInventoryUnavailable"
+        exp_alerts: []
+      - eval_time: "5m"
+        alertname: "AtollFirehoseInventoryUnavailable"
+        exp_alerts:
+          - exp_labels: {job: atoll, instance: "stale:443", severity: warning}
+            exp_annotations: {summary: "Atoll firehose inventory is unavailable or stale"}
+          - exp_labels: {job: atoll, instance: "failed:443", severity: warning}
+            exp_annotations: {summary: "Atoll firehose inventory is unavailable or stale"}
+      - eval_time: "7m"
+        alertname: "AtollFirehoseInventoryUnavailable"
+        exp_alerts: []

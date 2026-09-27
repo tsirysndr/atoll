@@ -133,3 +133,30 @@ groups:
           severity: warning
         annotations:
           summary: Atoll blob cleanup has jobs older than 24 hours
+
+      - alert: AtollFirehoseInventoryUnavailable
+        expr: |
+          (
+            atoll_firehose_inventory_available{job="atoll"} == 0
+            or atoll_firehose_inventory_success_time_seconds{job="atoll"} < time() - 120
+          )
+          and on (job, instance) up{job="atoll"} == 1
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: Atoll firehose inventory is unavailable or stale
+
+      - alert: AtollFirehoseCapacity
+        expr: |
+          (atoll_firehose_active{job="atoll"} + atoll_firehose_pending{job="atoll"})
+          / atoll_firehose_max_connections{job="atoll"} > 0.8
+          and on (job, instance) atoll_firehose_max_connections{job="atoll"} > 0
+          and on (job, instance) atoll_firehose_inventory_available{job="atoll"} == 1
+          and on (job, instance) atoll_firehose_inventory_success_time_seconds{job="atoll"} >= time() - 120
+          and on (job, instance) up{job="atoll"} == 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Atoll firehose connections exceed 80 percent of node capacity
