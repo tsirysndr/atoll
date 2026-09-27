@@ -1039,7 +1039,7 @@ observations do not produce duplicate events. The
 - [x] Operator account messages through the configurable email Worker, with attempt/outcome history.
 - [x] Atomic operator audit entries for PLC key installation, replacement, and unchanged retries, without private-key material.
 - [x] The complete `com.atproto.admin` endpoint surface at the pinned upstream revision, with transactional audit history for every mutating operator action.
-- [ ] Production configuration, HTTPS deployment, and signing-key protection.
+- [x] Production boot requiring the database, cookie, key-encryption and session secrets, opt-in HSTS/HTTPS enforcement behind a TLS proxy, release migrations, and a deployment guide covering reverse-proxy WebSockets and signing-key custody.
 - [x] Logical PostgreSQL archive/restore helper with checksums, empty-target protection, and disposable-database integration checks.
 - [x] Disposable full-schema PostgreSQL restore drill covering signed repositories, encrypted custody, sessions, blobs, private preferences, audit history and replay boundaries.
 - [x] Offline S3 blob archives with CID verification, empty-prefix restoration, and a real MinIO round trip.
@@ -6950,3 +6950,38 @@ inside the existing 5 MiB body bound, and formats outside the supported set
 (other images, audio, video, documents) continue to be stored verbatim. This
 is not a malware scanner. Both settings are also available per call site
 through the internal staging options for tests and embedding.
+
+### Production deployment
+
+Atoll boots in production only with `DATABASE_URL`, `SECRET_KEY_BASE`,
+`PHX_HOST`, `ATOLL_PDS_DID`, `ATOLL_KEY_ENCRYPTION_KEY` and
+`ATOLL_SESSION_SIGNING_KEY` present, so a misconfigured node refuses to start
+instead of failing on first use. Generate each 32-byte secret with
+`openssl rand -base64 32` (and `SECRET_KEY_BASE` with `mix phx.gen.secret`),
+keep them out of version control, and back up the key-encryption key together
+with the database: encrypted signing-key custody is unrecoverable without it.
+`ATOLL_OAUTH_NONCE_SECRET` and `ATOLL_ADMIN_PASSWORD` unlock OAuth and the
+operator endpoints; the rotation workflows for master keys, session keys and
+PLC authority keys are described in their own sections above.
+
+Build a release with `MIX_ENV=prod mix release` and run migrations with
+`bin/atoll eval "Atoll.Release.migrate()"` (or `mix ecto.migrate` on a
+source deploy). The server listens on plain HTTP
+(`PORT`, default 4000) and expects a TLS-terminating reverse proxy for the
+public origin. The proxy must forward WebSocket upgrades for
+`/xrpc/com.atproto.sync.subscribeRepos` and preserve `X-Forwarded-For`; list
+the proxy in `ATOLL_TRUSTED_PROXY_CIDRS` so rate limits see client addresses.
+A minimal Caddyfile:
+
+    pds.example.com, *.users.example.com {
+      reverse_proxy 127.0.0.1:4000
+    }
+
+Wildcard user-domain hosts need DNS and certificates at the proxy (Caddy's
+on-demand TLS or a wildcard certificate). Set `ATOLL_FORCE_SSL=true` to add
+HSTS and redirect any plain-HTTP request that reaches Atoll itself, using the
+proxy's `X-Forwarded-Proto`. Health endpoints for orchestration are
+`GET /health` (liveness) and `GET /health/ready` (database readiness);
+`GET /metrics` serves operator-authenticated Prometheus metrics with the alert
+rules and runbook in `ops/prometheus`. Backup and recovery-set tooling lives in
+`scripts/` with drills documented above and in `ops/backup`.
