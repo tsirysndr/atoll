@@ -42,6 +42,10 @@ defmodule Atoll.AccountCleanupWorkerTest do
     tick(worker)
     assert_receive {:cleanup, :ok, %{sessions: 0, replay_markers: 0, runs: 1}}, 1000
     assert :sys.get_state(worker).task == nil
+    audits = Repo.all(from a in Atoll.Moderation.AuditEntry, order_by: a.id)
+    assert Enum.map(audits, & &1.actor) == ["worker", "worker"]
+    assert Enum.map(audits, & &1.after_state["deleted"]) == [500, 1]
+    assert Enum.all?(audits, &(&1.operation == "atoll.sessions.prune"))
   end
 
   test "manual triggers do not overlap and a finished run schedules its successor", c do

@@ -4,6 +4,19 @@ defmodule Atoll.Moderation.Audit do
   alias Atoll.{Repo, Syntax}
   alias Atoll.Moderation.AuditEntry
 
+  @doc "Records expired-session maintenance without session identifiers or token material."
+  def session_cleanup!(limit, cutoff, count, actor) do
+    insert!(
+      "atoll.sessions.prune",
+      nil,
+      %{kind: "expiredSessions"},
+      %{limit: limit, expiresAtOrBefore: cutoff},
+      %{},
+      %{deleted: count},
+      actor
+    )
+  end
+
   @doc "Records bounded orphan block deletion without retaining block contents."
   def block_cleanup!(limit, grace, cutoff, cids, count) do
     insert!(

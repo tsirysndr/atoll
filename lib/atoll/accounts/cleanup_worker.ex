@@ -68,7 +68,7 @@ defmodule Atoll.Accounts.CleanupWorker do
   end
 
   defp run_batch do
-    with {:ok, sessions} <- SessionCleanup.prune_expired(500),
+    with {:ok, sessions} <- SessionCleanup.prune_expired(500, "worker"),
          {:ok, replay_markers} <- ServiceTokens.prune_expired(500) do
       {:ok, %{sessions: sessions, replay_markers: replay_markers}}
     end

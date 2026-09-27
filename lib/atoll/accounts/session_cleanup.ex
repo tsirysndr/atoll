@@ -4,15 +4,21 @@ defmodule Atoll.Accounts.SessionCleanup do
   alias Atoll.Repo
   alias Atoll.Accounts.Session
 
-  def prune_expired(limit \\ 500)
+  def prune_expired(limit \\ 500, actor \\ "operator")
 
-  def prune_expired(limit) when is_integer(limit) and limit in 1..1000 do
+  def prune_expired(_, actor) when actor not in ["operator", "worker"],
+    do: {:error, :invalid_cleanup_actor}
+
+  def prune_expired(limit, actor) when is_integer(limit) and limit in 1..1000 do
     cutoff = System.system_time(:second)
 
     Repo.transaction(fn ->
       Repo.query!("SET LOCAL lock_timeout = '1s'")
       Repo.query!("SET LOCAL statement_timeout = '5s'")
-      # Only lock sessions; never acquire repository locks after these locks.
+      # Audit insertion uses the event lock. Acquire it before session locks to
+      # preserve the order used by account deletion and other operator mutations.
+      Atoll.Repositories.Events.lock!()
+      # Never acquire repository locks after session locks.
       # Refresh/authentication may hold a session lock, so leave those rows for a later batch.
       ids =
         Repo.all(
@@ -32,9 +38,12 @@ defmodule Atoll.Accounts.SessionCleanup do
           log: false
         )
 
+      if actor == "operator" or count > 0,
+        do: Atoll.Moderation.Audit.session_cleanup!(limit, cutoff, count, actor)
+
       count
     end)
   end
 
-  def prune_expired(_), do: {:error, :invalid_limit}
+  def prune_expired(_, _), do: {:error, :invalid_limit}
 end

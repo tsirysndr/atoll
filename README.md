@@ -570,6 +570,14 @@ does not revoke live sessions or alter refresh-token rotation. The internal
 `Atoll.Accounts.SessionCleanup.prune_expired/1` API supports release maintenance.
 Opt-in automatic cleanup is available with `ATOLL_ACCOUNT_CLEANUP_ENABLED=true`
 (see authentication-state cleanup below).
+Successful manual batches, including no-ops, atomically append an
+`atoll.sessions.prune` audit entry. Scheduled deletions use actor `worker`; idle
+scheduled checks create no audit rows. Entries contain the limit, expiration
+cutoff, and deletion count without session IDs, account identifiers, token hashes,
+or credentials. Audit insertion failure rolls back session deletion. Cleanup
+acquires the global event lock before session locks, with the existing one-second
+lock and five-second statement deadlines. View entries using
+`mix atoll.moderation.history` without a DID filter.
 
 `ATOLL_SESSION_MAX_COUNT` limits unexpired sessions per account (default 100,
 range 0–1000). Login creation is serialized per repository before counting and
