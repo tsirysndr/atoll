@@ -184,7 +184,7 @@ record Lexicons or grant access to account data.
 - [x] Anonymous reserved-key selection through signed `plcOp` migration account creation, with durable publication recovery.
 - [x] Chunked repository exports with lazy record-body reads.
 - [x] Streamed HTTP imports with private staging and atomic publication.
-- [ ] Bounded-memory repository metadata traversal.
+- [x] Bounded-memory repository metadata traversal.
 - [x] Bounded canonical MST traversal and streamed metadata validation for full/incremental HTTP and buffered exports.
 - [x] Bounded signed-tree membership verification for current and historical `getBlocks` exports.
 - [x] Bounded metadata verification and revision-membership staging for signing-key rotation/recovery.
@@ -192,6 +192,7 @@ record Lexicons or grant access to account data.
 - [x] Buffered MST loading through canonical traversal with an explicit retained-metadata budget.
 - [x] Buffered snapshot output budgets covering expanded record paths and deduplicated reachable blocks.
 - [x] Buffered MST constructor and mutation budgets with preflight record accounting and bounded node emission.
+- [x] Streamed complete `describeRepo` collection inventories and budgeted internal collection lists.
 - [x] Incremental CARv1 decoding with bounded framing buffers and verified block callbacks.
 - [x] Request-scoped private disk staging for incrementally validated CAR blocks.
 - [x] Disk-backed staging CID index with bounded lookup memory and collision work.
@@ -3624,10 +3625,31 @@ not a promise of a 64 MiB total process heap. The separate streaming builder rem
 the production write path and the buffered constructor remains an independent
 canonical reference implementation.
 
-The repository-memory audit also found the distinct collection inventory used by
-`describeRepo` still collects all names in one database result. That inventory
-needs a bounded response policy before the broad metadata-memory checklist can
-be marked complete.
+`describeRepo` streams its complete collection array instead of materializing all
+names in the application. PostgreSQL deduplicates and sorts names in bytewise
+order; a cursor fetches 128 names at a time and JSON encoding uses batches of 128.
+The DID document and reciprocal handle lookup resolve before opening this cursor.
+The repository is rechecked as active and held with a shared head lock during
+enumeration, with a 60-second transaction timeout. Client cancellation stops
+enumeration and closes the cursor; failures after headers have been sent abort
+the response rather than returning a truncated but valid JSON collection array.
+No collection names are silently omitted and there is no pagination change.
+
+Trusted callers can use `Repositories.stream_collections/2` or
+`Repositories.Description.stream/3` to consume the cursor within its owning
+transaction. Buffered `Repositories.collections/2` retains a default 64 MiB
+accounting budget (`max_bytes:`), charging each name's bytes plus a 64-byte list
+entry allowance. `Description.get/2` exposes this as `max_collection_bytes:`.
+Overflow returns `{:error, :repository_metadata_too_large}` without a partial
+list. These budgets do not constrain PostgreSQL's distinct/sort work or promise
+an exact process heap size; the HTTP endpoint uses streaming rather than imposing
+the buffered helper's collection limit.
+
+The metadata-memory checklist covers the audited repository write, staged import,
+full/differential export, historical read, record/block proof, key-transition and
+collection-inventory paths, plus explicitly budgeted buffered helpers. Streaming
+does not make full-tree operations constant-time or eliminate database revision
+arrays and indexes. Callers of streaming helpers must preserve their lazy contract.
 
 `Atoll.MST.Editor.apply/4` edits a caller-authenticated partial tree using up to
 200 `{:put, path, cid}` / `{:delete, path}` operations. It lazily reads search paths

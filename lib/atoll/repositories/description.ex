@@ -4,8 +4,23 @@ defmodule Atoll.Repositories.Description do
   alias Atoll.Identity.{Handle, Resolver}
 
   def get(identifier, opts \\ []) do
+    with {:ok, description} <- metadata(identifier, opts),
+         {:ok, collections} <-
+           Repositories.collections(description.did,
+             max_bytes: Keyword.get(opts, :max_collection_bytes, 64 * 1024 * 1024)
+           ),
+         do: {:ok, Map.put(description, :collections, collections)}
+  end
+
+  @doc "Resolves identity before opening a bounded collection cursor, then calls consume.(metadata, names)."
+  def stream(identifier, consume, opts \\ []) when is_function(consume, 2) do
+    with {:ok, description} <- metadata(identifier, opts),
+         do: Repositories.stream_collections(description.did, &consume.(description, &1))
+  end
+
+  defp metadata(identifier, opts) do
     with {:ok, did} <- did(identifier, opts),
-         {:ok, collections} <- Repositories.collections(did),
+         {:ok, _} <- Repositories.get_active_head(did),
          {:ok, identity} <- identity(did, opts) do
       claimed = identity.claimed_handle
       correct = is_binary(claimed) and Handle.resolve(claimed, opts) == {:ok, did}
@@ -18,7 +33,6 @@ defmodule Atoll.Repositories.Description do
          %{
            did: did,
            didDoc: identity.document,
-           collections: collections,
            handle: if(correct, do: claimed, else: "handle.invalid"),
            handleIsCorrect: correct
          }}

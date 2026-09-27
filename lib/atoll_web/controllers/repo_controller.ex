@@ -6,8 +6,41 @@ defmodule AtollWeb.RepoController do
   def describe(conn, params) do
     opts = Application.get_env(:atoll, :identity_resolution_options, [])
 
-    with {:ok, description} <- Atoll.Repositories.Description.get(params["repo"], opts) do
-      json(conn, description)
+    Atoll.Repositories.Description.stream(
+      params["repo"],
+      fn description, names ->
+        metadata = Jason.encode!(description)
+        prefix = binary_part(metadata, 0, byte_size(metadata) - 1) <> ",\"collections\":["
+
+        collections =
+          names
+          |> Stream.chunk_every(128)
+          |> Stream.transform(false, fn batch, seen ->
+            json = Jason.encode!(batch)
+            contents = binary_part(json, 1, byte_size(json) - 2)
+            {[[if(seen, do: ",", else: ""), contents]], true}
+          end)
+
+        chunks = Stream.concat([[prefix], collections, ["]}"]])
+
+        conn =
+          conn
+          |> put_resp_header("cache-control", "no-store")
+          |> put_resp_content_type("application/json")
+          |> send_chunked(200)
+
+        Enum.reduce_while(chunks, conn, fn bytes, conn ->
+          case chunk(conn, bytes) do
+            {:ok, conn} -> {:cont, conn}
+            {:error, _} -> {:halt, conn}
+          end
+        end)
+      end,
+      opts
+    )
+    |> case do
+      {:ok, conn} -> conn
+      error -> error
     end
   end
 

@@ -431,19 +431,43 @@ defmodule Atoll.Repositories do
   def status_fields(%Head{} = head),
     do: %{did: head.did, active: false, status: Atom.to_string(head.status)}
 
-  @doc "Lists collections that currently contain at least one record."
-  def collections(did) do
-    with {:ok, _} <- get_active_head(did) do
-      names =
-        Repo.all(
+  @doc "Buffered collection inventory, with a default 64 MiB :max_bytes accounting budget."
+  def collections(did, opts \\ []) do
+    limit = Keyword.get(opts, :max_bytes, 64 * 1024 * 1024)
+
+    unless is_integer(limit) and limit > 0,
+      do: raise(ArgumentError, "Collection inventory budget must be a positive integer")
+
+    stream_collections(did, fn names ->
+      {names, _used} =
+        Enum.reduce(names, {[], 0}, fn name, {names, used} ->
+          used = used + byte_size(name) + 64
+          if used > limit, do: Repo.rollback(:repository_metadata_too_large)
+          {[name | names], used}
+        end)
+
+      Enum.reverse(names)
+    end)
+  end
+
+  @doc "Consumes distinct bytewise-sorted collection names under the active head's shared lock."
+  def stream_collections(did, consume) when is_function(consume, 1) do
+    Repo.transaction(
+      fn ->
+        locked_head!(did, "FOR SHARE")
+
+        names =
           from r in Record,
             where: r.did == ^did,
-            select: fragment("split_part(?, '/', 1)", r.path),
+            select: %{name: fragment("split_part(?, '/', 1)", r.path)},
             distinct: true
-        )
 
-      {:ok, Enum.sort(names)}
-    end
+        from(n in subquery(names), select: n.name, order_by: fragment("? COLLATE \"C\"", n.name))
+        |> Repo.stream(max_rows: 128)
+        |> consume.()
+      end,
+      timeout: 60_000
+    )
   end
 
   @doc "Lists hosted repository heads in bytewise DID order. Cursor is the last returned DID."
