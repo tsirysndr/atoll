@@ -939,7 +939,8 @@ observations do not produce duplicate events. The
 - [x] Atomic operator audit entries for PLC key installation, replacement, and unchanged retries, without private-key material.
 - [ ] Remaining administrative account controls and audit coverage for other operator actions.
 - [ ] Production configuration, HTTPS deployment, and signing-key protection.
-- [ ] Database and blob backup / restore workflow.
+- [x] Logical PostgreSQL archive/restore helper with checksums, empty-target protection, and disposable-database integration checks.
+- [ ] Complete database/S3 recovery sets, Atoll restore drills, and backup / restore workflow.
 - [x] `GET /health/ready` database connectivity readiness with bounded queries and outcome telemetry.
 - [x] Opt-in supervised cleanup of expired sessions and service-token replay markers, with bounded batches and outcome telemetry.
 - [x] Opt-in operator-authenticated Prometheus endpoint with fixed-cardinality HTTP, database, readiness, worker and VM metrics.
@@ -1186,6 +1187,14 @@ mix precommit
 ```
 
 The test alias creates the test database and applies pending migrations. Database tests use Ecto's SQL sandbox to roll back their changes.
+
+### Database backup and restore primitives
+
+See [the logical database archive runbook](ops/backup/README.md) for
+`scripts/database_backup.py backup|verify|restore DIRECTORY`, PostgreSQL version
+requirements, separate encryption-key custody, isolated restore targets, and the
+remaining S3/restore-drill work. The helper was tested with disposable PostgreSQL
+18 databases; no development or production data was backed up or restored.
 
 ### Official OAuth client integration
 
