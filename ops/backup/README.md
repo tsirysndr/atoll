@@ -107,8 +107,10 @@ This test creates two unique databases and removes only those it created. It
 checks binary data, indexes, sequence continuation, private file permissions,
 refusal to overwrite a backup or populated target, checksum rejection, extra-schema
 rejection, and transaction rollback for a readable archive with truncated data.
-It does not read or back up development/production databases. It is currently a
-manual integration check, separate from `mix precommit`.
+It does not read or back up development/production databases. Push CI runs both
+this check and the Atoll schema drill below against its PostgreSQL 18 service,
+using PostgreSQL 18 archive clients. They remain separate from `mix precommit`
+and can also be run manually with the commands in this runbook.
 
 PostgreSQL references: [pg_dump](https://www.postgresql.org/docs/18/app-pgdump.html),
 [pg_restore](https://www.postgresql.org/docs/18/app-pgrestore.html), and

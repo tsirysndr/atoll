@@ -63,6 +63,34 @@ jobs:
       - name: Run project checks and tests
         run: mix precommit
 
+      # Ubuntu's default client may be older than the PostgreSQL service.
+      # Repository setup: https://www.postgresql.org/download/linux/ubuntu/
+      - name: Set up PostgreSQL 18 archive tools
+        run: |
+          if [ ! -x /usr/lib/postgresql/18/bin/pg_dump ]; then
+            sudo install -d /usr/share/postgresql-common/pgdg
+            sudo curl --fail --silent --show-error --location \
+              https://www.postgresql.org/media/keys/ACCC4CF8.asc \
+              -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc
+            echo 'deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt noble-pgdg main' \
+              | sudo tee /etc/apt/sources.list.d/atoll-pgdg.list >/dev/null
+            sudo apt-get update
+            sudo apt-get install --yes --no-install-recommends postgresql-client-18
+          fi
+          echo '/usr/lib/postgresql/18/bin' >> "$GITHUB_PATH"
+
+      - name: Run database archive and Atoll restore drills
+        timeout-minutes: 5
+        env:
+          PGHOST: localhost
+          PGPORT: "5432"
+          PGUSER: postgres
+          PGPASSWORD: postgres
+        run: |
+          pg_dump --version
+          python3 scripts/test_database_backup.py
+          python3 scripts/test_atoll_database_backup.py
+
       - name: Check monitoring alert rules
         run: bash scripts/test_monitoring.sh
 

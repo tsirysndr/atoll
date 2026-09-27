@@ -1197,7 +1197,9 @@ requirements, separate encryption-key custody, isolated restore targets, and the
 remaining S3/restore-drill work. The helper and full-schema Atoll drill were tested with disposable PostgreSQL
 18 databases. `scripts/test_atoll_database_backup.py` verifies signed exports,
 key decryption, authentication, PostgreSQL blobs and replay state after restoring
-all migrations. No development or production data was backed up or restored.
+all migrations. Push CI runs both restore drills against its disposable PostgreSQL
+18 service with matching archive clients. No development or production data was
+backed up or restored.
 
 ### Official OAuth client integration
 
