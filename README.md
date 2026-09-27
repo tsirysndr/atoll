@@ -817,7 +817,7 @@ locking protects shared objects when collectors overlap.
 - [x] Opt-in supervised identity refresh scheduling, with one task at a time, timeouts, sweep retries, and outcome telemetry.
 - [x] Owner-authenticated identity refresh with fresh DID resolution and atomic observation events.
 - [x] PostgreSQL-coordinated automatic identity refreshes with expiring leases and publication fencing.
-- [ ] Remaining authenticated identity-management endpoints.
+- [x] The complete `com.atproto.identity` endpoint surface at the pinned upstream revision: resolution, recommended credentials, handle updates, owner refresh, and PLC signature request/signing/submission.
 - [x] Configurable operator crawl announcements to relay `com.atproto.sync.requestCrawl` endpoints.
 - [x] Durable operator crawl attempt/completion audit records, with no relay request if attempt recording fails.
 - [x] Opt-in supervised periodic crawl announcements to configured relays.
