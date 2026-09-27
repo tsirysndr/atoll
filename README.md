@@ -933,7 +933,7 @@ observations do not produce duplicate events. The
 - [x] Audited operator email correction with invalidation of old email challenges.
 - [x] Audited operator password replacement with session, app-password, and pending-code revocation.
 - [x] Transactional audit history for account invite enable/disable decisions and private reason changes.
-- [x] Transactional audit history for operator invite-code issuance and revocation, without redeemable codes.
+- [x] Transactional audit history for API and CLI operator invite-code issuance and API revocation, without redeemable codes.
 - [x] Audited operator account deletion with durable shared-safe blob cleanup.
 - [x] Operator account messages through the configurable email Worker, with attempt/outcome history.
 - [x] Atomic operator audit entries for PLC key installation, replacement, and unchanged retries, without private-key material.
@@ -1742,6 +1742,11 @@ invitation. Codes contain 192 random bits, are stored for account listings,
 and are redacted in schema inspection and request parameter logs. Treat the task's
 output as a secret to share with intended invitees. No invitations have been issued
 outside rollback-isolated tests by this implementation work.
+CLI issuance uses the same transactional audit boundary as the admin API, with
+actor `operator` rather than `admin`. Its `com.atproto.server.createInviteCode`
+entry retains the requested use count/owner and a SHA-256 code digest, never the
+redeemable code. An audit failure rolls back issuance before the CLI prints the
+code. Inspect entries with `mix atoll.moderation.history`.
 
 Redemption locks the code and records one historical use per DID inside account
 provisioning. A database rollback restores the use. A committed pending fresh

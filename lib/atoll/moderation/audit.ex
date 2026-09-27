@@ -298,8 +298,8 @@ defmodule Atoll.Moderation.Audit do
   end
 
   @doc "Records operator invite actions; server-wide actions have no account DID."
-  def invite_codes!(operation, did, requested, before_state, after_state) do
-    insert!(operation, did, %{kind: "inviteCodes"}, requested, before_state, after_state)
+  def invite_codes!(operation, did, requested, before_state, after_state, actor \\ "admin") do
+    insert!(operation, did, %{kind: "inviteCodes"}, requested, before_state, after_state, actor)
   end
 
   @doc "Tracks email attempts without retaining addresses, subjects or message bodies."

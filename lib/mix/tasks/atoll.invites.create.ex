@@ -27,7 +27,12 @@ defmodule Mix.Tasks.Atoll.Invites.Create do
 
     Mix.Task.run("app.start")
 
-    case Atoll.Accounts.Invites.create(uses, opts[:for_account]) do
+    params = %{"useCount" => uses}
+
+    params =
+      if opts[:for_account], do: Map.put(params, "forAccount", opts[:for_account]), else: params
+
+    case Atoll.Accounts.AdminInvites.create(params, "operator") do
       {:ok, result} -> Mix.shell().info(Jason.encode!(result))
       {:error, _} -> Mix.raise("Invite creation failed; check the use count and account.")
     end

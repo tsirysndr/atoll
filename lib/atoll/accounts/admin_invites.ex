@@ -6,7 +6,9 @@ defmodule Atoll.Accounts.AdminInvites do
   alias Atoll.Moderation.Audit
   alias Atoll.Repositories.Events
 
-  def create(%{"useCount" => uses} = params) do
+  def create(params, actor \\ "admin")
+
+  def create(%{"useCount" => uses} = params, actor) when actor in ["admin", "operator"] do
     if Map.keys(params) -- ["useCount", "forAccount"] == [] do
       transaction(fn ->
         result = unwrap!(Invites.create(uses, params["forAccount"]))
@@ -16,7 +18,8 @@ defmodule Atoll.Accounts.AdminInvites do
           result.forAccount,
           params,
           %{},
-          %{created: 1, codeDigests: [fingerprint(result.code)]}
+          %{created: 1, codeDigests: [fingerprint(result.code)]},
+          actor
         )
 
         result
@@ -26,7 +29,7 @@ defmodule Atoll.Accounts.AdminInvites do
     end
   end
 
-  def create(_), do: {:error, :invalid_request}
+  def create(_, _), do: {:error, :invalid_request}
 
   def create_many(params) do
     transaction(fn ->

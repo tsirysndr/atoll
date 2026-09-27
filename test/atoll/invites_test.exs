@@ -108,12 +108,22 @@ defmodule Atoll.InvitesTest do
     assert_receive {:mix_shell, :info, [output]}
     result = Jason.decode!(output)
     assert Repo.get!(Invite, result["code"]).remaining == 3
+    audit = Repo.one!(Atoll.Moderation.AuditEntry)
+    assert audit.actor == "operator"
+    assert audit.operation == "com.atproto.server.createInviteCode"
+    assert audit.requested == %{"useCount" => 3}
+    digest = :crypto.hash(:sha256, result["code"]) |> Base.encode16(case: :lower)
+    assert audit.after_state == %{"created" => 1, "codeDigests" => [digest]}
+
+    refute Jason.encode!([audit.requested, audit.before_state, audit.after_state]) =~
+             result["code"]
 
     for args <- [["--uses", "0"], ["--uses", "1", "--uses", "2"], ["--unknown"], ["extra"]] do
       assert_raise Mix.Error, fn -> Mix.Tasks.Atoll.Invites.Create.run(args) end
     end
 
     assert Repo.aggregate(Invite, :count) == 1
+    assert Repo.aggregate(Atoll.Moderation.AuditEntry, :count) == 1
   end
 
   defp account(name) do
