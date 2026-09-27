@@ -7,6 +7,8 @@ defmodule AtollWeb.OAuthResourceTest do
   @id "https://app.example.com/metadata.json"
 
   setup %{conn: conn} = context do
+    scope = context[:scope] || "atproto transition:generic transition:email"
+
     for name <- [
           :oauth_nonce_secret,
           :oauth_transport_options,
@@ -43,7 +45,7 @@ defmodule AtollWeb.OAuthResourceTest do
       "client_id" => @id,
       "grant_types" => ["authorization_code", "refresh_token"],
       "response_types" => ["code"],
-      "scope" => "atproto transition:generic transition:email",
+      "scope" => scope,
       "redirect_uris" => ["https://app.example.com/callback"],
       "dpop_bound_access_tokens" => true
     }
@@ -65,7 +67,7 @@ defmodule AtollWeb.OAuthResourceTest do
       "client_id" => @id,
       "response_type" => "code",
       "redirect_uri" => "https://app.example.com/callback",
-      "scope" => "atproto transition:generic transition:email",
+      "scope" => scope,
       "state" => "private-state",
       "code_challenge_method" => "S256",
       "code_challenge" => :crypto.hash(:sha256, verifier) |> Base.url_encode64(padding: false)
@@ -93,7 +95,7 @@ defmodule AtollWeb.OAuthResourceTest do
         pair.access_jwt,
         @id,
         uri,
-        {:approve, "atproto transition:generic transition:email"},
+        {:approve, scope},
         Keyword.put(
           Application.fetch_env!(:atoll, :oauth_transport_options),
           :session_options,
@@ -535,6 +537,116 @@ defmodule AtollWeb.OAuthResourceTest do
            }
 
     assert {:ok, _} = Sessions.authenticate(c.owner_pair.access_jwt, c.owner_opts)
+  end
+
+  @tag scope:
+         "atproto rpc:app.bsky.feed.getTimeline?aud=did:web:appview.example.com%23bsky_appview"
+  test "granular RPC grants issue signed service tokens only for their method and audience", c do
+    params = %{
+      "aud" => "did:web:appview.example.com#bsky_appview",
+      "lxm" => "app.bsky.feed.getTimeline"
+    }
+
+    result = service_auth(c, params) |> json_response(200)
+    claims = verify_service(result["token"], c.did)
+    assert claims["aud"] == params["aud"]
+    assert claims["lxm"] == params["lxm"]
+    assert claims["exp"] - claims["iat"] == 60
+
+    for changed <- [
+          Map.delete(params, "lxm"),
+          %{params | "lxm" => "app.bsky.feed.getFeed"},
+          %{params | "aud" => "did:web:appview.example.com#other"},
+          %{params | "aud" => "did:web:appview.example.com"},
+          %{params | "aud" => "did:web:other.example.com#bsky_appview"}
+        ] do
+      assert service_auth(c, changed) |> json_response(403) == %{"error" => "insufficient_scope"}
+    end
+
+    signed = service_proof(c)
+    assert service_auth(c, %{params | "lxm" => "app.bsky.feed.getFeed"}, signed).status == 403
+    assert service_auth(c, params, signed).status == 401
+    Repo.delete_all(Session)
+    assert service_auth(c, params).status == 401
+  end
+
+  @tag scope: "atproto rpc:*?aud=did:web:appview.example.com%23bsky_appview"
+  test "audience-constrained wildcard allows methodless tokens and refresh attenuation", c do
+    aud = "did:web:appview.example.com#bsky_appview"
+    result = service_auth(c, %{"aud" => aud}) |> json_response(200)
+    claims = verify_service(result["token"], c.did)
+    refute Map.has_key?(claims, "lxm")
+    assert claims["exp"] - claims["iat"] == 60
+
+    assert service_auth(c, %{
+             "aud" => aud,
+             "exp" => Integer.to_string(System.system_time(:second) + 1800)
+           }).status == 400
+
+    scope = "atproto rpc:app.bsky.feed.getTimeline?aud=did:web:appview.example.com%23bsky_appview"
+
+    params = %{
+      "grant_type" => "refresh_token",
+      "client_id" => @id,
+      "refresh_token" => c.tokens["refresh_token"],
+      "scope" => scope
+    }
+
+    tokens = send_form(c, URI.encode_query(params)) |> json_response(200)
+    assert tokens["scope"] == scope
+    narrowed = %{c | tokens: tokens}
+
+    assert service_auth(narrowed, %{"aud" => aud, "lxm" => "app.bsky.feed.getTimeline"}).status ==
+             200
+
+    assert service_auth(narrowed, %{"aud" => aud}).status == 403
+    assert service_auth(c, %{"aud" => aud}).status == 200
+  end
+
+  @tag scope: "atproto rpc:chat.bsky.convo.listConvos?aud=*"
+  test "a scoped RPC chat grant needs no unrelated transitional generic permission", c do
+    for aud <- ["did:web:chat.example.com", "did:web:chat.example.com#bsky_chat"] do
+      result =
+        service_auth(c, %{"aud" => aud, "lxm" => "chat.bsky.convo.listConvos"})
+        |> json_response(200)
+
+      assert verify_service(result["token"], c.did)["aud"] == aud
+
+      assert service_auth(c, %{"aud" => aud, "lxm" => "chat.bsky.convo.sendMessage"}).status ==
+               403
+    end
+
+    Repo.update_all(AccessToken, set: [scope: "atproto"])
+
+    assert service_auth(c, %{
+             "aud" => "did:web:chat.example.com",
+             "lxm" => "chat.bsky.convo.listConvos"
+           }).status == 403
+  end
+
+  @tag scope: "atproto rpc:*?aud=did:web:destination.example.com%23atproto_pds"
+  test "explicit RPC migration authority does not bypass protected-method restrictions", c do
+    params = %{
+      "aud" => "did:web:destination.example.com#atproto_pds",
+      "lxm" => "com.atproto.server.createAccount"
+    }
+
+    result = service_auth(c, params) |> json_response(200)
+    claims = verify_service(result["token"], c.did)
+    assert claims["lxm"] == "com.atproto.server.createAccount"
+    assert claims["aud"] == params["aud"]
+
+    assert service_auth(c, %{params | "aud" => "did:web:other.example.com#atproto_pds"}).status ==
+             403
+
+    for method <- [
+          "com.atproto.identity.signPlcOperation",
+          "com.atproto.server.getSession",
+          "com.atproto.server.updateEmail"
+        ] do
+      assert %{"error" => "InvalidRequest"} =
+               service_auth(c, %{params | "lxm" => method}) |> json_response(400)
+    end
   end
 
   @tag :oauth_inventory

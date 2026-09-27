@@ -1,10 +1,12 @@
 defmodule Atoll.OAuth.Permissions do
-  @moduledoc "Bounded repository and blob permission scopes with semantic coverage."
+  @moduledoc "Bounded repository, blob and RPC permission scopes with semantic coverage."
   @legacy ~w(atproto transition:generic transition:chat.bsky transition:email)
   @actions ~w(create update delete)
 
   def supported?(scope),
-    do: scope in @legacy or match?({:ok, _}, repo(scope)) or match?({:ok, _}, blob(scope))
+    do:
+      scope in @legacy or match?({:ok, _}, repo(scope)) or match?({:ok, _}, blob(scope)) or
+        match?({:ok, _}, rpc(scope))
 
   def repo(value) do
     with {:ok, positional, params} <- syntax(value, "repo", ~w(collection action)),
@@ -33,6 +35,21 @@ defmodule Atoll.OAuth.Permissions do
     end
   end
 
+  def rpc(value) do
+    with {:ok, positional, params} <- syntax(value, "rpc", ~w(lxm aud)),
+         true <- is_nil(positional) or not Map.has_key?(params, "lxm"),
+         methods = if(positional, do: [positional], else: params["lxm"]),
+         true <- is_list(methods) and methods != [],
+         true <- Enum.all?(methods, &(&1 == "*" or Atoll.Syntax.nsid?(&1))),
+         [audience] <- params["aud"],
+         true <- audience == "*" or service_reference?(audience),
+         false <- audience == "*" and "*" in methods do
+      {:ok, %{methods: Enum.uniq(methods), audience: audience}}
+    else
+      _ -> {:error, :invalid_scope}
+    end
+  end
+
   # A requested permission can be narrower than several declared/granted scopes.
   # In particular, an explicit collection can never cover a requested wildcard.
   def covered?(granted, requested) when is_list(granted) do
@@ -47,8 +64,17 @@ defmodule Atoll.OAuth.Permissions do
 
         _ ->
           case blob(requested) do
-            {:ok, permission} -> Enum.all?(permission.accept, &blob_allowed?(granted, &1))
-            _ -> false
+            {:ok, permission} ->
+              Enum.all?(permission.accept, &blob_allowed?(granted, &1))
+
+            _ ->
+              case rpc(requested) do
+                {:ok, permission} ->
+                  Enum.all?(permission.methods, &rpc_allowed?(granted, permission.audience, &1))
+
+                _ ->
+                  false
+              end
           end
       end
     end
@@ -82,6 +108,9 @@ defmodule Atoll.OAuth.Permissions do
     end
   end
 
+  def allows_rpc?(scope, audience, method),
+    do: rpc_allowed?(String.split(scope, " "), audience, method)
+
   def describe(scope) do
     case repo(scope) do
       {:ok, permission} ->
@@ -103,10 +132,51 @@ defmodule Atoll.OAuth.Permissions do
               end)
 
           _ ->
-            nil
+            case rpc(scope) do
+              {:ok, permission} ->
+                methods =
+                  Enum.map_join(permission.methods, ", ", fn
+                    "*" -> "all methods"
+                    method -> method
+                  end)
+
+                audience =
+                  if permission.audience == "*", do: "any service", else: permission.audience
+
+                "Call application services: " <> methods <> " on " <> audience
+
+              _ ->
+                nil
+            end
         end
     end
   end
+
+  defp rpc_allowed?(scopes, audience, method),
+    do:
+      Enum.any?(scopes, fn scope ->
+        case rpc(scope) do
+          {:ok, permission} ->
+            (permission.audience == "*" or permission.audience == audience) and
+              ("*" in permission.methods or method in permission.methods)
+
+          _ ->
+            false
+        end
+      end)
+
+  defp service_reference?(value) when is_binary(value) and byte_size(value) <= 2048 do
+    case String.split(value, "#") do
+      [did, fragment] ->
+        Atoll.Syntax.did?(did) and not Regex.match?(~r/%(?![0-9a-fA-F]{2})/, did) and
+          Regex.match?(~r/\A(?:[A-Za-z0-9._~!$&'()*+,;=:@\/?-]|%[0-9a-fA-F]{2})+\z/, fragment)
+
+      _ ->
+        false
+    end
+  end
+
+  defp service_reference?(_), do: false
 
   defp blob_allowed?(scopes, mime),
     do:

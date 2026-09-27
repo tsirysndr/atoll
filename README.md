@@ -427,7 +427,8 @@ mutation. Deletes and empty batches need no record schema, even with `validate: 
 - [x] DPoP repository create/put/delete/applyWrites with transitional generic scope and transactional authorization rechecks.
 - [x] Granular repository OAuth permissions by collection/action, browser consent, and semantic scope narrowing.
 - [x] Granular blob OAuth permissions by MIME type, browser consent, scope narrowing and storage-time checks.
-- [ ] Granular RPC, identity and account permissions, and dynamically resolved permission sets.
+- [x] Granular RPC OAuth permissions for service tokens, with audience/method restrictions, consent and refresh narrowing.
+- [ ] Granular identity and account permissions, dynamically resolved permission sets, and RPC proxy integration.
 - [x] DPoP blob uploads with transitional generic scope, pre-body proof admission, and transactional authorization rechecks.
 - [x] DPoP service-token issuance with current generic/chat scope checks and authorization locks held through signing.
 - [x] DPoP authentication on public repository/blob export routes without granting inactive-account export privileges.
@@ -4504,10 +4505,11 @@ default HTTPS callback ports are rejected. `redirect_allowed?/2` compares the
 entire callback exactly, including any query, except for virtual localhost
 clients where only the loopback port is ignored. `scopes_allowed?/2` requires
 `atproto` and checks that every requested scope is covered by the declaration.
-Repository permissions may narrow collections/actions and blob permissions may
-narrow accepted MIME patterns, combining coverage across declared scopes. Other
-scopes still require exact membership. This does not grant
-permissions or replace consent and endpoint scope enforcement.
+Repository permissions may narrow collections/actions, blob permissions may
+narrow accepted MIME patterns, and RPC permissions may narrow methods/audiences.
+Coverage can combine declared scopes but never mix one RPC grant's method with
+another grant's audience. Other scopes still require exact membership. This does
+not grant permissions or replace consent and endpoint scope enforcement.
 
 Local bounds are 32 distinct callbacks, 128 scope tokens in a 4 KiB scope string,
 and 2 KiB URLs. The loader supports public `none` authentication and declarations
@@ -4616,7 +4618,7 @@ Requests require `response_type=code`, state, an exactly registered callback,
 declared scopes including `atproto`, and an S256 challenge. Optional `login_hint`
 is preserved but is not account authentication. An optional `dpop_jkt` must match
 the verified proof key. Scope admission accepts `atproto`, the three transitional
-scopes and granular `repo`/`blob` permissions; `transition:chat.bsky` requires
+scopes and granular `repo`/`blob`/`rpc` permissions; `transition:chat.bsky` requires
 `transition:generic`. Other permission resource types and permission sets await
 implementation. Unknown fields, client secrets,
 verifiers, Request Objects, and supplied request URIs are rejected. Input is capped
@@ -4664,8 +4666,10 @@ authorization server. `GET /.well-known/oauth-authorization-server` advertises t
 implemented authorization, PAR and token endpoints, PKCE S256, ES256 DPoP and
 client assertions, public/confidential clients, refresh grants, transitional
 scopes and `prompt=create`. Explicit `response_mode=query` is accepted by PAR;
-other response modes are rejected. Repository and blob permissions are supported;
-`repo:*` and `blob:*/*` are advertised. The other permission types remain pending.
+other response modes are rejected. The static scope list includes `repo:*` and
+`blob:*/*`; parameterized RPC permissions are also supported for service-token
+issuance. The scope list is not exhaustive. Identity/account permissions and
+permission sets remain pending.
 
 Both documents derive their URLs from Phoenix Endpoint's configured public URL,
 never request or forwarding headers. Configure a canonical HTTPS origin without a
@@ -5143,7 +5147,7 @@ rejection and scope changes during schema lookup. Parsing and coverage tests inc
 wildcards, multiple collections, combined grants and rejected encodings. The syntax
 follows the [repository permission specification](https://atproto.com/specs/permission#repo);
 `putRecord` follows the reference PDS requirement for both create and update.
-Granular blob permissions are described below. RPC/account/identity permissions
+Granular blob and RPC permissions are described below. Account/identity permissions
 and `include:` permission sets remain pending and are rejected at PAR admission.
 
 ### DPoP blob uploads
@@ -5205,15 +5209,17 @@ Scope syntax follows the [blob permission specification](https://atproto.com/spe
 ### DPoP service-token issuance
 
 `GET /xrpc/com.atproto.server.getServiceAuth` accepts DPoP OAuth access tokens with
-`atproto transition:generic`. It verifies the resource nonce, original client key,
+`atproto` and either `transition:generic` or a matching granular RPC permission.
+It verifies the resource nonce, original client key,
 access-token hash, configured origin and GET proof before examining delegation
 parameters. Account, source-session, OAuth-session, and access-token share locks
 remain held while checking the requested method, loading the repository key, and
 signing. Expired, revoked, or inactive-account access cannot issue a token.
 
 The access token's current scope controls delegation, even if its session has a
-broader grant. Explicit `chat.bsky.*` methods additionally require
-`transition:chat.bsky`; checks include case variants. Protected account-management
+broader grant. With transitional grants, explicit `chat.bsky.*` methods additionally
+require `transition:chat.bsky`; checks include case variants. A matching granular
+RPC grant can authorize the requested chat method directly. Protected account-management
 methods remain prohibited, and transitional OAuth cannot delegate `createAccount`
 for migration. Insufficient permission returns HTTP 403 `insufficient_scope` with
 a DPoP challenge. Invalid parameters, expiration, and unavailable signing custody
@@ -5224,12 +5230,49 @@ generic scope permits a method-less service token, limited to 60 seconds. Explic
 methods may use the existing maximum one-hour lifetime. Service tokens carry no
 OAuth scope or DPoP binding; receiving services must enforce the audience, method,
 expiry and their own policy. Revoking OAuth access prevents future issuance but
-does not revoke a JWT already issued. Fine-grained RPC permissions remain pending.
+does not revoke a JWT already issued. Granular RPC scopes follow the rules below.
 
 Tests verify the issued JWT signature and claims, method-less lifetime, separate
 chat permission and narrowed access scopes, forbidden migration/protected methods,
 parameter errors, missing signing custody, proof replay, revocation, inactive
 accounts and target binding. Existing legacy service-token tests remain enabled.
+
+### Granular RPC permissions
+
+`rpc:app.example.getFeed?aud=*` permits one method on any service.
+`rpc:*?aud=did:web:api.example.com%23appview` permits all methods for the exact
+`did:web:api.example.com#appview` audience. Repeated `lxm` query parameters allow
+multiple methods, for example
+`rpc?lxm=app.example.getFeed&lxm=app.example.getProfile&aud=*`.
+A concrete permission audience must include a nonempty DID service fragment.
+Unknown parameters, duplicate audiences, partial method wildcards and the fully
+unrestricted `rpc:*?aud=*` are rejected. Audience and method matching is exact;
+a bare DID does not match a grant naming one of its service fragments.
+
+PAR, consent and token refresh support narrowing either axis. Every requested
+method/audience pair must be covered by a single original grant: separate grants
+for service A/method X and service B/method Y do not authorize service A/method Y.
+A finite list of methods cannot be widened to `*`. The consent page names the
+methods and service audience, or explicitly says all methods/any service.
+Repository, blob and email rights are not implied by RPC permissions.
+
+Service-token issuance checks the current access token's RPC permissions under
+authorization locks before loading the signing key. A method-less request needs
+wildcard method permission for its audience and retains the 60-second limit.
+Method-bound tokens retain the one-hour maximum. A matching granular grant can
+authorize `com.atproto.server.createAccount` for migration; transitional generic
+scope alone still cannot. Explicit protected-method requests remain prohibited
+regardless of granted scopes. Already issued JWTs keep the existing revocation
+and recipient-validation limitations described above.
+
+Tests cover signed audience/method claims, mismatched audiences and fragments,
+method-less tokens, refresh attenuation, chat access without transitional grants,
+explicit migration authorization, protected-method denial and proof replay after
+permission failures. Browser consent tests exercise RPC selection alongside
+repository and MIME permissions. The policy follows the
+[RPC permission specification](https://atproto.com/specs/permission#rpc) and the
+[reference RPC matcher](https://github.com/bluesky-social/atproto/blob/main/packages/oauth/oauth-scopes/src/scopes/rpc-permission.ts).
+Request proxying and permission-set expansion remain separate unfinished features.
 
 ### DPoP public exports
 

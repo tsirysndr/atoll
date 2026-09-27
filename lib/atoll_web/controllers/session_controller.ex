@@ -139,8 +139,7 @@ defmodule AtollWeb.SessionController do
     if AtollWeb.OAuthResource.attempt?(conn) do
       case AtollWeb.OAuthResource.read_result(
              conn,
-             &Atoll.Accounts.ServiceAuth.issue_oauth(&1, params),
-             required_scopes: ["transition:generic"]
+             &Atoll.Accounts.ServiceAuth.issue_oauth(&1, params)
            ) do
         {:ok, {:ok, result}} ->
           json(conn, result)

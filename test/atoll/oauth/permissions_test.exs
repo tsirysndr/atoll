@@ -154,4 +154,95 @@ defmodule Atoll.OAuth.PermissionsTest do
       refute Permissions.allows_blob?("atproto " <> scope, "image/png")
     end
   end
+
+  test "RPC scope syntax constrains audience or methods, with one scalar audience" do
+    assert {:ok, %{audience: "*", methods: ["app.example.getFeed"]}} =
+             Permissions.rpc("rpc:app.example.getFeed?aud=*")
+
+    assert {:ok, %{audience: "did:web:api.example.com#appview", methods: ["*"]}} =
+             Permissions.rpc("rpc?lxm=*&aud=did:web:api.example.com%23appview")
+
+    assert {:ok, %{methods: ["app.example.getFeed", "app.example.getProfile"]}} =
+             Permissions.rpc("rpc?lxm=app.example.getFeed&lxm=app.example.getProfile&aud=*")
+
+    for scope <- [
+          "rpc:*?aud=*",
+          "rpc?lxm=app.example.getFeed&lxm=*&aud=*",
+          "rpc:app.example.getFeed",
+          "rpc:*?aud=did:web:api.example.com",
+          "rpc:*?aud=did:web:api.example.com%23",
+          "rpc:*?aud=did:web:api.example.com%23a%23b",
+          "rpc:*?aud=not-a-did%23service",
+          "rpc:*?aud=did:web:%25bad%23service%25",
+          "rpc:*?aud=did:web:api.example.com%23svc&aud=*",
+          "rpc:*?aud=did:web:api.example.com%23svc&%61ud=did:web:api.example.com%23svc",
+          "rpc:app.example.*?aud=*",
+          "rpc:app.example.getFeed?lxm=app.example.getProfile&aud=*",
+          "rpc:app.example.getFeed?aud=*&inheritAud=true",
+          "rpc:?aud=*",
+          "rpc?aud=*"
+        ] do
+      assert {:error, :invalid_scope} = Permissions.rpc(scope)
+      refute Permissions.supported?(scope)
+    end
+  end
+
+  test "RPC permission coverage never combines one grant's audience with another grant's method" do
+    grants = %{
+      "scope" =>
+        "atproto rpc:app.example.getFeed?aud=did:web:a.example.com%23app rpc:app.example.getProfile?aud=did:web:b.example.com%23app"
+    }
+
+    refute ClientMetadata.scopes_allowed?(
+             grants,
+             "atproto rpc:app.example.getProfile?aud=did:web:a.example.com%23app"
+           )
+
+    refute ClientMetadata.scopes_allowed?(grants, "atproto rpc:app.example.getFeed?aud=*")
+    refute ClientMetadata.scopes_allowed?(grants, "atproto rpc:*?aud=did:web:a.example.com%23app")
+
+    refute Permissions.allows_rpc?(
+             grants["scope"],
+             "did:web:a.example.com#app",
+             "app.example.getProfile"
+           )
+
+    assert Permissions.allows_rpc?(
+             grants["scope"],
+             "did:web:a.example.com#app",
+             "app.example.getFeed"
+           )
+
+    refute Permissions.allows_rpc?(
+             grants["scope"],
+             "did:web:a.example.com#other",
+             "app.example.getFeed"
+           )
+
+    refute Permissions.allows_rpc?(
+             grants["scope"],
+             "did:web:a.example.com",
+             "app.example.getFeed"
+           )
+
+    refute Permissions.allows_rpc?(grants["scope"], "did:web:a.example.com#app", "*")
+
+    broad = %{
+      "scope" => "atproto rpc:*?aud=did:web:a.example.com%23app rpc:app.example.getProfile?aud=*"
+    }
+
+    assert ClientMetadata.scopes_allowed?(
+             broad,
+             "atproto rpc?lxm=app.example.getFeed&lxm=app.example.getProfile&aud=did:web:a.example.com%23app"
+           )
+
+    assert ClientMetadata.scopes_allowed?(
+             broad,
+             "atproto rpc:app.example.getProfile?aud=did:web:b.example.com%23app"
+           )
+
+    assert Permissions.allows_rpc?(broad["scope"], "did:web:a.example.com#app", "*")
+    refute Permissions.write_admission?(broad["scope"], :put)
+    refute Permissions.write_admission?(broad["scope"], :upload_blob)
+  end
 end

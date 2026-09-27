@@ -56,7 +56,7 @@ defmodule Atoll.Accounts.ServiceAuth do
 
     with true <- audience?(params["aud"]),
          :ok <- method(params["lxm"]),
-         :ok <- oauth_scope(scope, params["lxm"]),
+         :ok <- oauth_scope(scope, params["aud"], params["lxm"]),
          {:ok, expiry} <- expiration(params["exp"]),
          now = System.system_time(:second),
          {:ok, exp} <- bounded_expiry(expiry, params["lxm"], now),
@@ -69,16 +69,19 @@ defmodule Atoll.Accounts.ServiceAuth do
     end
   end
 
-  defp oauth_scope(scope, method) do
+  defp oauth_scope(scope, audience, method) do
     scopes = String.split(scope, " ")
-    method = if method, do: String.downcase(method)
+    normalized = if method, do: String.downcase(method)
 
-    if "transition:generic" in scopes and
-         method != "com.atproto.server.createaccount" and
-         (is_nil(method) or not String.starts_with?(method, "chat.bsky.") or
-            "transition:chat.bsky" in scopes),
-       do: :ok,
-       else: {:error, :insufficient_scope}
+    transitional =
+      "transition:generic" in scopes and
+        normalized != "com.atproto.server.createaccount" and
+        (is_nil(normalized) or not String.starts_with?(normalized, "chat.bsky.") or
+           "transition:chat.bsky" in scopes)
+
+    if transitional or Atoll.OAuth.Permissions.allows_rpc?(scope, audience, method || "*"),
+      do: :ok,
+      else: {:error, :insufficient_scope}
   end
 
   defp app_scope("com.atproto.access", _), do: :ok
