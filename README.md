@@ -994,6 +994,7 @@ observations do not produce duplicate events. The
 - [x] Paired offline recovery-set wrapper binding database/S3 archives, deployment revision and a nonsecret external-keyring reference.
 - [x] Recovery-set checks for every database-owned S3 blob's archive membership and size, including staged blobs and mixed storage.
 - [x] Recovery-set verification of PostgreSQL-owned blob presence, byte size and CID digest, with missing/corrupt/mismatched-size restore-drill cases.
+- [x] PostgreSQL and combined S3 restore drills for enrolled TOTP, encrypted factor custody, used-step/recovery-code preservation, and fresh second-factor logins.
 - [ ] Complete database/S3 recovery sets, broader restore drills, and backup / restore workflow.
 - [x] `GET /health/ready` database connectivity readiness with bounded queries and outcome telemetry.
 - [x] Opt-in supervised cleanup of expired sessions and service-token replay markers, with bounded batches and outcome telemetry.

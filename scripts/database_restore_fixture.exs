@@ -1,7 +1,7 @@
 # Invoked only by test_atoll_database_backup.py against its disposable databases.
 import Ecto.Query
 alias Atoll.{Repo, Repositories, KeyVault, Blobs, CID}
-alias Atoll.Accounts.{Credentials, Sessions}
+alias Atoll.Accounts.{Authenticator, Credentials, Sessions, TOTP, TOTPFactor, TOTPSecret}
 alias Atoll.Repositories.{Events, Snapshot}
 
 [phase, evidence_path] = System.argv()
@@ -172,7 +172,38 @@ try do
       {:ok, %{deleted: 1}} = Atoll.Repositories.EventRetention.prune(1, 3600)
       {:ok, archive} = Repositories.export(did)
 
+      # Exercise real enrollment and consumption before the snapshot. The expired
+      # attempt window is intentional fixture state; restoration must retain the
+      # used step and recovery hashes while allowing the normal window rollover.
+      {:ok, enrollment} = Authenticator.begin(pair.access_jwt, password)
+      totp_secret = Base.decode32!(enrollment.secret, padding: false)
+
+      %{rows: [[enrollment_time]]} =
+        Repo.query!("SELECT floor(extract(epoch FROM clock_timestamp()))::bigint")
+
+      {:ok, enrollment_code} = TOTP.code(totp_secret, enrollment_time)
+
+      {:ok, %{recovery_codes: [used_recovery, unused_recovery | _]}} =
+        Authenticator.confirm(pair.access_jwt, enrollment_code)
+
+      {:ok, _} = Sessions.create(did, password, totp_code: used_recovery)
+      factor = Repo.get!(TOTPFactor, did)
+      true = length(factor.recovery_hashes) == 9
+      factor |> Ecto.Changeset.change(window_started_at: 0) |> Repo.update!(log: false)
+
       evidence = %{
+        totp: %{
+          secret: Base.encode64(totp_secret),
+          enrollment_time: enrollment_time,
+          enrollment_code: enrollment_code,
+          step: factor.last_used_step,
+          version: factor.version,
+          envelope: Base.encode64(factor.envelope),
+          hashes: Enum.map(factor.recovery_hashes, &Base.encode64/1),
+          attempts: factor.attempts,
+          used_recovery: used_recovery,
+          unused_recovery: unused_recovery
+        },
         public: Base.encode64(key.public),
         car: Base.encode64(archive),
         access: pair.access_jwt,
@@ -191,9 +222,55 @@ try do
       {:ok, %{did: ^did}} = Credentials.verify(did, password)
       {:ok, %{did: ^did}} = Sessions.authenticate(evidence["access"])
       {:ok, _} = Sessions.refresh(evidence["refresh"])
+      totp = evidence["totp"]
+      factor = Repo.get!(TOTPFactor, did)
+      true = factor.version == totp["version"]
+      true = factor.last_used_step == totp["step"]
+      true = factor.attempts == totp["attempts"] and factor.window_started_at == 0
+      true = Base.encode64(factor.envelope) == totp["envelope"]
+      true = Enum.map(factor.recovery_hashes, &Base.encode64/1) == totp["hashes"]
+      {:ok, %{state: :enabled, recovery_remaining: 9}} = Authenticator.status(evidence["access"])
+      {:error, :totp_required} = Sessions.create(did, password)
+      session_count = Repo.aggregate(Atoll.Accounts.Session, :count)
       Application.put_env(:atoll, :key_encryption_key, :crypto.strong_rand_bytes(32))
       {:error, :key_decryption_failed} = KeyVault.fetch(did)
+      {:error, :key_decryption_failed} = TOTPSecret.open(did, factor.envelope)
+      {:error, :key_decryption_failed} = Sessions.create(did, password, totp_code: "123456")
+      true = Repo.aggregate(Atoll.Accounts.Session, :count) == session_count
       Application.put_env(:atoll, :key_encryption_key, secret)
+      {:ok, restored_secret} = TOTPSecret.open(did, factor.envelope)
+      true = Base.encode64(restored_secret) == totp["secret"]
+      # Verify replay at the original time too, so a slow drill cannot pass solely
+      # because the pre-backup code has aged out of the acceptance window.
+      {:error, :invalid_totp} =
+        TOTP.verify(
+          restored_secret,
+          totp["enrollment_code"],
+          totp["enrollment_time"],
+          factor.last_used_step
+        )
+
+      {:error, :invalid_totp} = Sessions.create(did, password, totp_code: totp["used_recovery"])
+
+      %{rows: [[now]]} =
+        Repo.query!("SELECT floor(extract(epoch FROM clock_timestamp()))::bigint")
+
+      fresh_code =
+        Enum.find_value([now, now + 30], fn time ->
+          {:ok, code} = TOTP.code(restored_secret, time)
+
+          if match?({:ok, _}, TOTP.verify(restored_secret, code, now, factor.last_used_step)),
+            do: code
+        end)
+
+      true = is_binary(fresh_code)
+      {:ok, fresh_pair} = Sessions.create(did, password, totp_code: fresh_code)
+      {:ok, %{did: ^did}} = Sessions.authenticate(fresh_pair.access_jwt)
+      {:error, :invalid_totp} = Sessions.create(did, password, totp_code: fresh_code)
+      {:ok, recovery_pair} = Sessions.create(did, password, totp_code: totp["unused_recovery"])
+      {:ok, %{did: ^did}} = Sessions.authenticate(recovery_pair.access_jwt)
+      {:error, :invalid_totp} = Sessions.create(did, password, totp_code: totp["unused_recovery"])
+      {:ok, %{state: :enabled, recovery_remaining: 8}} = Authenticator.status(evidence["access"])
       {:ok, key} = KeyVault.fetch(did)
       true = Base.encode64(key.public) == evidence["public"]
       {:ok, archive} = Repositories.export(did)

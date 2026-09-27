@@ -131,8 +131,11 @@ roles, tablespaces, external configuration and encryption keys are not included.
 Keep the matching deployment configuration and key-encryption keyring separately,
 including old keys needed by retained archives. Also retain session/OAuth nonce
 and cookie secrets if existing sessions must survive restoration. Restoring older
-session state can resurrect credentials revoked after the snapshot; plan session
-invalidation before reopening a recovered server.
+session state can resurrect credentials revoked after the snapshot. Restoring an
+older TOTP factor can also resurrect recovery codes consumed or factors removed
+after that snapshot; the drill verifies replay state at the snapshot, not later
+authentication history. Plan session and factor recovery/invalidation before
+reopening a recovered server.
 
 ## Restore into an isolated, empty database
 
@@ -283,6 +286,14 @@ The drill verifies:
 - Decryption of the retained repository signing key, with failure under the wrong
   encryption key before successful recovery with the original key.
 - Password verification, an existing access token, and refresh-token rotation.
+- Confirmed TOTP enrollment, exact encrypted secret/version/used-step/recovery-hash
+  preservation, and an intentionally expired attempt window with its retained
+  attempt count. The restored factor still requires a second factor. A wrong
+  master key cannot decrypt it or create a password/TOTP session.
+- Rejection of a recovery code consumed before backup; successful new TOTP and
+  unused recovery-code logins after restore; rejection of immediate reuse of
+  each proof. The original enrollment code is also checked at its original time
+  against the restored used step, so aging out alone cannot satisfy replay checks.
 - Published PostgreSQL blob bytes and CID verification, retained quota accounting,
   and operator audit rows.
 - A PostgreSQL-staged blob retained privately, with failed backup attempts for
@@ -294,13 +305,13 @@ The drill verifies:
   sequence advancement beyond the pre-backup event sequence.
 
 The fixture's encryption/session secrets are random, ephemeral environment values;
-its comparison file includes synthetic session tokens and is mode 0600 inside a
-private temporary directory. Neither is included in the archive. The runner reports
+its comparison file includes synthetic session tokens, a TOTP secret and recovery
+codes and is mode 0600 inside a private temporary directory. Neither is included in the archive. The runner reports
 only failure stages to avoid printing credentials in exception values. Matching
 keys remain a separately retained requirement for real recovery.
 
 This is selected application coverage, not proof of every pending PLC/OAuth/signup
-state, rolling-version migration compatibility, production grants,
+state, passkey credentials, rolling-version migration compatibility, production grants,
 large-database performance or point-in-time recovery. Continue to perform deployment-
 specific restore drills before relying on an archive for recovery.
 
@@ -327,7 +338,7 @@ a recovery set containing the database and all three S3 objects. It first restor
 only the database into the target and checks that the published blob cannot be
 served from the empty target bucket, with no PostgreSQL raw-block fallback. It
 then drops and recreates its own disposable target database and runs the full
-recovery-set restore. After restoration it performs the schema, signature, custody, session, quota,
+recovery-set restore. After restoration it performs the schema, signature, custody, session, TOTP/recovery-code, quota,
 audit and replay checks above, retrieves the published blob, and confirms the
 staged blob remains private. It also verifies untracked bytes were retained, then
 publishes the staged blob in a new signed record and retrieves it publicly.
