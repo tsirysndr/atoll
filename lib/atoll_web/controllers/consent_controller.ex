@@ -109,10 +109,10 @@ defmodule AtollWeb.ConsentController do
         Enum.map_join(permissions(request), "", fn {scope, field, label} ->
           label = set_title(scope, request, conn) || label
 
-          "<label><input type=\"checkbox\" name=\"" <>
+          "<label class=\"permission-option\"><input type=\"checkbox\" name=\"" <>
             field <>
-            "\" value=\"yes\" checked>" <>
-            e(label) <> "</label>" <> set_details(scope, request, conn)
+            "\" value=\"yes\" checked><span>" <>
+            e(label) <> "</span></label>" <> set_details(scope, request, conn)
         end)
 
       # A form-action restriction on the initiating page can block the OAuth callback redirect.
@@ -128,21 +128,22 @@ defmodule AtollWeb.ConsentController do
       UI.page(
         conn,
         200,
-        "Connect an application",
-        "<p>Application: <strong>" <>
-          e(request.client_id) <>
-          "</strong></p><p>Account: <strong>" <>
+        "Authorize",
+        "<p class=\"auth-subtitle\">Grant access to your account:<strong class=\"auth-identity\">" <>
           e(did) <>
-          "</strong></p><p>This application will learn your account DID. Choose any additional permissions below.</p>" <>
+          "</strong></p><section class=\"application-panel\" aria-label=\"Application\"><p><strong>" <>
+          e(request.client_id) <>
+          "</strong></p><p class=\"auth-note\">wants to access your account</p></section>" <>
+          "<p class=\"auth-note\">This application will learn your account DID. Choose any additional permissions below.</p>" <>
           "<form method=\"post\" action=\"/oauth/authorize\"><input type=\"hidden\" name=\"_csrf_token\" value=\"" <>
           e(Plug.CSRFProtection.get_csrf_token()) <>
           "\"><input type=\"hidden\" name=\"view\" value=\"" <>
           e(context["view"]) <>
           "\">" <>
           choices <>
-          "<button name=\"decision\" value=\"approve\">Allow selected permissions</button> " <>
-          "<button name=\"decision\" value=\"deny\">Deny</button></form>" <>
-          "<p>Signing out of this browser revokes access granted through this sign-in. You can revoke applications individually on your account page.</p>" <>
+          "<div class=\"auth-actions\"><button name=\"decision\" value=\"approve\">Authorize</button>" <>
+          "<button name=\"decision\" value=\"deny\">Deny access</button></div></form>" <>
+          "<p class=\"auth-note\">Signing out of this browser revokes access granted through this sign-in. You can revoke applications individually on your account page.</p>" <>
           "<a href=\"/account/sessions\">Manage account or sign out to use another account</a>"
       )
     else

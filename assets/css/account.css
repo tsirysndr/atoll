@@ -15,13 +15,13 @@
 @layer base {
   html { @apply min-h-full bg-muted; }
   body { @apply min-h-svh font-sans text-sm text-ink antialiased leading-relaxed; }
-  h1 { @apply mb-4 text-center text-xl leading-snug font-medium; }
+  h1 { @apply text-center text-2xl leading-tight font-semibold text-balance; }
   h2 { @apply mt-8 mb-3 text-lg font-semibold; }
   p { @apply my-4; }
   label { @apply my-4 block text-sm font-medium; }
-  input:not([type="hidden"]):not([type="checkbox"]) { @apply mt-2 block h-8 w-full rounded-lg border border-edge bg-transparent px-2.5 py-1 text-base font-normal placeholder:text-subtle md:text-sm; }
+  input:not([type="hidden"]):not([type="checkbox"]) { @apply mt-2 block h-10 w-full rounded-lg border border-edge bg-transparent px-3 py-2 text-base font-normal placeholder:text-subtle; }
   input[type="checkbox"] { @apply mr-3 size-4 accent-brand; }
-  button { @apply my-2 ml-auto block min-h-8 w-full sm:w-auto rounded-lg bg-brand px-2.5 py-1 text-sm font-medium text-white hover:bg-brand-hover cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed; }
+  button { @apply my-2 ml-auto block min-h-10 w-full sm:w-auto rounded-lg bg-brand px-4 py-2 text-[0.9375rem] font-medium text-white hover:bg-brand-hover cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed; }
   button[value="deny"], button[value="reserve_custom"] { @apply border border-edge bg-surface text-ink hover:bg-muted; }
   a { @apply text-brand underline-offset-4 hover:underline; }
   a, button, input, summary { @apply focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-brand; }
@@ -36,6 +36,23 @@
   .account-background {
     @apply bg-muted;
   }
+  .auth-shell { @apply flex min-h-svh flex-col items-center justify-center p-4 sm:p-6 md:p-10; }
+  .auth-card { @apply flex w-full flex-col gap-6 rounded-xl bg-surface py-6 ring-1 ring-ink/10; }
+  .auth-brand { @apply px-6 pt-2 text-center text-lg font-semibold; }
+  .auth-content { @apply px-6; }
+  .auth-content > :first-child { @apply mt-0; }
+  .auth-footer { @apply px-6 pt-2 text-center; }
+  .auth-footer select { @apply h-10 max-w-full cursor-pointer rounded-lg border border-edge bg-surface px-3 text-[0.9375rem]; }
+  .auth-note { @apply text-sm leading-snug text-subtle; }
+  .auth-subtitle { @apply mb-6 text-center text-base text-subtle; }
+  .auth-identity { @apply mt-1 block font-medium text-ink wrap-anywhere; }
+  .application-panel { @apply my-5 rounded-xl border border-edge p-4; }
+  .application-panel p { @apply my-1; }
+  .permission-option { @apply flex items-start gap-3 rounded-lg border border-edge p-4 font-normal; }
+  .permission-option input { @apply mt-1 mr-0 shrink-0; }
+  .auth-actions { @apply mt-6 flex flex-col gap-2 sm:flex-row-reverse sm:flex-wrap; }
+  .auth-actions button { @apply m-0; }
+  .secondary-action { @apply border border-edge bg-muted text-ink hover:bg-edge; }
   .secret-panel { @apply rounded-lg border border-purple-100 bg-brand-soft p-4 font-mono text-purple-950; }
 }
 

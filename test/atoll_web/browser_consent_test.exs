@@ -108,7 +108,7 @@ defmodule AtollWeb.BrowserConsentTest do
 
     c = c |> Map.put(:metadata, metadata) |> Map.put(:uri, pushed["request_uri"])
     page = consent_page(c)
-    assert html_response(page, 200) =~ "Connect an application"
+    assert html_response(page, 200) =~ "Authorize"
     assert page.resp_body =~ c.did
     assert page.resp_body =~ "Read your email"
     approved = submit(page, %{"decision" => "approve"})
@@ -715,7 +715,7 @@ defmodule AtollWeb.BrowserConsentTest do
     assert redirected_to(signed, 303) == "/oauth/authorize"
 
     assert signed |> browser() |> get("/oauth/authorize") |> html_response(200) =~
-             "Connect an application"
+             "Authorize"
   end
 
   test "directory failure can resume the same reservation without creating another identity", c do
@@ -785,7 +785,7 @@ defmodule AtollWeb.BrowserConsentTest do
 
     assert redirected_to(signed, 303) == "/oauth/authorize"
     page = signed |> browser() |> get("/oauth/authorize")
-    assert html_response(page, 200) =~ "Connect an application"
+    assert html_response(page, 200) =~ "Authorize"
     assert Repo.aggregate(AuthorizationCode, :count) == 0
     approved = submit(page, %{"decision" => "approve"})
 

@@ -217,12 +217,13 @@ defmodule AtollWeb.AccountController do
       conn,
       status,
       "Sign in",
-      "<p class=\"text-center text-sm text-subtle\">Enter your account credentials to continue.</p><p role=\"status\">" <>
+      "<p role=\"status\">" <>
         e(error) <>
         "</p><form method=\"post\" action=\"/account/login\">" <>
         csrf() <>
-        "<label>Email or DID<input name=\"identifier\" autocomplete=\"username\" autofocus required maxlength=\"2048\"></label>" <>
-        "<label>Account password<input type=\"password\" name=\"password\" autocomplete=\"current-password\" required maxlength=\"1024\"></label>" <>
+        "<label>Email or DID<input name=\"identifier\" placeholder=\"Email address or DID\" autocomplete=\"username\" autocapitalize=\"none\" spellcheck=\"false\" autofocus required maxlength=\"2048\"></label>" <>
+        "<label>Password<input type=\"password\" name=\"password\" placeholder=\"Enter your password\" autocomplete=\"current-password\" required maxlength=\"1024\"></label>" <>
+        "<p role=\"note\" class=\"auth-note\">Only enter your password on sites you trust.</p>" <>
         "<details class=\"my-5\"" <>
         if(status == 200, do: "", else: " open") <>
         "><summary>Two-factor authentication</summary><label>Email sign-in code (if requested)<input name=\"authFactorToken\" autocomplete=\"one-time-code\" maxlength=\"32\"></label>" <>
@@ -236,7 +237,7 @@ defmodule AtollWeb.AccountController do
       do:
         "<form method=\"post\" action=\"/account/passkeys/login/begin\">" <>
           csrf() <>
-          "<button>Sign in with a passkey</button></form>",
+          "<button class=\"secondary-action\">Sign in with a passkey</button></form>",
       else: ""
   end
 
@@ -259,10 +260,17 @@ defmodule AtollWeb.AccountController do
 
   def page(conn, status, title, content) do
     width =
-      if conn.assigns[:passkey_script] ||
-           conn.request_path in ["/account/login", "/account/signup", "/oauth/authorize"],
-         do: "max-w-sm",
-         else: "max-w-2xl"
+      cond do
+        conn.request_path == "/oauth/authorize" ->
+          "max-w-[28rem]"
+
+        conn.assigns[:passkey_script] ||
+            conn.request_path in ["/account/login", "/account/signup"] ->
+          "max-w-[26rem]"
+
+        true ->
+          "max-w-2xl"
+      end
 
     script =
       if conn.assigns[:passkey_script],
@@ -278,13 +286,13 @@ defmodule AtollWeb.AccountController do
         e(AtollWeb.Endpoint.static_path("/assets/account.css")) <>
         "\">" <>
         script <>
-        "</head><body class=\"account-background\"><div class=\"flex min-h-svh flex-col items-center justify-center p-6 md:p-10\"><main class=\"w-full " <>
+        "</head><body class=\"account-background\"><div class=\"auth-shell\"><main class=\"auth-card " <>
         width <>
-        " overflow-hidden rounded-xl border border-edge bg-surface pt-4\"><header class=\"mb-4 px-4 pt-2 text-center font-medium\">Atoll PDS</header><div class=\"px-4\"><h1>" <>
+        "\" aria-labelledby=\"page-title\"><header class=\"auth-brand\">Atoll PDS</header><h1 id=\"page-title\" class=\"px-6\">" <>
         e(title) <>
-        "</h1>" <>
+        "</h1><div class=\"auth-content\">" <>
         content <>
-        "</div><footer class=\"mt-4 border-t border-edge bg-muted/50 p-4 text-center text-sm\"><select aria-label=\"Language\" class=\"h-7 rounded-lg border border-edge bg-transparent px-2\"><option value=\"en\">🇺🇸 English</option></select></footer></main></div></body></html>"
+        "</div><footer class=\"auth-footer\"><select aria-label=\"Language\"><option value=\"en\">English</option></select></footer></main></div></body></html>"
 
     conn |> put_resp_content_type("text/html") |> send_resp(status, html)
   end
