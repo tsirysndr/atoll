@@ -44,6 +44,7 @@ defmodule AtollWeb.Endpoint do
   plug AtollWeb.OAuthResource
   plug AtollWeb.XRPCRequestPlug
   plug AtollWeb.ProxyPlug
+  plug AtollWeb.OAuthPolicyPlug
   plug AtollWeb.SubscribeReposPlug
   plug AtollWeb.AdminRequestPlug
   plug AtollWeb.SessionRequestPlug

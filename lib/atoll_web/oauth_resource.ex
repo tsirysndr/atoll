@@ -101,6 +101,22 @@ defmodule AtollWeb.OAuthResource do
 
   def error(conn, reason), do: failure(conn, reason)
 
+  @doc "A supplied OAuth credential must be valid even when this endpoint has no OAuth permission."
+  def deny(conn) do
+    result =
+      with {:ok, token} <- token(get_req_header(conn, "authorization")) do
+        Resource.deny(
+          token,
+          get_req_header(conn, "dpop"),
+          conn.method,
+          AtollWeb.Endpoint.url() <> conn.request_path
+        )
+      end
+
+    {:error, reason} = result
+    failure(conn, reason)
+  end
+
   defp token([header]) when byte_size(header) <= 128 do
     case Regex.run(~r/\ADPoP +(atoll_access_[A-Za-z0-9_-]{43})\z/i, header) do
       [_, token] -> {:ok, token}

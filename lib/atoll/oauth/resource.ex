@@ -18,6 +18,11 @@ defmodule Atoll.OAuth.Resource do
   def read(token, headers, url, reader, opts \\ []) when is_function(reader, 1),
     do: admit(token, headers, "GET", url, fn _, _, principal -> reader.(principal) end, opts)
 
+  @doc "Validate and consume a supplied proof before denying an endpoint with no OAuth grant."
+  def deny(token, headers, method, url, opts \\ []) when method in ["GET", "POST"] do
+    admit(token, headers, method, url, fn _, _, _ -> Repo.rollback(:insufficient_scope) end, opts)
+  end
+
   @doc """
   Admit a method-bound proxy proof and RPC grant before body reads/resolution,
   then recheck current authorization and sign a 60-second service JWT under locks.

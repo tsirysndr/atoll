@@ -440,9 +440,9 @@ mutation. Deletes and empty batches need no record schema, even with `validate: 
 - [x] DPoP authentication on public repository/blob export routes without granting inactive-account export privileges.
 - [x] DPoP account-status and missing-blob inventory, scoped to the authenticated account with authorization rechecks.
 - [x] DPoP recommended DID credentials and owner-requested identity refresh with base `atproto` scope.
-- [ ] OAuth authorization for remaining resource routes.
+- [x] Explicit OAuth policy for every currently implemented local XRPC route, including public reads and unsupported account/operator grants.
 - [x] Localhost virtual public-client metadata, loopback callback matching, and flow integration without metadata network requests.
-- [ ] OAuth nonce challenges and proof admission integrated into remaining authorization/resource server routes.
+- [x] OAuth nonce challenges and proof admission for supplied OAuth credentials on all currently implemented local XRPC routes.
 - [ ] ATProto OAuth authorization and resource server support.
 - [x] Live-session and repository ownership checks for blob uploads and single/batch record writes.
 - [x] Operator Basic authentication for repository/blob exports, including inactive accounts.
@@ -4488,9 +4488,9 @@ with the local database transaction; the audit records the head actually observe
 `Atoll.OAuth.DPoP.verify/4` verifies a single DPoP header using ES256/P-256 and
 returns its JWK thumbprint, proof ID, issue time, and nonce. It uses the existing
 JOSE library for signature verification and RFC JWK thumbprints. This is an
-internal cryptographic component used by the PAR adapter; it is not an OAuth
-authorization endpoint. Browser authorization and remaining resource integrations
-remain unfinished; the `getSession` integration is described below.
+internal cryptographic component used by the OAuth proof-admission layer.
+Browser authorization, token exchange/refresh and local resource policies are
+implemented by the adapters described below.
 
 The caller supplies the externally visible method/URL, current time, and a recent
 server-issued nonce. For protected-resource requests it must supply both the
@@ -4498,8 +4498,8 @@ validated access token and its bound `jkt`; the verifier checks both the SHA-256
 `ath` and key binding. Token validity, account state, consent and scopes remain the
 caller's responsibility. Successful proof verification must be followed by atomic
 replay rejection before executing a request. The internal `Atoll.OAuth.Proofs`
-guard below provides nonce validation and replay admission. PAR uses it;
-integration with the remaining OAuth routes remains unfinished.
+guard below provides nonce validation and replay admission for PAR, token
+requests and integrated resource policies.
 
 Proofs are bounded to 8 KiB. The verifier rejects duplicate HTTP headers, duplicate
 JSON members (including nested JWK members), excessive JSON nesting, noncanonical
@@ -4552,9 +4552,9 @@ reclaim them.
 
 Tests cover nonce expiry and issuer/role separation, token binding, concurrent
 admission through independent database transactions, rollback behavior, replay
-with a fresh nonce, and capacity exhaustion/reclamation. PAR nonce challenges
-are implemented; browser authorization and remaining resource-route integration
-remain pending. `getSession` uses resource proof admission as described below.
+with a fresh nonce, and capacity exhaustion/reclamation. PAR/token nonce challenges
+and local resource-route policies are implemented. `getSession` and the other
+resource integrations are described below.
 
 ### OAuth client metadata foundation
 
@@ -4666,7 +4666,8 @@ rollback cannot restore a used assertion; nested calls fail. Concurrent submissi
 through independent connections admit once. Tests also cover malformed JWTs,
 key substitution, retained binding checks, expiry, capacity, and rollback behavior.
 The result authenticates client software only: account authorization, DPoP,
-PAR/PKCE, consent, OAuth sessions and token routes remain separate requirements.
+PAR/PKCE, consent, OAuth sessions and token routes use the separate integrations
+described below.
 The assertion profile follows [RFC 7523](https://www.rfc-editor.org/rfc/rfc7523.html)
 and the [ATProto confidential-client requirements](https://atproto.com/specs/oauth#confidential-client-authentication).
 
@@ -4773,9 +4774,9 @@ configuration, hostname isolation, CORS, HEAD and early method validation.
 `POST /oauth/par` accepts `application/x-www-form-urlencoded` with UTF-8 encoding
 and returns HTTP 201 with `request_uri` and `expires_in` after successful admission.
 Configure `ATOLL_OAUTH_NONCE_SECRET` as described above; without it this route
-returns HTTP 503 `temporarily_unavailable`. Discovery and browser consent are
-available; remaining resource authorization and other fine-grained permissions are
-still pending, so full OAuth support remains unchecked.
+returns HTTP 503 `temporarily_unavailable`. Discovery, browser consent, granular
+permissions and local resource policies are available. Full-profile interoperability
+auditing remains pending, so full OAuth support remains unchecked.
 
 The boundary runs before general body parsing, method rewriting, and Phoenix
 controller parameter logging. Forms are flat, limited to 13 fields and 48 KiB of
@@ -4846,8 +4847,8 @@ Tests cover scope narrowing, account/session restrictions, changed client policy
 and keys, revocation during metadata retrieval, expiry, capacity rollback, and
 concurrent decisions through independent database connections.
 
-This service does not render login/consent. The internal exchange below redeems
-codes; browser consent and remaining resource authorization remain unfinished.
+This service does not render login/consent. The browser adapter renders those
+screens, and the internal exchange below redeems the approved codes.
 
 ### Authorization-code exchange and opaque sessions
 
@@ -4889,8 +4890,8 @@ Tests cover digest-only storage, binding failures, source-session revocation,
 expiry, client metadata/key changes, access-only clients, capacity rollback,
 marker retention, and concurrent redemption. The HTTP adapter below exposes this
 service. Refresh rotation and DPoP `getSession` are described below. Browser
-consent and discovery are implemented; remaining resource scope enforcement
-remains unchecked above. The periodic key checker is described below.
+consent, discovery and local resource scope policies are implemented. The periodic
+key checker is described below; full-profile interoperability auditing remains pending.
 
 
 ### Token HTTP adapter
@@ -5482,6 +5483,39 @@ Request proxying enforces the same RPC policy and expands permission sets throug
 the frozen authorization snapshots described above.
 
 ### DPoP public exports
+
+All currently implemented local XRPC routes have an explicit OAuth policy in
+`AtollWeb.OAuthPolicyPlug`. An inventory test checks the Phoenix routes and the
+firehose upgrade route so newly added endpoints must be classified. Unknown
+policies deny supplied OAuth credentials by default. Proxy requests are handled
+separately with their service-specific RPC permissions.
+
+Public repository reads, sync reads, server description, identity resolution and
+firehose upgrades remain available without OAuth. If an OAuth credential is
+supplied, its nonce, proof signature, target/method, token binding, replay status,
+active account and current session are checked before query/body processing or
+upgrade. Bad or revoked credentials cannot silently fall back to anonymous access.
+Successful admission grants only the ordinary public path; existing availability
+and takedown checks remain in force, without inactive-owner access. Identity
+resolution runs outside authorization locks. Public subscription admission does
+not make its public event stream private or bind the stream lifetime to a grant.
+
+Routes with dedicated OAuth grants keep their existing endpoint-specific checks
+and final authorization rechecks. App-password/invite management, account
+activation/deactivation/deletion, legacy session creation/refresh/deletion,
+password reset, signing-key reservation, account creation and operator endpoints
+do not accept OAuth as a replacement for their own authentication mechanisms.
+A valid supplied OAuth proof is consumed and receives HTTP 403
+`insufficient_scope` before body parsing or side effects; invalid credentials
+receive the normal nonce/proof/token errors. Anonymous, password, recovery-code,
+service-JWT migration and operator flows retain their existing policies. OAuth
+signup still uses the browser `prompt=create` flow.
+
+This includes the reference PDS exclusions for
+[invite access](https://github.com/bluesky-social/atproto/blob/main/packages/pds/src/api/com/atproto/server/getAccountInviteCodes.ts)
+and [deactivation](https://github.com/bluesky-social/atproto/blob/main/packages/pds/src/api/com/atproto/server/deactivateAccount.ts).
+Full-profile interoperability auditing remains pending; route policy coverage does
+not establish complete OAuth/client compatibility.
 
 `com.atproto.sync.getRepo`, `listBlobs`, and `getBlob` accept DPoP access tokens.
 A supplied OAuth credential is validated against its live account, source session,
