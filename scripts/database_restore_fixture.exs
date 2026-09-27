@@ -2,6 +2,8 @@
 import Ecto.Query
 alias Atoll.{Repo, Repositories, KeyVault, Blobs, CID}
 alias Atoll.Accounts.{Authenticator, Credentials, Sessions, TOTP, TOTPFactor, TOTPSecret}
+alias Atoll.Accounts.{Passkeys, Passkey, PasskeyUser, PasskeyChallenge}
+alias Atoll.PasskeyFixtures
 alias Atoll.Repositories.{Events, Snapshot}
 
 [phase, evidence_path] = System.argv()
@@ -84,10 +86,45 @@ storage =
   end
 
 Application.put_env(:atoll, :blob_storage, storage)
-# Start only the repository. No web listeners, mail or background workers.
-{:ok, supervisor} = Supervisor.start_link([Atoll.Repo], strategy: :one_for_one)
+# Passkey ceremonies need the endpoint's configured origin, but no web listener.
+endpoint_children =
+  if phase in ["seed", "verify"] do
+    true = Mix.env() == :test
+    {:ok, _} = Application.ensure_all_started(:phoenix)
+    Application.put_env(:atoll, :passkeys_enabled, true)
+
+    endpoint_config =
+      Application.fetch_env!(:atoll, AtollWeb.Endpoint)
+      |> Keyword.merge(
+        server: false,
+        http: false,
+        https: false,
+        url: [scheme: "https", host: "pds.backup.example.com", port: 443],
+        code_reloader: false,
+        watchers: [],
+        force_watchers: false
+      )
+
+    Application.put_env(:atoll, AtollWeb.Endpoint, endpoint_config)
+    [{AtollWeb.Endpoint, []}]
+  else
+    []
+  end
+
+# No HTTP/HTTPS listeners, mail, relay announcements or background workers.
+{:ok, supervisor} =
+  Supervisor.start_link([Atoll.Repo | endpoint_children], strategy: :one_for_one)
 
 try do
+  if phase in ["seed", "verify"] do
+    false = AtollWeb.Endpoint.config(:server)
+    false = AtollWeb.Endpoint.config(:http)
+    false = AtollWeb.Endpoint.config(:https)
+    false = AtollWeb.Endpoint.config(:force_watchers)
+    [] = AtollWeb.Endpoint.config(:watchers)
+    "https://pds.backup.example.com" = AtollWeb.Endpoint.url()
+  end
+
   did = "did:plc:backupdrill"
   password = "disposable backup drill password"
   bytes = "backup drill blob\x00\xFF"
@@ -172,6 +209,42 @@ try do
       {:ok, %{deleted: 1}} = Atoll.Repositories.EventRetention.prune(1, 3600)
       {:ok, archive} = Repositories.export(did)
 
+      # Simulate an authenticator; its private key remains in the private evidence
+      # file, never in the PDS database/archive. Register before enabling TOTP.
+      browser = Base.url_encode64(:crypto.strong_rand_bytes(32), padding: false)
+
+      {:ok, registration} =
+        Passkeys.begin_registration(pair.access_jwt, password, browser, "Restore drill")
+
+      authenticator = PasskeyFixtures.new(registration.public_key)
+
+      {:ok, credential} =
+        Passkeys.complete_registration(
+          pair.access_jwt,
+          browser,
+          registration.reference,
+          PasskeyFixtures.registration(authenticator)
+        )
+
+      {:ok, login} = Passkeys.begin_login(browser)
+      authenticator = %{authenticator | context: PasskeyFixtures.context(login.public_key)}
+      used_assertion = PasskeyFixtures.assertion(authenticator, count: 7)
+      {:ok, passkey_pair} = Passkeys.complete_login(browser, login.reference, used_assertion)
+      %{sign_count: 7} = Repo.get!(Passkey, credential.id)
+      {:ok, expired_login} = Passkeys.begin_login(browser)
+
+      expired_authenticator = %{
+        authenticator
+        | context: PasskeyFixtures.context(expired_login.public_key)
+      }
+
+      expired_digest = :crypto.hash(:sha256, expired_login.reference)
+
+      {1, _} =
+        Repo.update_all(from(c in PasskeyChallenge, where: c.digest == ^expired_digest),
+          set: [expires_at: 1]
+        )
+
       # Exercise real enrollment and consumption before the snapshot. The expired
       # attempt window is intentional fixture state; restoration must retain the
       # used step and recovery hashes while allowing the normal window rollover.
@@ -192,6 +265,19 @@ try do
       factor |> Ecto.Changeset.change(window_started_at: 0) |> Repo.update!(log: false)
 
       evidence = %{
+        passkey: %{
+          id: credential.id,
+          browser: browser,
+          private: Base.encode64(authenticator.private),
+          public: Base.encode64(authenticator.stored.public_key),
+          user_handle: Base.encode64(authenticator.stored.user_handle),
+          credential_id: Base.encode64(authenticator.stored.credential_id),
+          used_reference: login.reference,
+          used_assertion: used_assertion,
+          access: passkey_pair.access_jwt,
+          expired_reference: expired_login.reference,
+          expired_assertion: PasskeyFixtures.assertion(expired_authenticator, count: 8)
+        },
         totp: %{
           secret: Base.encode64(totp_secret),
           enrollment_time: enrollment_time,
@@ -222,6 +308,77 @@ try do
       {:ok, %{did: ^did}} = Credentials.verify(did, password)
       {:ok, %{did: ^did}} = Sessions.authenticate(evidence["access"])
       {:ok, _} = Sessions.refresh(evidence["refresh"])
+      passkey = evidence["passkey"]
+      credential = Repo.get!(Passkey, passkey["id"])
+      true = credential.did == did and credential.sign_count == 7
+      true = credential.rp_id == "pds.backup.example.com"
+      true = credential.backup_eligible == false and credential.backup_state == false
+      true = Base.encode64(credential.public_key) == passkey["public"]
+      true = Base.encode64(credential.credential_id) == passkey["credential_id"]
+      user_handle = Repo.get!(PasskeyUser, did).user_handle
+      true = Base.encode64(user_handle) == passkey["user_handle"]
+      {:ok, %{did: ^did}} = Sessions.authenticate_management(passkey["access"])
+      {:ok, retained_claims} = Atoll.Accounts.Tokens.verify(passkey["access"], :access)
+      true = Repo.get!(Atoll.Accounts.Session, retained_claims["sid"]).passkey_id == credential.id
+
+      {:error, :invalid_passkey} =
+        Passkeys.complete_login(
+          passkey["browser"],
+          passkey["used_reference"],
+          passkey["used_assertion"]
+        )
+
+      expired_digest = :crypto.hash(:sha256, passkey["expired_reference"])
+      %{expires_at: 1} = Repo.get!(PasskeyChallenge, expired_digest)
+
+      {:error, :invalid_passkey} =
+        Passkeys.complete_login(
+          passkey["browser"],
+          passkey["expired_reference"],
+          passkey["expired_assertion"]
+        )
+
+      true = is_nil(Repo.get(PasskeyChallenge, expired_digest))
+
+      authenticator = %{
+        private: Base.decode64!(passkey["private"]),
+        stored: %{
+          credential_id: credential.credential_id,
+          public_key: credential.public_key,
+          user_handle: user_handle,
+          sign_count: credential.sign_count,
+          backup_eligible: false
+        }
+      }
+
+      # A valid signature with a stale counter or wrong origin still fails.
+      for {count, options} <- [{7, []}, {8, [client: %{origin: "https://other.example.com"}]}] do
+        {:ok, request} = Passkeys.begin_login(passkey["browser"])
+        client = Map.put(authenticator, :context, PasskeyFixtures.context(request.public_key))
+        response = PasskeyFixtures.assertion(client, Keyword.put(options, :count, count))
+
+        {:error, :invalid_passkey} =
+          Passkeys.complete_login(passkey["browser"], request.reference, response)
+
+        %{sign_count: 7} = Repo.get!(Passkey, credential.id)
+      end
+
+      {:ok, request} = Passkeys.begin_login(passkey["browser"])
+      client = Map.put(authenticator, :context, PasskeyFixtures.context(request.public_key))
+      response = PasskeyFixtures.assertion(client, count: 8)
+
+      {:ok, restored_pair} =
+        Passkeys.complete_login(passkey["browser"], request.reference, response)
+
+      {:ok, %{did: ^did}} = Sessions.authenticate_management(restored_pair.access_jwt)
+      {:ok, claims} = Atoll.Accounts.Tokens.verify(restored_pair.access_jwt, :access)
+      true = Repo.get!(Atoll.Accounts.Session, claims["sid"]).passkey_id == credential.id
+      %{sign_count: 8} = Repo.get!(Passkey, credential.id)
+
+      {:error, :invalid_passkey} =
+        Passkeys.complete_login(passkey["browser"], request.reference, response)
+
+      true = Repo.aggregate(PasskeyChallenge, :count) == 0
       totp = evidence["totp"]
       factor = Repo.get!(TOTPFactor, did)
       true = factor.version == totp["version"]
@@ -338,6 +495,14 @@ try do
 rescue
   error ->
     IO.puts(:stderr, "Atoll restore fixture #{phase} failed (#{inspect(error.__struct__)})")
+    # Report source locations only, never exception values or stack arguments.
+    for {_module, _function, _arity, location} <- Enum.take(__STACKTRACE__, 3) do
+      IO.puts(
+        :stderr,
+        "  fixture #{Path.basename(to_string(location[:file] || "unknown"))}:#{location[:line] || 0}"
+      )
+    end
+
     System.halt(1)
 after
   Supervisor.stop(supervisor)

@@ -273,8 +273,11 @@ This separate integration check creates two uniquely named disposable databases,
 runs every Atoll migration in the source, seeds synthetic application data, archives
 it, restores into the empty target, and verifies using Atoll's application modules
 in a fresh process. It removes only the databases and temporary files it created.
-It starts only the repository and its dependencies: no endpoint, background worker,
-email or relay service runs. It does not use development or production databases.
+It starts the repository and dependencies, plus Phoenix endpoint configuration for
+the passkey origin during seed/verify. HTTP, HTTPS and file watchers are explicitly
+disabled and checked before the fixture runs. No web listener, Atoll background
+worker, email or relay service runs. It does not use development or production
+databases.
 The Elixir fixture rejects database names outside the disposable-test naming format.
 Unlike libpq's archive tool, the fixture uses explicit Postgrex connection settings;
 PGSERVICE, PGPASSFILE and libpq SSL options are not fixture configuration.
@@ -286,6 +289,13 @@ The drill verifies:
 - Decryption of the retained repository signing key, with failure under the wrong
   encryption key before successful recovery with the original key.
 - Password verification, an existing access token, and refresh-token rotation.
+- Passkey registration and a successful signed assertion before backup, then exact
+  public credential, user handle, RP ID, backup flags and signature-counter checks
+  after restoration. A previously issued passkey session still authenticates.
+- Rejection of consumed and expired passkey challenges, a stale signature counter
+  and a correctly signed assertion for the wrong origin. Fresh user-verified
+  assertions create credential-bound sessions and advance the restored counter;
+  reusing that assertion fails.
 - Confirmed TOTP enrollment, exact encrypted secret/version/used-step/recovery-hash
   preservation, and an intentionally expired attempt window with its retained
   attempt count. The restored factor still requires a second factor. A wrong
@@ -305,14 +315,26 @@ The drill verifies:
   sequence advancement beyond the pre-backup event sequence.
 
 The fixture's encryption/session secrets are random, ephemeral environment values;
-its comparison file includes synthetic session tokens, a TOTP secret and recovery
-codes and is mode 0600 inside a private temporary directory. Neither is included in the archive. The runner reports
-only failure stages to avoid printing credentials in exception values. Matching
+its comparison file includes synthetic session tokens, a TOTP secret, recovery
+codes and the simulated authenticator's private key. It is mode 0600 inside a
+private temporary directory. The passkey private key is client-side test evidence;
+the PDS stores only its public credential. The archive contains public passkey
+credentials and encrypted TOTP custody, but excludes the comparison file and
+ephemeral environment secrets. The runner reports only failure stages to avoid
+printing credentials in exception values. Matching
 keys remain a separately retained requirement for real recovery.
 
+Passkey checks use the existing synthetic ES256 authenticator fixture and the
+actual registration/login APIs, with a fixed HTTPS origin and no network/browser.
+Real recovery must preserve the configured public origin and credential RP ID;
+this drill does not migrate passkeys to another domain. As with TOTP recovery
+codes, restoring an older snapshot can resurrect credentials revoked or challenges
+consumed after the snapshot. Plan authentication-state invalidation before
+reopening a recovered deployment.
+
 This is selected application coverage, not proof of every pending PLC/OAuth/signup
-state, passkey credentials, rolling-version migration compatibility, production grants,
-large-database performance or point-in-time recovery. Continue to perform deployment-
+state, live passkey browser/device interoperability, rolling-version migration
+compatibility, production grants, large-database performance or point-in-time recovery. Continue to perform deployment-
 specific restore drills before relying on an archive for recovery.
 
 ### Combined PostgreSQL and S3 drill
@@ -338,7 +360,7 @@ a recovery set containing the database and all three S3 objects. It first restor
 only the database into the target and checks that the published blob cannot be
 served from the empty target bucket, with no PostgreSQL raw-block fallback. It
 then drops and recreates its own disposable target database and runs the full
-recovery-set restore. After restoration it performs the schema, signature, custody, session, TOTP/recovery-code, quota,
+recovery-set restore. After restoration it performs the schema, signature, custody, session, passkey, TOTP/recovery-code, quota,
 audit and replay checks above, retrieves the published blob, and confirms the
 staged blob remains private. It also verifies untracked bytes were retained, then
 publishes the staged blob in a new signed record and retrieves it publicly.
