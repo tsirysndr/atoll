@@ -25,10 +25,15 @@ try {
     const url = new URL(input instanceof Request ? input.url : input)
     assert.equal(url.origin, origin, 'request escaped the test server')
     const response = await fetch(input, { ...init, redirect: 'manual', signal: AbortSignal.any([AbortSignal.timeout(5000), ...(init.signal ? [init.signal] : [])]) })
-    requests.push({ path: url.pathname, status: response.status })
+    let oauthError
+    if (url.pathname === '/oauth/token' && response.status === 400) {
+      const body = await response.clone().json()
+      if (['invalid_grant', 'use_dpop_nonce', 'invalid_client'].includes(body.error)) oauthError = body.error
+    }
+    requests.push({ path: url.pathname, status: response.status, oauthError })
     return response
   }
-  assert.ok(['base', 'granular', 'blobs', 'email', 'rpc', 'confidential'].includes(scenario))
+  assert.ok(['base', 'granular', 'blobs', 'email', 'rpc', 'confidential', 'key_removed', 'key_replaced'].includes(scenario))
   const collection = 'com.example.oauthrecord'
   const audience = 'did:web:appview.example.com#bsky_appview'
   const method = 'app.bsky.feed.getTimeline'
@@ -36,13 +41,16 @@ try {
   const grants = {
     base: ['atproto', 'atproto'],
     confidential: ['atproto', 'atproto'],
+    key_removed: ['atproto', 'atproto'],
+    key_replaced: ['atproto', 'atproto'],
     granular: [`atproto repo:${collection}?action=create`, `atproto repo:${collection}?action=create repo:${collection}?action=update`],
     blobs: ['atproto blob:text/plain', 'atproto blob:text/plain blob:image/png'],
     email: ['atproto account:email', 'atproto account:email account:email?action=manage'],
     rpc: [`atproto ${rpcScope}`, `atproto ${rpcScope} rpc:app.bsky.feed.getFeed?aud=*`],
   }
   const [grantedScope, requestedScope] = grants[scenario]
-  const confidential = scenario === 'confidential'
+  const keyChanged = ['key_removed', 'key_replaced'].includes(scenario)
+  const confidential = scenario === 'confidential' || keyChanged
   const redirect = confidential ? 'https://client.example.com/callback' : 'http://127.0.0.1:8750/callback'
   const clientId = confidential ? 'https://client.example.com/client.json' : `http://localhost?${new URLSearchParams({ redirect_uri: redirect, scope: requestedScope })}`
   let clientKeys = {}
@@ -266,37 +274,45 @@ try {
     if (scenario === 'base') await denied(upload('text/plain', 'base grant upload'))
   }
   stage = 'refresh'
-  const info = await session.getTokenInfo(true)
-  assert.equal(info.sub, did)
-  assert.equal(info.scope, grantedScope)
-  response = await session.fetchHandler('/xrpc/com.atproto.server.getSession')
-  assert.equal(response.status, 200)
-  if (scenario === 'granular') {
-    stage = 'granular permissions after refresh'
-    assert.equal((await create('second')).status, 200)
-    await checkRestrictions()
+  if (keyChanged) {
+    await assert.rejects(() => session.getTokenInfo(true))
+    assert.ok(requests.some(r => r.path === '/oauth/token' && r.status === 400 && r.oauthError === 'invalid_grant'))
+    // Keep the password session so the database can prove only the OAuth grant was revoked.
+    response = await browser('/account/sessions')
+    assert.equal(response.status, 200)
+  } else {
+    const info = await session.getTokenInfo(true)
+    assert.equal(info.sub, did)
+    assert.equal(info.scope, grantedScope)
+    response = await session.fetchHandler('/xrpc/com.atproto.server.getSession')
+    assert.equal(response.status, 200)
+    if (scenario === 'granular') {
+      stage = 'granular permissions after refresh'
+      assert.equal((await create('second')).status, 200)
+      await checkRestrictions()
+    }
+    if (scenario === 'blobs') {
+      stage = 'blob permissions after refresh'
+      await checkBlobPermissions('after refresh')
+    }
+    stage = 'account email permissions after refresh'
+    await checkEmailPrivacy()
+    stage = 'RPC permissions after refresh'
+    await checkRpcPermissions()
+    stage = 'source session logout'
+    response = await browser('/account/sessions')
+    html = await response.text()
+    response = await browser('/account/logout', { _csrf_token: value(html, '_csrf_token') })
+    assert.equal(response.status, 303)
+    response = scenario === 'rpc' ? await serviceToken({ aud: audience, lxm: method }) : await session.fetchHandler('/xrpc/com.atproto.server.getSession')
+    assert.equal(response.status, 401)
   }
-  if (scenario === 'blobs') {
-    stage = 'blob permissions after refresh'
-    await checkBlobPermissions('after refresh')
-  }
-  stage = 'account email permissions after refresh'
-  await checkEmailPrivacy()
-  stage = 'RPC permissions after refresh'
-  await checkRpcPermissions()
-  stage = 'source session logout'
-  response = await browser('/account/sessions')
-  html = await response.text()
-  response = await browser('/account/logout', { _csrf_token: value(html, '_csrf_token') })
-  assert.equal(response.status, 303)
-  response = scenario === 'rpc' ? await serviceToken({ aud: audience, lxm: method }) : await session.fetchHandler('/xrpc/com.atproto.server.getSession')
-  assert.equal(response.status, 401)
   for (const path of ['/.well-known/oauth-protected-resource', '/.well-known/oauth-authorization-server']) {
     assert.ok(requests.some(r => r.path === path && r.status === 200))
   }
   assert.ok(requests.some(r => r.path === '/oauth/par' && r.status === 400))
   assert.ok(requests.some(r => r.path === '/oauth/par' && r.status === 201))
-  assert.ok(requests.filter(r => r.path === '/oauth/token' && r.status === 200).length >= 2)
+  assert.ok(requests.filter(r => r.path === '/oauth/token' && r.status === 200).length >= (keyChanged ? 1 : 2))
   assert.ok(identityResolutions >= 2, 'SDK must recheck identity after authorization')
   console.log('Official ATProto OAuth client flow passed')
 } catch (error) {

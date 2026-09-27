@@ -9,7 +9,9 @@ defmodule AtollWeb.AtprotoOAuthE2ETest do
         {"email", :k256},
         {"rpc", :k256},
         {"rpc", :p256},
-        {"confidential", :k256}
+        {"confidential", :k256},
+        {"key_removed", :k256},
+        {"key_replaced", :k256}
       ] do
     @tag scenario: scenario, curve: curve
     test "official OAuth SDK verifies #{scenario} #{curve} grants through refresh and revocation",
@@ -83,7 +85,17 @@ defmodule AtollWeb.AtprotoOAuthE2ETest do
       {_, private_jwk} = JOSE.JWK.to_map(client_key)
       private_jwk = Map.merge(private_jwk, %{"kid" => "interop-client", "alg" => "ES256"})
 
-      if scenario == "confidential" do
+      if scenario in ["confidential", "key_removed", "key_replaced"] do
+        changed = scenario in ["key_removed", "key_replaced"]
+        {_, replacement} = JOSE.JWK.to_public_map(JOSE.JWK.generate_key({:ec, :secp256r1}))
+
+        replacement =
+          Map.merge(replacement, %{
+            "alg" => "ES256",
+            "kid" =>
+              if(scenario == "key_removed", do: "replacement-client", else: "interop-client")
+          })
+
         metadata = %{
           "client_id" => "https://client.example.com/client.json",
           "redirect_uris" => ["https://client.example.com/callback"],
@@ -107,7 +119,13 @@ defmodule AtollWeb.AtprotoOAuthE2ETest do
                 send(parent, :client_metadata_fetched)
                 bindings = Repo.all(from s in Atoll.OAuth.Session, select: s.client_binding)
                 send(parent, {:client_bindings, bindings})
-                Req.Test.json(conn, metadata)
+
+                if changed and bindings != [] do
+                  send(parent, :changed_client_key_advertised)
+                  Req.Test.json(conn, put_in(metadata, ["jwks", "keys"], [replacement]))
+                else
+                  Req.Test.json(conn, metadata)
+                end
               end
             )
         )
@@ -133,8 +151,10 @@ defmodule AtollWeb.AtprotoOAuthE2ETest do
       assert status == 0, output
       assert output =~ "Official ATProto OAuth client flow passed"
 
-      if scenario == "confidential" do
-        assert Repo.aggregate(Atoll.OAuth.ClientAssertionUse, :count) >= 3
+      if scenario in ["confidential", "key_removed", "key_replaced"] do
+        minimum = if scenario == "confidential", do: 3, else: 2
+        assert Repo.aggregate(Atoll.OAuth.ClientAssertionUse, :count) >= minimum
+        if scenario != "confidential", do: assert_received(:changed_client_key_advertised)
         for _ <- 1..3, do: assert_received(:client_metadata_fetched)
 
         assert_received {:client_bindings,
@@ -146,7 +166,9 @@ defmodule AtollWeb.AtprotoOAuthE2ETest do
       end
 
       assert Repo.aggregate(Atoll.OAuth.Session, :count) == 0
-      assert Repo.aggregate(Atoll.Accounts.Session, :count) == 0
+      expected_sources = if scenario in ["key_removed", "key_replaced"], do: 1, else: 0
+      assert Repo.aggregate(Atoll.Accounts.Session, :count) == expected_sources
+      assert Repo.aggregate(Atoll.OAuth.AccessToken, :count) == 0
       assert Repo.get!(Atoll.Accounts.Profile, did) == profile
 
       expected =

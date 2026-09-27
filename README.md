@@ -1209,7 +1209,7 @@ accounts, tokens and keys are disposable and database changes roll back.
 
 Identity resolution uses a fixed synthetic DID document pointing at the temporary
 server; the SDK still checks that document's PDS against discovered issuer metadata.
-Seven cases cover a confidential client plus localhost public clients with base
+Nine cases cover confidential-client flows plus localhost public clients with base
 `atproto` scope, granular repository/blob grants, an email-read grant, and an RPC
 grant using each repository signing curve (secp256k1 and P-256). The base grant
 cannot write records. The granular flow
@@ -1256,8 +1256,15 @@ still use real loopback HTTP. Assertions are recorded in the replay store, and t
 persisted grant binds the client key ID, algorithm, and thumbprint. A synthetic
 private JWK is passed only to the child process environment and never printed;
 metadata contains only the public key. No dependencies or real client keys are
-installed or changed. Remote metadata/JWKS HTTPS transport and key-removal
-interoperability are not established by this fixture.
+installed or changed.
+
+Two additional confidential cases change the fixture's advertised key after code
+exchange: one removes the original key ID, and one replaces its material under
+the same key ID. The SDK refresh receives `invalid_grant`; database assertions
+confirm deletion of the OAuth grant and every access token while retaining the
+source password session. The browser account session remains usable. These cases
+exercise observed key changes at refresh, not periodic key-checker timing or real
+remote metadata/JWKS HTTPS transport.
 
 These tests do not establish live DID/handle resolution, remote client metadata
 interoperability, RPC proxying, identity permissions, email management or repository import, browser rendering, or
