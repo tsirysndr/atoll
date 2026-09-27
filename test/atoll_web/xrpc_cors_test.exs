@@ -39,15 +39,32 @@ defmodule AtollWeb.XRPCCORSTest do
     assert get_resp_header(get(build_conn(), "/health"), "access-control-allow-origin") == []
   end
 
-  test "preflights reject unsupported methods, headers and ambiguous values" do
+  test "preflights reflect arbitrary well-formed requested headers" do
+    path = "/xrpc/com.atproto.server.describeServer"
+
+    # The reference client sends headers beyond a fixed allowlist; reflect them.
+    conn = preflight(path, "GET", "authorization, atproto-proxy, dpop, x-unrecognized")
+    assert response(conn, 204) == ""
+
+    assert get_resp_header(conn, "access-control-allow-headers") == [
+             "authorization, atproto-proxy, dpop, x-unrecognized"
+           ]
+
+    # No requested headers advertises the default set.
+    conn = preflight(path, "GET", nil)
+    assert response(conn, 204) == ""
+    assert get_resp_header(conn, "access-control-allow-headers") |> hd() =~ "authorization"
+  end
+
+  test "preflights reject method mismatches and malformed header values" do
     path = "/xrpc/com.atproto.server.describeServer"
 
     for {method, headers} <- [
           {"POST", "authorization"},
           {"get", "authorization"},
-          {"GET", "x-unrecognized"},
-          {"GET", "authorization,"},
-          {"GET", String.duplicate("a", 1025)}
+          {"GET", "bad header"},
+          {"GET", "authorization\tdpop"},
+          {"GET", String.duplicate("a", 4097)}
         ] do
       conn = preflight(path, method, headers)
       assert %{"error" => "InvalidRequest"} = json_response(conn, 400)
@@ -85,10 +102,14 @@ defmodule AtollWeb.XRPCCORSTest do
   end
 
   defp preflight(path, method, headers) do
-    build_conn()
-    |> put_req_header("origin", "https://client.example")
-    |> put_req_header("access-control-request-method", method)
-    |> put_req_header("access-control-request-headers", headers)
-    |> options(path)
+    conn =
+      build_conn()
+      |> put_req_header("origin", "https://client.example")
+      |> put_req_header("access-control-request-method", method)
+
+    conn =
+      if headers, do: put_req_header(conn, "access-control-request-headers", headers), else: conn
+
+    options(conn, path)
   end
 end

@@ -24,10 +24,10 @@ defmodule AtollWeb.XRPCCORS do
 
     with [_origin] <- get_req_header(conn, "origin"),
          [^method] <- get_req_header(conn, "access-control-request-method"),
-         true <- allowed_headers?(get_req_header(conn, "access-control-request-headers")) do
+         {:ok, allow} <- allow_headers(get_req_header(conn, "access-control-request-headers")) do
       conn
       |> put_resp_header("access-control-allow-methods", method)
-      |> put_resp_header("access-control-allow-headers", Enum.join(@headers, ", "))
+      |> put_resp_header("access-control-allow-headers", allow)
       |> put_resp_header("access-control-max-age", "600")
       |> send_resp(204, "")
       |> halt()
@@ -43,14 +43,26 @@ defmodule AtollWeb.XRPCCORS do
     end
   end
 
-  defp allowed_headers?([]), do: true
+  # A wildcard origin cannot carry cookies, so requested header names are
+  # reflected (like the reference PDS) rather than restricted to a fixed list.
+  # The default set is advertised when the browser requests no specific headers.
+  def allow_headers([]), do: {:ok, Enum.join(@headers, ", ")}
 
-  defp allowed_headers?([value]) when byte_size(value) <= 1024 do
-    String.valid?(value) and
-      Enum.all?(String.split(value, ","), fn header ->
-        String.downcase(String.trim(header)) in @headers
-      end)
+  def allow_headers([value]) when byte_size(value) <= 4096 and value != "" do
+    names =
+      value
+      |> String.split(",")
+      |> Enum.map(&String.trim/1)
+      |> Enum.reject(&(&1 == ""))
+
+    if String.valid?(value) and names != [] and Enum.all?(names, &token?/1),
+      do: {:ok, Enum.join(names, ", ")},
+      else: :error
   end
 
-  defp allowed_headers?(_), do: false
+  def allow_headers(_), do: :error
+
+  # RFC 7230 header field-name token characters, so a reflected value can never
+  # inject a second header or control bytes.
+  defp token?(name), do: Regex.match?(~r/\A[!#$%&'*+.^_`|~0-9A-Za-z-]+\z/, name)
 end
