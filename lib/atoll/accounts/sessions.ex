@@ -57,8 +57,7 @@ defmodule Atoll.Accounts.Sessions do
 
       Repo.transaction(fn ->
         if opts[:passkey_id] do
-          Repo.query!("SET LOCAL lock_timeout = '1s'")
-          Repo.query!("SET LOCAL statement_timeout = '5s'")
+          Atoll.Database.limits!(1_000, 5_000)
         end
 
         # Serialize account logins before counting so parallel creates cannot exceed the cap.

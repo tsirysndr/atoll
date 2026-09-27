@@ -5,6 +5,8 @@ defmodule Atoll.MixProject do
     [
       app: :atoll,
       version: "0.1.0",
+      # Keep adapter-specific compile_env artifacts separate when switching databases.
+      build_path: build_path(),
       elixir: "~> 1.17",
       elixirc_paths: elixirc_paths(Mix.env()),
       start_permanent: Mix.env() == :prod,
@@ -12,6 +14,12 @@ defmodule Atoll.MixProject do
       deps: deps(),
       listeners: [Phoenix.CodeReloader]
     ]
+  end
+
+  defp build_path do
+    if System.get_env("ATOLL_DATABASE") in ["sqlite", "sqlite3"],
+      do: "_build/sqlite/#{Mix.env()}",
+      else: "_build/#{Mix.env()}"
   end
 
   # Configuration for the OTP application.

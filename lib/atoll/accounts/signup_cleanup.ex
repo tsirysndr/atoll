@@ -48,8 +48,7 @@ defmodule Atoll.Accounts.SignupCleanup do
     cutoff = DateTime.add(now, -days * 86_400, :second)
 
     Repo.transaction(fn ->
-      Repo.query!("SET LOCAL lock_timeout = '1s'")
-      Repo.query!("SET LOCAL statement_timeout = '5s'")
+      Atoll.Database.limits!(1_000, 5_000)
       Events.lock!()
 
       rows =
@@ -89,8 +88,8 @@ defmodule Atoll.Accounts.SignupCleanup do
       }
     end)
   rescue
-    error in Postgrex.Error ->
-      if error.postgres[:code] in [:lock_not_available, :query_canceled],
+    error in [Postgrex.Error, Exqlite.Error] ->
+      if Atoll.Database.error_code(error) in [:lock_not_available, :query_canceled],
         do: {:error, :signup_cleanup_busy},
         else: reraise(error, __STACKTRACE__)
   end

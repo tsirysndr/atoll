@@ -1,6 +1,19 @@
 import Config
 
+if value = System.get_env("ATOLL_DATABASE") do
+  if Atoll.Database.adapter_from_env!(value) != Atoll.Database.adapter(),
+    do: raise("ATOLL_DATABASE differs from the compiled adapter; rebuild the application")
+end
+
+if Atoll.Database.adapter() == :sqlite do
+  config :atoll, Atoll.Repo, Atoll.DatabaseConfig.sqlite_from_env!(System.get_env(), config_env())
+end
+
 read_replica = Atoll.DatabaseConfig.read_replica_from_env!(System.get_env())
+
+if read_replica && Atoll.Database.adapter() == :sqlite,
+  do: raise("READ_DATABASE_URL is not supported with SQLite")
+
 config :atoll, :read_repo_enabled, not is_nil(read_replica)
 
 if read_replica do
@@ -315,22 +328,24 @@ end
 config :atoll, AtollWeb.Endpoint, http: [port: String.to_integer(System.get_env("PORT", "4000"))]
 
 if config_env() == :prod do
-  database_url =
-    System.get_env("DATABASE_URL") ||
-      raise """
-      environment variable DATABASE_URL is missing.
-      For example: ecto://USER:PASS@HOST/DATABASE
-      """
+  if Atoll.Database.adapter() == :postgres do
+    database_url =
+      System.get_env("DATABASE_URL") ||
+        raise """
+        environment variable DATABASE_URL is missing.
+        For example: ecto://USER:PASS@HOST/DATABASE
+        """
 
-  maybe_ipv6 = if System.get_env("ECTO_IPV6") in ~w(true 1), do: [:inet6], else: []
+    maybe_ipv6 = if System.get_env("ECTO_IPV6") in ~w(true 1), do: [:inet6], else: []
 
-  config :atoll, Atoll.Repo,
-    # ssl: true,
-    url: database_url,
-    pool_size: String.to_integer(System.get_env("POOL_SIZE") || "10"),
-    # For machines with several cores, consider starting multiple pools of `pool_size`
-    # pool_count: 4,
-    socket_options: maybe_ipv6
+    config :atoll, Atoll.Repo,
+      # ssl: true,
+      url: database_url,
+      pool_size: String.to_integer(System.get_env("POOL_SIZE") || "10"),
+      # For machines with several cores, consider starting multiple pools of `pool_size`
+      # pool_count: 4,
+      socket_options: maybe_ipv6
+  end
 
   # The secret key base is used to sign/encrypt cookies and other secrets.
   # A default value is used in config/dev.exs and config/test.exs but you

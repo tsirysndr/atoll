@@ -1,6 +1,18 @@
 defmodule Atoll.DatabaseConfig do
   @moduledoc "Optional read replica configuration, independent of the primary database credentials."
 
+  def sqlite_from_env!(env, environment) do
+    path = env["DATABASE_PATH"]
+
+    if environment == :prod and (is_nil(path) or path == ""),
+      do: raise(ArgumentError, "DATABASE_PATH is required for SQLite in production")
+
+    if path == "" or path == ":memory:",
+      do: raise(ArgumentError, "DATABASE_PATH must be a persistent SQLite file")
+
+    if path, do: [database: Path.expand(path)], else: []
+  end
+
   def read_replica_from_env!(env) do
     case env["READ_DATABASE_URL"] do
       nil ->

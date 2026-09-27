@@ -1,4 +1,6 @@
 defmodule Atoll.Repositories do
+  require Atoll.Database
+
   @moduledoc """
   Internal, transactional repository storage. Not an authorization boundary.
 
@@ -77,7 +79,7 @@ defmodule Atoll.Repositories do
             end
 
           :recover ->
-            from(r in Record, where: r.did == ^did, distinct: r.cid, select: r.cid)
+            from(r in Record, where: r.did == ^did, distinct: true, select: r.cid)
             |> Repo.stream(max_rows: 1)
             |> Enum.each(&block!/1)
 
@@ -347,7 +349,8 @@ defmodule Atoll.Repositories do
         records =
           from(r in Record,
             where: r.did == ^did,
-            order_by: fragment("? COLLATE \"C\"", r.path),
+            order_by:
+              Atoll.Database.sql_fragment("? COLLATE \"C\"", "? COLLATE BINARY", [r.path]),
             select: {r.path, r.cid}
           )
           |> Repo.stream(max_rows: 128)
@@ -460,10 +463,21 @@ defmodule Atoll.Repositories do
         names =
           from r in Record,
             where: r.did == ^did,
-            select: %{name: fragment("split_part(?, '/', 1)", r.path)},
+            select: %{
+              name:
+                Atoll.Database.sql_fragment(
+                  "split_part(?, '/', 1)",
+                  "substr(?, 1, instr(?, '/') - 1)",
+                  [r.path],
+                  [r.path, r.path]
+                )
+            },
             distinct: true
 
-        from(n in subquery(names), select: n.name, order_by: fragment("? COLLATE \"C\"", n.name))
+        from(n in subquery(names),
+          select: n.name,
+          order_by: Atoll.Database.sql_fragment("? COLLATE \"C\"", "? COLLATE BINARY", [n.name])
+        )
         |> Repo.stream(max_rows: 128)
         |> consume.()
       end,
@@ -474,12 +488,23 @@ defmodule Atoll.Repositories do
   @doc "Lists hosted repository heads in bytewise DID order. Cursor is the last returned DID."
   def list_heads(limit, cursor \\ nil) when limit in 1..1000 do
     query =
-      from h in Head, order_by: [asc: fragment("? COLLATE \"C\"", h.did)], limit: ^(limit + 1)
+      from h in Head,
+        order_by: [
+          asc: Atoll.Database.sql_fragment("? COLLATE \"C\"", "? COLLATE BINARY", [h.did])
+        ],
+        limit: ^(limit + 1)
 
     query =
       if is_nil(cursor),
         do: query,
-        else: from(h in query, where: fragment("? COLLATE \"C\" > ?", h.did, ^cursor))
+        else:
+          from(h in query,
+            where:
+              Atoll.Database.sql_fragment("? COLLATE \"C\" > ?", "? COLLATE BINARY > ?", [
+                h.did,
+                ^cursor
+              ])
+          )
 
     rows = Repo.all(query)
     page = Enum.take(rows, limit)
@@ -501,16 +526,34 @@ defmodule Atoll.Repositories do
       from r in Record,
         join: h in Head,
         on: h.did == r.did,
-        where: h.status == :active and fragment("split_part(?, '/', 1) = ?", r.path, ^collection),
-        select: %{did: fragment("? COLLATE \"C\"", r.did)},
+        where:
+          h.status == :active and
+            Atoll.Database.sql_fragment(
+              "split_part(?, '/', 1) = ?",
+              "substr(?, 1, instr(?, '/') - 1) = ?",
+              [r.path, ^collection],
+              [r.path, r.path, ^collection]
+            ),
+        select: %{
+          did: Atoll.Database.sql_fragment("? COLLATE \"C\"", "? COLLATE BINARY", [r.did])
+        },
         distinct: true,
-        order_by: [asc: fragment("? COLLATE \"C\"", r.did)],
+        order_by: [
+          asc: Atoll.Database.sql_fragment("? COLLATE \"C\"", "? COLLATE BINARY", [r.did])
+        ],
         limit: ^(limit + 1)
 
     query =
       if is_nil(cursor),
         do: query,
-        else: from(r in query, where: fragment("? COLLATE \"C\" > ?", r.did, ^cursor))
+        else:
+          from(r in query,
+            where:
+              Atoll.Database.sql_fragment("? COLLATE \"C\" > ?", "? COLLATE BINARY > ?", [
+                r.did,
+                ^cursor
+              ])
+          )
 
     rows = Repo.all(query)
     page = Enum.take(rows, limit)
@@ -544,7 +587,13 @@ defmodule Atoll.Repositories do
         # Block membership alone is insufficient: a CID could belong to another path.
         revisions =
           from r in Revision,
-            where: r.did == ^did and ^cid in r.blocks,
+            where:
+              r.did == ^did and
+                Atoll.Database.sql_fragment(
+                  "? = ANY(?)",
+                  "hex(?) IN (SELECT value FROM json_each(?))",
+                  [type(^cid, :binary), r.blocks]
+                ),
             order_by: [desc: r.rev],
             select: map(r, [:head, :rev, :signing_curve, :signing_public_key])
 
@@ -615,20 +664,28 @@ defmodule Atoll.Repositories do
           on: t.did == r.did and t.path == r.path,
           where: r.did == ^did and is_nil(t.path),
           where:
-            fragment(
+            Atoll.Database.sql_fragment(
               "? COLLATE \"C\" >= ? AND ? COLLATE \"C\" < ?",
-              r.path,
-              ^prefix,
-              r.path,
-              ^upper
+              "? COLLATE BINARY >= ? AND ? COLLATE BINARY < ?",
+              [r.path, ^prefix, r.path, ^upper]
             ),
           select: {r.path, r.cid, b.data},
           limit: ^(limit + 1)
 
       query =
         if reverse,
-          do: from(r in query, order_by: [asc: fragment("? COLLATE \"C\"", r.path)]),
-          else: from(r in query, order_by: [desc: fragment("? COLLATE \"C\"", r.path)])
+          do:
+            from(r in query,
+              order_by: [
+                asc: Atoll.Database.sql_fragment("? COLLATE \"C\"", "? COLLATE BINARY", [r.path])
+              ]
+            ),
+          else:
+            from(r in query,
+              order_by: [
+                desc: Atoll.Database.sql_fragment("? COLLATE \"C\"", "? COLLATE BINARY", [r.path])
+              ]
+            )
 
       query =
         case {cursor, reverse} do
@@ -636,10 +693,20 @@ defmodule Atoll.Repositories do
             query
 
           {key, true} ->
-            from r in query, where: fragment("? COLLATE \"C\" > ?", r.path, ^(prefix <> key))
+            from r in query,
+              where:
+                Atoll.Database.sql_fragment("? COLLATE \"C\" > ?", "? COLLATE BINARY > ?", [
+                  r.path,
+                  ^(prefix <> key)
+                ])
 
           {key, false} ->
-            from r in query, where: fragment("? COLLATE \"C\" < ?", r.path, ^(prefix <> key))
+            from r in query,
+              where:
+                Atoll.Database.sql_fragment("? COLLATE \"C\" < ?", "? COLLATE BINARY < ?", [
+                  r.path,
+                  ^(prefix <> key)
+                ])
         end
 
       rows = Repo.all(query)
@@ -737,17 +804,16 @@ defmodule Atoll.Repositories do
             {:record, _, _} -> []
           end)
 
-        records = from r in Record, where: r.did == ^did, distinct: r.cid, select: r.cid
+        records = from r in Record, where: r.did == ^did, distinct: true, select: r.cid
 
         records =
           if known do
             from r in records,
               where:
-                fragment(
+                Atoll.Database.sql_fragment(
                   "NOT EXISTS (SELECT 1 FROM repository_revisions AS known WHERE known.did = ? AND known.rev = ? AND ? = ANY(known.blocks))",
-                  ^did,
-                  ^known,
-                  r.cid
+                  "NOT EXISTS (SELECT 1 FROM repository_revisions AS known WHERE known.did = ? AND known.rev = ? AND hex(?) IN (SELECT value FROM json_each(known.blocks)))",
+                  [^did, ^known, r.cid]
                 )
           else
             records
@@ -790,7 +856,7 @@ defmodule Atoll.Repositories do
       indexed =
         from(r in Record,
           where: r.did == ^did,
-          order_by: fragment("? COLLATE \"C\"", r.path),
+          order_by: Atoll.Database.sql_fragment("? COLLATE \"C\"", "? COLLATE BINARY", [r.path]),
           select: {r.path, r.cid}
         )
         |> Repo.stream(max_rows: 128)
@@ -822,7 +888,13 @@ defmodule Atoll.Repositories do
   defp known_block?(did, rev, cid) do
     Repo.exists?(
       from r in Revision,
-        where: r.did == ^did and r.rev == ^rev and fragment("? = ANY(?)", ^cid, r.blocks)
+        where:
+          r.did == ^did and r.rev == ^rev and
+            Atoll.Database.sql_fragment(
+              "? = ANY(?)",
+              "hex(?) IN (SELECT value FROM json_each(?))",
+              [type(^cid, :binary), r.blocks]
+            )
     )
   end
 
@@ -875,7 +947,12 @@ defmodule Atoll.Repositories do
       revisions =
         from r in Revision,
           where: r.did == ^head.did,
-          where: fragment("? && ?", r.blocks, type(^requested, {:array, :binary})),
+          where:
+            Atoll.Database.sql_fragment(
+              "? && ?",
+              "EXISTS (SELECT 1 FROM json_each(?) a JOIN json_each(?) b ON a.value = b.value)",
+              [r.blocks, type(^requested, Atoll.BinaryArray)]
+            ),
           order_by: [desc: r.rev],
           select: map(r, [:head, :rev, :signing_curve, :signing_public_key])
 

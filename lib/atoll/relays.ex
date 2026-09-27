@@ -70,12 +70,11 @@ defmodule Atoll.Relays do
 
   defp audit(function) do
     Atoll.Repo.transaction(fn ->
-      Atoll.Repo.query!("SET LOCAL lock_timeout = '1s'")
-      Atoll.Repo.query!("SET LOCAL statement_timeout = '5s'")
+      Atoll.Database.limits!(1_000, 5_000)
       function.()
     end)
   rescue
-    _ in [Postgrex.Error, DBConnection.ConnectionError, Ecto.ConstraintError] ->
+    _ in [Exqlite.Error, Postgrex.Error, DBConnection.ConnectionError, Ecto.ConstraintError] ->
       {:error, :relay_audit_unavailable}
   end
 

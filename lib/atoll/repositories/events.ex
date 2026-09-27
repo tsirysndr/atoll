@@ -15,7 +15,7 @@ defmodule Atoll.Repositories.Events do
   @doc "Acquire before any repository mutation, inside its transaction."
   def lock! do
     unless Repo.in_transaction?(), do: raise(ArgumentError, "event lock requires a transaction")
-    Ecto.Adapters.SQL.query!(Repo, "SELECT pg_advisory_xact_lock($1)", [4_182_026_001])
+    Atoll.Database.serialize_writes!(4_182_026_001)
     :ok
   end
 

@@ -39,6 +39,7 @@ defmodule Atoll.OAuth.ProofsTest do
   end
 
   test "independent database transactions admit a raced proof only once", c do
+    Atoll.DataCase.independent_connections()
     token = proof(c)
 
     digest =
@@ -145,8 +146,7 @@ defmodule Atoll.OAuth.ProofsTest do
   end
 
   defp now do
-    %{rows: [[value]]} =
-      Repo.query!("SELECT floor(extract(epoch FROM clock_timestamp()))::bigint")
+    value = Atoll.Database.now_seconds!()
 
     value
   end

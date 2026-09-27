@@ -41,6 +41,7 @@ defmodule AtollWeb.HealthControllerTest do
     end
   end
 
+  @tag :postgres
   test "PostgreSQL query failures return unavailable without leaking SQL errors", %{conn: conn} do
     assert {:error, :probe_test} =
              Atoll.Repo.transaction(fn ->
@@ -67,6 +68,11 @@ defmodule AtollWeb.HealthControllerTest do
     result = post(conn, "/xrpc/_health")
     assert json_response(result, 405)
     assert get_resp_header(result, "allow") == ["GET"]
+  end
+
+  @tag :postgres
+  test "XRPC health reports PostgreSQL transaction failure", %{conn: conn} do
+    version = to_string(Application.spec(:atoll, :vsn))
 
     assert {:error, :probe_test} =
              Atoll.Repo.transaction(fn ->

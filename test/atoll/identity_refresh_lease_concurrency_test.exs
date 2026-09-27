@@ -40,7 +40,9 @@ defmodule Atoll.IdentityRefreshLeaseConcurrencyTest do
       Sandbox.unboxed_run(Repo, fn ->
         Repo.query!("DELETE FROM repository_events WHERE did = $1", [did])
         Repo.query!("DELETE FROM repositories WHERE did = $1", [did])
-        for [cid] <- created_blocks, do: Repo.query!("DELETE FROM blocks WHERE cid = $1", [cid])
+
+        for [cid] <- created_blocks,
+            do: Repo.query!("DELETE FROM blocks WHERE cid = $1", [Atoll.Database.blob(cid)])
       end)
     end
   end

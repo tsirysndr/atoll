@@ -26,7 +26,7 @@ defmodule Atoll.OAuth.ClientAssertions do
         end
     end
   rescue
-    _ in [Postgrex.Error, DBConnection.ConnectionError] ->
+    _ in [Exqlite.Error, Postgrex.Error, DBConnection.ConnectionError] ->
       {:error, :oauth_assertion_store_unavailable}
   end
 
@@ -43,7 +43,7 @@ defmodule Atoll.OAuth.ClientAssertions do
         admit(assertion, client, issuer, opts)
     end
   rescue
-    _ in [Postgrex.Error, DBConnection.ConnectionError] ->
+    _ in [Exqlite.Error, Postgrex.Error, DBConnection.ConnectionError] ->
       {:error, :oauth_assertion_store_unavailable}
   end
 
@@ -100,12 +100,11 @@ defmodule Atoll.OAuth.ClientAssertions do
 
   defp admit(assertion, client, issuer, opts) do
     Repo.transaction(fn ->
-      Repo.query!("SET LOCAL lock_timeout = '1s'")
-      Repo.query!("SET LOCAL statement_timeout = '5s'")
+      Atoll.Database.limits!(1_000, 5_000)
       now = clock!()
       options = Keyword.take(opts, [:binding]) |> Keyword.put(:now, now)
       verified = unwrap!(verify(assertion, client, issuer, options))
-      Repo.query!("SELECT pg_advisory_xact_lock($1)", [@lock])
+      Atoll.Database.serialize_writes!(@lock)
       now = clock!()
 
       if now >= verified.expires_at or now > verified.issued_at + 300,
@@ -171,7 +170,7 @@ defmodule Atoll.OAuth.ClientAssertions do
   end
 
   defp clock! do
-    %{rows: [[now]]} = Repo.query!("SELECT floor(extract(epoch FROM clock_timestamp()))::bigint")
+    now = Atoll.Database.now_seconds!()
     now
   end
 

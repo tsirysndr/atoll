@@ -30,8 +30,7 @@ defmodule Atoll.Blobs.Cleanup do
       cutoff = DateTime.add(DateTime.utc_now(), -grace, :second)
 
       Repo.transaction(fn ->
-        Repo.query!("SET LOCAL lock_timeout = '1s'")
-        Repo.query!("SET LOCAL statement_timeout = '5s'")
+        Atoll.Database.limits!(1_000, 5_000)
         Events.lock!()
 
         referenced =
@@ -114,8 +113,7 @@ defmodule Atoll.Blobs.Cleanup do
 
   defp audit_transaction(function) do
     Repo.transaction(fn ->
-      Repo.query!("SET LOCAL lock_timeout = '1s'")
-      Repo.query!("SET LOCAL statement_timeout = '5s'")
+      Atoll.Database.limits!(1_000, 5_000)
       function.()
     end)
   end

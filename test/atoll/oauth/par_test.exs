@@ -201,6 +201,8 @@ defmodule Atoll.OAuth.PARTest do
   end
 
   test "concurrent distinct proofs sharing a challenge admit only one request", c do
+    Atoll.DataCase.independent_connections()
+
     digest =
       :crypto.hash(
         :sha256,

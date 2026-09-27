@@ -18,7 +18,7 @@ defmodule Atoll.Identity.PLC.Update do
     field :authority_envelope, :binary, redact: true
     field :recovery_expected_head, :string
     field :recovery_deadline, :utc_datetime_usec
-    field :recovery_nullified_cids, {:array, :string}
+    field :recovery_nullified_cids, Atoll.StringArray
     field :nullified_at, :utc_datetime_usec
     field :nullified_head, :string
     field :confirmed_at, :utc_datetime_usec

@@ -1,4 +1,6 @@
 defmodule Atoll.OAuth.PAR do
+  require Atoll.Database
+
   @moduledoc """
   Internal pushed authorization admission. Persists validated parameters and
   client/DPoP bindings, not consent or a grant. Input is a decoded parameter map;
@@ -16,7 +18,7 @@ defmodule Atoll.OAuth.PAR do
   @doc false
   def lock! do
     unless Repo.in_transaction?(), do: raise(ArgumentError, "PAR lock requires a transaction")
-    Repo.query!("SELECT pg_advisory_xact_lock($1)", [@lock])
+    Atoll.Database.serialize_writes!(@lock)
   end
 
   def push(params, headers, opts \\ []) do
@@ -53,7 +55,8 @@ defmodule Atoll.OAuth.PAR do
         end
     end
   rescue
-    _ in [Postgrex.Error, DBConnection.ConnectionError] -> {:error, :oauth_par_store_unavailable}
+    _ in [Exqlite.Error, Postgrex.Error, DBConnection.ConnectionError] ->
+      {:error, :oauth_par_store_unavailable}
   end
 
   @doc "Reads a live client/issuer-bound request. Does not consume it or authorize an account."
@@ -68,7 +71,12 @@ defmodule Atoll.OAuth.PAR do
              from(r in PushedRequest,
                where:
                  r.digest == ^digest and r.client_id == ^client_id and r.issuer == ^issuer and
-                   r.expires_at > fragment("floor(extract(epoch FROM clock_timestamp()))::bigint")
+                   r.expires_at >
+                     Atoll.Database.sql_fragment(
+                       "floor(extract(epoch FROM clock_timestamp()))::bigint",
+                       "unixepoch('now')",
+                       []
+                     )
              ),
              log: false
            ) do
@@ -77,7 +85,8 @@ defmodule Atoll.OAuth.PAR do
       _ -> {:error, :invalid_request_uri}
     end
   rescue
-    _ in [Postgrex.Error, DBConnection.ConnectionError] -> {:error, :oauth_par_store_unavailable}
+    _ in [Exqlite.Error, Postgrex.Error, DBConnection.ConnectionError] ->
+      {:error, :oauth_par_store_unavailable}
   end
 
   defp valid_input?(params) when is_map(params) and map_size(params) <= 13 do
@@ -143,12 +152,10 @@ defmodule Atoll.OAuth.PAR do
 
   defp persist(params, binding, jkt, issuer, permission_sets) do
     Repo.transaction(fn ->
-      Repo.query!("SET LOCAL lock_timeout = '1s'")
-      Repo.query!("SET LOCAL statement_timeout = '5s'")
+      Atoll.Database.limits!(1_000, 5_000)
       lock!()
 
-      %{rows: [[now]]} =
-        Repo.query!("SELECT floor(extract(epoch FROM clock_timestamp()))::bigint")
+      now = Atoll.Database.now_seconds!()
 
       prune!(PushedRequest, now)
       prune!(PKCEUse, now)

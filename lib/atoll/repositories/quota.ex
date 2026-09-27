@@ -1,4 +1,5 @@
 defmodule Atoll.Repositories.Quota do
+  require Atoll.Database
   @moduledoc "Per-account quotas over distinct stored blocks in retained repository history."
   import Ecto.Query
   alias Atoll.Repo
@@ -13,7 +14,14 @@ defmodule Atoll.Repositories.Quota do
           join: r in BlockReference,
           on: r.cid == b.cid and r.did == ^did,
           select:
-            {count(b.cid), type(coalesce(sum(fragment("octet_length(?)", b.data)), 0), :integer)}
+            {count(b.cid),
+             type(
+               coalesce(
+                 sum(Atoll.Database.sql_fragment("octet_length(?)", "length(?)", [b.data])),
+                 0
+               ),
+               :integer
+             )}
       )
 
     %{count: count, bytes: bytes}

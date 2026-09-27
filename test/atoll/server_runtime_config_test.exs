@@ -7,6 +7,7 @@ defmodule Atoll.ServerRuntimeConfigTest do
       "ATOLL_AVAILABLE_USER_DOMAINS" => ".example.com",
       "ATOLL_SESSION_MAX_COUNT" => "25",
       "PHX_HOST" => "PDS.Example.com",
+      "DATABASE_PATH" => "/tmp/atoll_config_test.sqlite3",
       "DATABASE_URL" => "ecto://postgres:postgres@localhost/atoll_config_test",
       "SECRET_KEY_BASE" => String.duplicate("a", 64),
       "ATOLL_KEY_ENCRYPTION_KEY" => Base.encode64(:binary.copy(<<11>>, 32)),

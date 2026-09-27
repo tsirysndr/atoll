@@ -26,13 +26,17 @@ defmodule Atoll.DistributedLimiterConcurrencyTest do
 
       Sandbox.unboxed_run(Repo, fn ->
         assert [[7]] =
-                 Repo.query!("SELECT count FROM request_rate_buckets WHERE digest = $1", [digest]).rows
+                 Repo.query!("SELECT count FROM request_rate_buckets WHERE digest = $1", [
+                   Atoll.Database.blob(digest)
+                 ]).rows
 
         assert {:error, _} = DistributedLimiter.check(key, 7)
       end)
     after
       Sandbox.unboxed_run(Repo, fn ->
-        Repo.query!("DELETE FROM request_rate_buckets WHERE digest = $1", [digest])
+        Repo.query!("DELETE FROM request_rate_buckets WHERE digest = $1", [
+          Atoll.Database.blob(digest)
+        ])
       end)
     end
   end

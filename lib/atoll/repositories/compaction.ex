@@ -11,8 +11,7 @@ defmodule Atoll.Repositories.Compaction do
              seconds in 3600..31_536_000 do
     if Syntax.did?(did) do
       Repo.transaction(fn ->
-        Repo.query!("SET LOCAL lock_timeout = '1s'")
-        Repo.query!("SET LOCAL statement_timeout = '5s'")
+        Atoll.Database.limits!(1_000, 5_000)
         Events.lock!()
 
         head =
@@ -26,7 +25,7 @@ defmodule Atoll.Repositories.Compaction do
           Atoll.Moderation.Audit.revision_compaction!(head, limit, seconds, [], result)
           result
         else
-          %{rows: [[now]]} = Repo.query!("SELECT clock_timestamp() AT TIME ZONE 'UTC'")
+          now = Atoll.Database.now_utc!()
           cutoff = now |> DateTime.from_naive!("Etc/UTC") |> DateTime.add(-seconds, :second)
 
           pins =
@@ -60,8 +59,8 @@ defmodule Atoll.Repositories.Compaction do
     _ in [MatchError, CaseClauseError] ->
       {:error, :invalid_event_dependencies}
 
-    e in Postgrex.Error ->
-      if e.postgres[:code] in [:lock_not_available, :query_canceled],
+    e in [Postgrex.Error, Exqlite.Error] ->
+      if Atoll.Database.error_code(e) in [:lock_not_available, :query_canceled],
         do: {:error, :compaction_busy},
         else: reraise(e, __STACKTRACE__)
   end

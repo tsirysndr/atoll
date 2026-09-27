@@ -1,5 +1,6 @@
 defmodule Atoll.OAuth.ResourceLockTest do
   use Atoll.DataCase, async: false
+  @moduletag :postgres
   alias Atoll.OAuth.{Resource, Nonce, Session, AccessToken, ProofUse}
   alias Atoll.Repositories.Head
   alias Atoll.Accounts.Session, as: AccountSession

@@ -21,10 +21,13 @@ defmodule Atoll.Repositories.BlockReferenceTest do
 
     %{rows: [[count, bytes]]} =
       Repo.query!(
-        """
-        SELECT count(*), COALESCE(sum(octet_length(b.data)), 0)::bigint FROM blocks b
-        JOIN (SELECT DISTINCT unnest(blocks) AS cid FROM repository_revisions WHERE did = $1) r ON r.cid = b.cid
-        """,
+        Atoll.Database.sql(
+          """
+          SELECT count(*), COALESCE(sum(octet_length(b.data)), 0)::bigint FROM blocks b
+          JOIN (SELECT DISTINCT unnest(blocks) AS cid FROM repository_revisions WHERE did = $1) r ON r.cid = b.cid
+          """,
+          "SELECT count(*), COALESCE(sum(length(b.data)), 0) FROM blocks b JOIN (SELECT DISTINCT unhex(j.value) AS cid FROM repository_revisions r, json_each(r.blocks) j WHERE r.did = $1) r ON r.cid = b.cid"
+        ),
         [@did]
       )
 
@@ -77,11 +80,16 @@ defmodule Atoll.Repositories.BlockReferenceTest do
 
   defp assert_index do
     expected =
-      Repo.query!("""
-      SELECT r.did, b.cid, count(*) FROM repository_revisions r
-      CROSS JOIN LATERAL (SELECT DISTINCT unnest(r.blocks) AS cid) b
-      GROUP BY r.did, b.cid ORDER BY r.did, b.cid
-      """).rows
+      Repo.query!(
+        Atoll.Database.sql(
+          """
+          SELECT r.did, b.cid, count(*) FROM repository_revisions r
+          CROSS JOIN LATERAL (SELECT DISTINCT unnest(r.blocks) AS cid) b
+          GROUP BY r.did, b.cid ORDER BY r.did, b.cid
+          """,
+          "SELECT r.did, unhex(j.value), count(DISTINCT r.rev) FROM repository_revisions r, json_each(r.blocks) j GROUP BY r.did, j.value ORDER BY r.did, unhex(j.value)"
+        )
+      ).rows
 
     actual =
       Repo.all(

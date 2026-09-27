@@ -36,7 +36,7 @@ defmodule Atoll.OAuth.PermissionSets do
       end
     end
   rescue
-    _ in [Postgrex.Error, DBConnection.ConnectionError] ->
+    _ in [Exqlite.Error, Postgrex.Error, DBConnection.ConnectionError] ->
       {:error, :permission_set_store_unavailable}
   end
 
@@ -93,9 +93,8 @@ defmodule Atoll.OAuth.PermissionSets do
 
   defp persist(prior, nsid, document, result, now) do
     Repo.transaction(fn ->
-      Repo.query!("SET LOCAL lock_timeout = '1s'")
-      Repo.query!("SET LOCAL statement_timeout = '5s'")
-      Repo.query!("SELECT pg_advisory_xact_lock($1)", [@lock])
+      Atoll.Database.limits!(1_000, 5_000)
+      Atoll.Database.serialize_writes!(@lock)
       current = Repo.get(PermissionSetCache, nsid)
 
       if current != prior and current do

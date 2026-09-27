@@ -295,15 +295,10 @@ defmodule Atoll.OAuth.RefreshTest do
   test "global replay capacity fails atomically and expired markers are reclaimed", c do
     session = Repo.one!(Session)
 
-    Repo.query!(
-      """
-      INSERT INTO oauth_refresh_uses (digest, session_id, expires_at)
-      SELECT decode(lpad(to_hex(i), 64, '0'), 'hex'), $1, $2
-      FROM generate_series(1, 100000) AS i
-      """,
-      [session.id, session.expires_at],
-      log: false
-    )
+    1..100_000
+    |> Stream.map(&%{digest: <<&1::256>>, session_id: session.id, expires_at: session.expires_at})
+    |> Stream.chunk_every(1000)
+    |> Enum.each(&Repo.insert_all(RefreshUse, &1, log: false))
 
     assert {:error, :oauth_refresh_store_full} = refresh(c, c.tokens.refresh_token)
     assert Repo.one!(Session).refresh_digest == session.refresh_digest
@@ -380,6 +375,7 @@ defmodule Atoll.OAuth.RefreshTest do
     @tag independent: true, operation: operation
     test "concurrent refresh and #{operation} cannot leave usable tokens",
          %{operation: operation} = c do
+      Atoll.DataCase.independent_connections()
       did = "did:plc:exchange#{System.unique_integer([:positive])}"
       key = SigningKey.generate()
       {:ok, tree} = Atoll.MST.new()

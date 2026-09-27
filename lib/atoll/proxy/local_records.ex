@@ -49,7 +49,8 @@ defmodule Atoll.Proxy.LocalRecords do
       %{posts: [], profile: nil}
     end
   rescue
-    _ in [Postgrex.Error, DBConnection.ConnectionError] -> %{posts: [], profile: nil}
+    _ in [Exqlite.Error, Postgrex.Error, DBConnection.ConnectionError] ->
+      %{posts: [], profile: nil}
   end
 
   defp decode_ops(event, since) do

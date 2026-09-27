@@ -27,10 +27,15 @@ defmodule Atoll.Repositories.EventRetention do
 
   def bounds do
     %{rows: [[floor, latest]]} =
-      Repo.read_query!("""
-      SELECT cursor_floor, GREATEST(cursor_floor, COALESCE((SELECT max(seq) FROM repository_events), 0))
-      FROM event_retention_state WHERE id = 1
-      """)
+      Repo.read_query!(
+        Atoll.Database.sql(
+          """
+          SELECT cursor_floor, GREATEST(cursor_floor, COALESCE((SELECT max(seq) FROM repository_events), 0))
+          FROM event_retention_state WHERE id = 1
+          """,
+          "SELECT cursor_floor, max(cursor_floor, COALESCE((SELECT max(seq) FROM repository_events), 0)) FROM event_retention_state WHERE id = 1"
+        )
+      )
 
     %{floor: floor, latest: latest}
   end
@@ -41,7 +46,10 @@ defmodule Atoll.Repositories.EventRetention do
       do: raise(ArgumentError, "retention reads require a transaction")
 
     %{rows: [[floor]]} =
-      Repo.query!("SELECT cursor_floor FROM event_retention_state WHERE id = 1 FOR SHARE")
+      Repo.query!(
+        "SELECT cursor_floor FROM event_retention_state WHERE id = 1" <>
+          Atoll.Database.for_share()
+      )
 
     floor
   end
@@ -52,14 +60,16 @@ defmodule Atoll.Repositories.EventRetention do
       when is_integer(limit) and limit in 1..1000 and is_integer(retention_seconds) and
              retention_seconds in 3600..31_536_000 and actor in ["operator", "worker"] do
     Repo.transaction(fn ->
-      Repo.query!("SET LOCAL lock_timeout = '1s'")
-      Repo.query!("SET LOCAL statement_timeout = '5s'")
+      Atoll.Database.limits!(1_000, 5_000)
       Events.lock!()
 
       %{rows: [[floor]]} =
-        Repo.query!("SELECT cursor_floor FROM event_retention_state WHERE id = 1 FOR UPDATE")
+        Repo.query!(
+          "SELECT cursor_floor FROM event_retention_state WHERE id = 1" <>
+            Atoll.Database.for_update()
+        )
 
-      %{rows: [[now]]} = Repo.query!("SELECT clock_timestamp() AT TIME ZONE 'UTC'")
+      now = Atoll.Database.now_utc!()
       cutoff = now |> DateTime.from_naive!("Etc/UTC") |> DateTime.add(-retention_seconds, :second)
 
       prefix =
@@ -90,8 +100,8 @@ defmodule Atoll.Repositories.EventRetention do
       result
     end)
   rescue
-    e in Postgrex.Error ->
-      if e.postgres[:code] in [:lock_not_available, :query_canceled],
+    e in [Postgrex.Error, Exqlite.Error] ->
+      if Atoll.Database.error_code(e) in [:lock_not_available, :query_canceled],
         do: {:error, :event_retention_busy},
         else: reraise(e, __STACKTRACE__)
   end

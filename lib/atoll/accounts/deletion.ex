@@ -99,8 +99,7 @@ defmodule Atoll.Accounts.Deletion do
       when map_size(params) == 1 and actor in ["admin", "operator", "system"] do
     if Atoll.Syntax.did?(did) do
       Repo.transaction(fn ->
-        Repo.query!("SET LOCAL lock_timeout = '1s'")
-        Repo.query!("SET LOCAL statement_timeout = '5s'")
+        Atoll.Database.limits!(1_000, 5_000)
         Events.lock!()
 
         head =
@@ -114,8 +113,8 @@ defmodule Atoll.Accounts.Deletion do
       {:error, :invalid_request}
     end
   rescue
-    e in Postgrex.Error ->
-      if e.postgres[:code] in [:lock_not_available, :query_canceled],
+    e in [Postgrex.Error, Exqlite.Error] ->
+      if Atoll.Database.error_code(e) in [:lock_not_available, :query_canceled],
         do: {:error, :admin_busy},
         else: reraise(e, __STACKTRACE__)
   end

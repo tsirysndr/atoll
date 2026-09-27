@@ -15,8 +15,7 @@ defmodule Atoll.OAuth.Proofs do
       {:error, :oauth_proof_inside_transaction}
     else
       Repo.transaction(fn ->
-        Repo.query!("SET LOCAL lock_timeout = '1s'")
-        Repo.query!("SET LOCAL statement_timeout = '5s'")
+        Atoll.Database.limits!(1_000, 5_000)
         now = clock!()
         nonce = unwrap!(DPoP.peek_nonce(headers))
         nonce_opts = Keyword.take(opts, [:secret, :issuer]) |> Keyword.put(:now, now)
@@ -30,7 +29,7 @@ defmodule Atoll.OAuth.Proofs do
         proof = unwrap!(DPoP.verify(headers, method, url, proof_opts))
 
         # Separate from repository locks; shared by proof admission and pruning.
-        Repo.query!("SELECT pg_advisory_xact_lock($1)", [@lock])
+        Atoll.Database.serialize_writes!(@lock)
         now = clock!()
 
         if now >= verified_nonce.expires_at or now > proof.issued_at + 300,
@@ -60,12 +59,12 @@ defmodule Atoll.OAuth.Proofs do
       end)
     end
   rescue
-    _ in [Postgrex.Error, DBConnection.ConnectionError] ->
+    _ in [Exqlite.Error, Postgrex.Error, DBConnection.ConnectionError] ->
       {:error, :oauth_proof_store_unavailable}
   end
 
   defp clock! do
-    %{rows: [[now]]} = Repo.query!("SELECT floor(extract(epoch FROM clock_timestamp()))::bigint")
+    now = Atoll.Database.now_seconds!()
     now
   end
 

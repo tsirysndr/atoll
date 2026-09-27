@@ -21,15 +21,17 @@ defmodule Atoll.Metrics.Database do
   def snapshot do
     Repo.read_transaction(
       fn ->
-        Repo.read_query!("SET LOCAL lock_timeout = '100ms'", [], log: false)
-        Repo.read_query!("SET LOCAL statement_timeout = '2s'", [], log: false)
+        Atoll.Database.read_limits!(100, 2_000)
 
         %{rows: rows} =
           Repo.read_query!(
-            """
-            SELECT backend, count(*), floor(extract(epoch FROM min(queued_at)))::bigint
-            FROM blob_cleanup_jobs GROUP BY backend
-            """,
+            Atoll.Database.sql(
+              """
+              SELECT backend, count(*), floor(extract(epoch FROM min(queued_at)))::bigint
+              FROM blob_cleanup_jobs GROUP BY backend
+              """,
+              "SELECT backend, count(*), unixepoch(min(queued_at)) FROM blob_cleanup_jobs GROUP BY backend"
+            ),
             [],
             log: false
           )

@@ -121,7 +121,10 @@ defmodule AtollWeb.RepoStreamTest do
       time: DateTime.utc_now()
     }
 
-    Atoll.Repo.insert_all(Atoll.Repositories.Event, List.duplicate(row, 10_000))
+    List.duplicate(row, 10_000)
+    |> Enum.chunk_every(1000)
+    |> Enum.each(&Atoll.Repo.insert_all(Atoll.Repositories.Event, &1))
+
     {:ok, state} = Socket.init({:ok, 0})
     assert_receive :drain
     assert {:stop, :normal, 1000, {:binary, frame}, _} = Socket.handle_info(:drain, state)

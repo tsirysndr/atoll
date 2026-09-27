@@ -18,8 +18,7 @@ defmodule Atoll.Identity.PLC.ActiveUpdates do
            Signup.hosted_handle?(handle) or
              Handle.resolve(handle, Keyword.put(opts, :force_refresh, true)) == {:ok, did} do
       Repo.transaction(fn ->
-        Repo.query!("SET LOCAL lock_timeout = '1s'")
-        Repo.query!("SET LOCAL statement_timeout = '5s'")
+        Atoll.Database.limits!(1_000, 5_000)
         Events.lock!()
 
         head =

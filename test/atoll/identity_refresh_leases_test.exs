@@ -109,6 +109,9 @@ defmodule Atoll.IdentityRefreshLeasesTest do
   defp expire,
     do:
       Repo.query!(
-        "UPDATE identity_refresh_leases SET leased_until = clock_timestamp() - interval '1 second', next_attempt_at = clock_timestamp() - interval '1 second'"
+        Atoll.Database.sql(
+          "UPDATE identity_refresh_leases SET leased_until = clock_timestamp() - interval '1 second', next_attempt_at = clock_timestamp() - interval '1 second'",
+          "UPDATE identity_refresh_leases SET leased_until = strftime('%Y-%m-%dT%H:%M:%f000', 'now', '-1 second'), next_attempt_at = strftime('%Y-%m-%dT%H:%M:%f000', 'now', '-1 second')"
+        )
       )
 end

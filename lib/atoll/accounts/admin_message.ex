@@ -30,8 +30,7 @@ defmodule Atoll.Accounts.AdminMessage do
 
       with {:ok, _} <-
              Repo.transaction(fn ->
-               Repo.query!("SET LOCAL lock_timeout = '1s'")
-               Repo.query!("SET LOCAL statement_timeout = '5s'")
+               Atoll.Database.limits!(1_000, 5_000)
                Audit.email_delivery!(params, id, "prepared", outcome)
              end) do
         case result do
@@ -41,8 +40,8 @@ defmodule Atoll.Accounts.AdminMessage do
       end
     end
   rescue
-    e in Postgrex.Error ->
-      if e.postgres[:code] in [:lock_not_available, :query_canceled],
+    e in [Postgrex.Error, Exqlite.Error] ->
+      if Atoll.Database.error_code(e) in [:lock_not_available, :query_canceled],
         do: {:error, :admin_busy},
         else: reraise(e, __STACKTRACE__)
   end
@@ -51,8 +50,7 @@ defmodule Atoll.Accounts.AdminMessage do
 
   defp prepare(params) do
     Repo.transaction(fn ->
-      Repo.query!("SET LOCAL lock_timeout = '1s'")
-      Repo.query!("SET LOCAL statement_timeout = '5s'")
+      Atoll.Database.limits!(1_000, 5_000)
       Events.lock!()
       did = params["recipientDid"]
 

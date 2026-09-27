@@ -1,4 +1,6 @@
 defmodule Atoll.Storage.Cleanup do
+  require Atoll.Database
+
   @moduledoc "Bounded collection of old DAG-CBOR blocks not owned by any retained repository revision."
   import Ecto.Query
   alias Atoll.{Repo, Storage.Block}
@@ -26,8 +28,7 @@ defmodule Atoll.Storage.Cleanup do
 
     Repo.transaction(
       fn ->
-        Ecto.Adapters.SQL.query!(Repo, "SET LOCAL lock_timeout = '1s'", [])
-        Ecto.Adapters.SQL.query!(Repo, "SET LOCAL statement_timeout = '5s'", [])
+        Atoll.Database.limits!()
 
         # The same lock covers writes/imports/deletion so no new ownership can appear between selection and deletion.
         Events.lock!()
@@ -45,7 +46,12 @@ defmodule Atoll.Storage.Cleanup do
           from b in Block,
             as: :block,
             where: b.inserted_at < ^cutoff,
-            where: fragment("substring(? from 1 for 4) = decode('01711220', 'hex')", b.cid),
+            where:
+              Atoll.Database.sql_fragment(
+                "substring(? from 1 for 4) = decode('01711220', 'hex')",
+                "substr(?, 1, 4) = X'01711220'",
+                [b.cid]
+              ),
             where:
               not exists(subquery(history)) and not exists(subquery(heads)) and
                 not exists(subquery(commits)) and not exists(subquery(records)),
@@ -62,8 +68,8 @@ defmodule Atoll.Storage.Cleanup do
       timeout: 10_000
     )
   rescue
-    error in Postgrex.Error ->
-      case error.postgres[:code] do
+    error in [Postgrex.Error, Exqlite.Error] ->
+      case Atoll.Database.error_code(error) do
         :lock_not_available -> {:error, :cleanup_busy}
         :query_canceled -> {:error, :cleanup_timeout}
         _ -> reraise error, __STACKTRACE__

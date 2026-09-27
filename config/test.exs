@@ -8,13 +8,20 @@ config :atoll, :metrics_database_polling_enabled, false
 # The MIX_TEST_PARTITION environment variable can be used
 # to provide built-in test partitioning in CI environment.
 # Run `mix help test` for more information.
-config :atoll, Atoll.Repo,
-  username: "postgres",
-  password: "postgres",
-  hostname: "localhost",
-  database: "atoll_test#{System.get_env("MIX_TEST_PARTITION")}",
-  pool: Ecto.Adapters.SQL.Sandbox,
-  pool_size: System.schedulers_online() * 2
+if System.get_env("ATOLL_DATABASE", "postgres") in ["postgres", "postgresql"] do
+  config :atoll, Atoll.Repo,
+    username: "postgres",
+    password: "postgres",
+    hostname: "localhost",
+    database: "atoll_test#{System.get_env("MIX_TEST_PARTITION")}",
+    pool: Ecto.Adapters.SQL.Sandbox,
+    pool_size: System.schedulers_online() * 2
+else
+  config :atoll, Atoll.Repo,
+    database: Path.expand("atoll_test#{System.get_env("MIX_TEST_PARTITION")}.sqlite3"),
+    pool: Ecto.Adapters.SQL.Sandbox,
+    pool_size: 1
+end
 
 # We don't run a server during test. If one is required,
 # you can enable the server option below.

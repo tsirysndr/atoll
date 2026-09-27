@@ -1,6 +1,37 @@
 defmodule Atoll.DatabaseConfigTest do
   use ExUnit.Case, async: true
   alias Atoll.DatabaseConfig
+  require Atoll.Database
+
+  test "SQLite production requires a persistent path and development keeps its default" do
+    assert DatabaseConfig.sqlite_from_env!(%{}, :test) == []
+    assert DatabaseConfig.sqlite_from_env!(%{}, :dev) == []
+
+    assert DatabaseConfig.sqlite_from_env!(%{"DATABASE_PATH" => "data/pds.sqlite3"}, :prod) ==
+             [database: Path.expand("data/pds.sqlite3")]
+
+    for value <- [nil, "", ":memory:"] do
+      env = if value, do: %{"DATABASE_PATH" => value}, else: %{}
+
+      assert_raise ArgumentError, ~r/DATABASE_PATH/, fn ->
+        DatabaseConfig.sqlite_from_env!(env, :prod)
+      end
+    end
+  end
+
+  test "the repository uses the selected adapter" do
+    assert Atoll.Repo.__adapter__() == Atoll.Database.ecto_adapter()
+
+    if Atoll.Database.sqlite?() do
+      config = Atoll.Repo.config()
+      assert config[:pool_size] == 1
+      assert config[:default_transaction_mode] == :immediate
+      assert config[:foreign_keys] == :on
+      assert config[:synchronous] == :full
+      assert config[:journal_mode] == :wal
+      assert config[:priv] == "priv/sqlite_repo"
+    end
+  end
 
   test "the reader is optional and has independent connection settings" do
     assert DatabaseConfig.read_replica_from_env!(%{}) == nil

@@ -22,7 +22,7 @@ defmodule Atoll.OAuth.AuthorizationCodes do
       end
     end
   rescue
-    _ in [Postgrex.Error, DBConnection.ConnectionError] ->
+    _ in [Exqlite.Error, Postgrex.Error, DBConnection.ConnectionError] ->
       {:error, :oauth_authorization_store_unavailable}
   end
 
@@ -66,8 +66,7 @@ defmodule Atoll.OAuth.AuthorizationCodes do
 
   defp commit(token, snapshot, decision, metadata, opts) do
     Repo.transaction(fn ->
-      Repo.query!("SET LOCAL lock_timeout = '1s'")
-      Repo.query!("SET LOCAL statement_timeout = '5s'")
+      Atoll.Database.limits!(1_000, 5_000)
       # Keep account/session-before-PAR lock order. Account deletion and session
       # revocation cannot pass their locks until the decision commits.
       unwrap!(authorize(token, Keyword.put(session_opts(opts), :now, clock!())))
@@ -150,7 +149,7 @@ defmodule Atoll.OAuth.AuthorizationCodes do
     do: opts |> Keyword.get(:session_options, []) |> Keyword.take([:secret, :audience])
 
   defp clock! do
-    %{rows: [[now]]} = Repo.query!("SELECT floor(extract(epoch FROM clock_timestamp()))::bigint")
+    now = Atoll.Database.now_seconds!()
     now
   end
 

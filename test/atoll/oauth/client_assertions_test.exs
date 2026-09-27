@@ -22,7 +22,7 @@ defmodule Atoll.OAuth.ClientAssertionsTest do
 
     opts = options(doc)
     {:ok, client} = ClientKeys.fetch(@id, opts)
-    %{rows: [[now]]} = Repo.query!("SELECT floor(extract(epoch FROM clock_timestamp()))::bigint")
+    now = Atoll.Database.now_seconds!()
 
     %{
       key: key,
@@ -210,6 +210,7 @@ defmodule Atoll.OAuth.ClientAssertionsTest do
   end
 
   test "independent database transactions admit a concurrent assertion once", c do
+    Atoll.DataCase.independent_connections()
     jti = Base.url_encode64(:crypto.strong_rand_bytes(16), padding: false)
     c = %{c | claims: Map.put(c.claims, "jti", jti)}
     assertion = token(c)

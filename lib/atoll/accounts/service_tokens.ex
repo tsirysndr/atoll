@@ -57,8 +57,7 @@ defmodule Atoll.Accounts.ServiceTokens do
     now = System.system_time(:second)
 
     Repo.transaction(fn ->
-      Repo.query!("SET LOCAL lock_timeout = '1s'")
-      Repo.query!("SET LOCAL statement_timeout = '5s'")
+      Atoll.Database.limits!(1_000, 5_000)
 
       ids =
         Repo.all(

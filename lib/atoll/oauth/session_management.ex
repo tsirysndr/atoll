@@ -79,8 +79,7 @@ defmodule Atoll.OAuth.SessionManagement do
 
   defp authorized(token, opts, action) do
     Repo.transaction(fn ->
-      Repo.query!("SET LOCAL lock_timeout = '1s'")
-      Repo.query!("SET LOCAL statement_timeout = '5s'")
+      Atoll.Database.limits!(1_000, 5_000)
 
       case Sessions.authenticate_management(token, opts) do
         {:ok, head} -> action.(head)
@@ -88,12 +87,12 @@ defmodule Atoll.OAuth.SessionManagement do
       end
     end)
   rescue
-    _ in [Postgrex.Error, DBConnection.ConnectionError] ->
+    _ in [Exqlite.Error, Postgrex.Error, DBConnection.ConnectionError] ->
       {:error, :oauth_session_store_unavailable}
   end
 
   defp clock! do
-    %{rows: [[now]]} = Repo.query!("SELECT floor(extract(epoch FROM clock_timestamp()))::bigint")
+    now = Atoll.Database.now_seconds!()
     now
   end
 end

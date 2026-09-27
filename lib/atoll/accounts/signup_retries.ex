@@ -64,23 +64,41 @@ defmodule Atoll.Accounts.SignupRetries do
 
     case bounded(fn ->
            Repo.query!(
-             """
-             WITH candidate AS (
-               SELECT r.did FROM plc_registrations r
-               JOIN repositories h ON h.did = r.did
-               WHERE r.retry_eligible AND r.submission_started_at IS NOT NULL AND r.completed_at IS NULL
-                 AND h.status = 'deactivated'
-                 AND (r.retry_next_at <= clock_timestamp() OR (r.retry_next_at IS NULL AND r.submission_started_at + ($2::integer * interval '1 second') <= clock_timestamp()))
-                 AND (r.retry_leased_until IS NULL OR r.retry_leased_until <= clock_timestamp())
-               ORDER BY COALESCE(r.retry_next_at, r.submission_started_at), r.did
-               LIMIT 1 FOR UPDATE OF r SKIP LOCKED
-             )
-             UPDATE plc_registrations r SET retry_token = $1,
-               retry_leased_until = clock_timestamp() + interval '60 seconds',
-               retry_next_at = clock_timestamp() + ($2::integer * interval '1 second')
-             FROM candidate c WHERE r.did = c.did RETURNING r.did, r.cid
-             """,
-             [token, delay],
+             Atoll.Database.sql(
+               """
+               WITH candidate AS (
+                 SELECT r.did FROM plc_registrations r
+                 JOIN repositories h ON h.did = r.did
+                 WHERE r.retry_eligible AND r.submission_started_at IS NOT NULL AND r.completed_at IS NULL
+                   AND h.status = 'deactivated'
+                   AND (r.retry_next_at <= clock_timestamp() OR (r.retry_next_at IS NULL AND r.submission_started_at + ($2::integer * interval '1 second') <= clock_timestamp()))
+                   AND (r.retry_leased_until IS NULL OR r.retry_leased_until <= clock_timestamp())
+                 ORDER BY COALESCE(r.retry_next_at, r.submission_started_at), r.did
+                 LIMIT 1 FOR UPDATE OF r SKIP LOCKED
+               )
+               UPDATE plc_registrations r SET retry_token = $1,
+                 retry_leased_until = clock_timestamp() + interval '60 seconds',
+                 retry_next_at = clock_timestamp() + ($2::integer * interval '1 second')
+               FROM candidate c WHERE r.did = c.did RETURNING r.did, r.cid
+               """,
+               """
+               WITH candidate AS (
+                 SELECT r.did FROM plc_registrations r
+                 JOIN repositories h ON h.did = r.did
+                 WHERE r.retry_eligible AND r.submission_started_at IS NOT NULL AND r.completed_at IS NULL
+                   AND h.status = 'deactivated'
+                   AND (r.retry_next_at <= strftime('%Y-%m-%dT%H:%M:%f000', 'now') OR (r.retry_next_at IS NULL AND strftime('%Y-%m-%dT%H:%M:%f000', r.submission_started_at, '+' || ?2 || ' seconds') <= strftime('%Y-%m-%dT%H:%M:%f000', 'now')))
+                   AND (r.retry_leased_until IS NULL OR r.retry_leased_until <= strftime('%Y-%m-%dT%H:%M:%f000', 'now'))
+                 ORDER BY COALESCE(r.retry_next_at, r.submission_started_at), r.did
+                 LIMIT 1
+               )
+               UPDATE plc_registrations AS r SET retry_token = ?1,
+                 retry_leased_until = strftime('%Y-%m-%dT%H:%M:%f000', 'now', '+60 seconds'),
+                 retry_next_at = strftime('%Y-%m-%dT%H:%M:%f000', 'now', '+' || ?2 || ' seconds')
+               FROM candidate c WHERE r.did = c.did RETURNING did, cid
+               """
+             ),
+             [Atoll.Database.blob(token), delay],
              log: false
            )
          end) do
@@ -93,8 +111,11 @@ defmodule Atoll.Accounts.SignupRetries do
   defp release(did, token) do
     case bounded(fn ->
            Repo.query!(
-             "UPDATE plc_registrations SET retry_leased_until = clock_timestamp() WHERE did = $1 AND retry_token = $2",
-             [did, token],
+             Atoll.Database.sql(
+               "UPDATE plc_registrations SET retry_leased_until = clock_timestamp() WHERE did = $1 AND retry_token = $2",
+               "UPDATE plc_registrations SET retry_leased_until = strftime('%Y-%m-%dT%H:%M:%f000', 'now') WHERE did = ?1 AND retry_token = ?2"
+             ),
+             [did, Atoll.Database.blob(token)],
              log: false
            )
          end) do
@@ -109,11 +130,18 @@ defmodule Atoll.Accounts.SignupRetries do
     unless Repo.in_transaction?(),
       do: raise(ArgumentError, "signup retry fencing requires a transaction")
 
-    Repo.query!("SELECT did FROM plc_registrations WHERE did = $1 FOR UPDATE", [did], log: false)
+    Repo.query!(
+      "SELECT did FROM plc_registrations WHERE did = $1" <> Atoll.Database.for_update(),
+      [did],
+      log: false
+    )
 
     case Repo.query!(
-           "SELECT 1 FROM plc_registrations WHERE did = $1 AND retry_token = $2 AND retry_leased_until > clock_timestamp()",
-           [did, token],
+           Atoll.Database.sql(
+             "SELECT 1 FROM plc_registrations WHERE did = $1 AND retry_token = $2 AND retry_leased_until > clock_timestamp()",
+             "SELECT 1 FROM plc_registrations WHERE did = ?1 AND retry_token = ?2 AND retry_leased_until > strftime('%Y-%m-%dT%H:%M:%f000', 'now')"
+           ),
+           [did, Atoll.Database.blob(token)],
            log: false
          ) do
       %{num_rows: 1} -> :ok
@@ -123,11 +151,11 @@ defmodule Atoll.Accounts.SignupRetries do
 
   defp bounded(fun) do
     Repo.transaction(fn ->
-      Repo.query!("SET LOCAL lock_timeout = '1s'")
-      Repo.query!("SET LOCAL statement_timeout = '5s'")
+      Atoll.Database.limits!(1_000, 5_000)
       fun.()
     end)
   rescue
-    _ in [Postgrex.Error, DBConnection.ConnectionError] -> {:error, :signup_retry_unavailable}
+    _ in [Exqlite.Error, Postgrex.Error, DBConnection.ConnectionError] ->
+      {:error, :signup_retry_unavailable}
   end
 end

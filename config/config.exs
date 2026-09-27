@@ -7,6 +7,30 @@
 # General application configuration
 import Config
 
+# Ecto adapters are compiled into the repository; keep this set for every Mix command.
+database =
+  case System.get_env("ATOLL_DATABASE", "postgres") do
+    value when value in ["postgres", "postgresql"] -> :postgres
+    value when value in ["sqlite", "sqlite3"] -> :sqlite
+    _ -> raise "ATOLL_DATABASE must be postgres or sqlite"
+  end
+
+config :atoll, :database, database
+
+if database == :sqlite do
+  config :atoll, Atoll.Repo,
+    priv: "priv/sqlite_repo",
+    database: Path.expand("atoll_#{config_env()}.sqlite3"),
+    # Serialize access at checkout as well as in SQLite: avoid competing writers
+    # occupying driver threads while the current writer needs to finish.
+    pool_size: 1,
+    journal_mode: :wal,
+    synchronous: :full,
+    foreign_keys: :on,
+    busy_timeout: 5_000,
+    default_transaction_mode: :immediate
+end
+
 config :tailwind,
   version: "4.3.0",
   atoll: [

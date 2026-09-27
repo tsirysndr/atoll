@@ -3,14 +3,16 @@ import Config
 config :atoll, :development_identity, true
 
 # Configure your database
-config :atoll, Atoll.Repo,
-  username: "postgres",
-  password: "postgres",
-  hostname: "localhost",
-  database: "atoll_dev",
-  stacktrace: true,
-  show_sensitive_data_on_connection_error: true,
-  pool_size: 10
+if System.get_env("ATOLL_DATABASE", "postgres") in ["postgres", "postgresql"] do
+  config :atoll, Atoll.Repo,
+    username: "postgres",
+    password: "postgres",
+    hostname: "localhost",
+    database: "atoll_dev",
+    stacktrace: true,
+    show_sensitive_data_on_connection_error: true,
+    pool_size: 10
+end
 
 # For development, we disable any cache and enable
 # debugging and code reloading.

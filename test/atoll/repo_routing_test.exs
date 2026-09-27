@@ -1,5 +1,6 @@
 defmodule Atoll.RepoRoutingTest do
   use Atoll.DataCase, async: false
+  @moduletag :postgres
   alias Atoll.Accounts.Profile
 
   setup do

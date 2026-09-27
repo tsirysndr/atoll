@@ -39,6 +39,42 @@ defmodule Atoll.Database do
   def adapter_from_env!(value),
     do: raise(ArgumentError, "ATOLL_DATABASE must be postgres or sqlite, got: #{inspect(value)}")
 
+  def error_code(%Postgrex.Error{postgres: postgres}), do: postgres[:code]
+
+  def error_code(%Exqlite.Error{message: message})
+      when message in [
+             "Database busy",
+             "Database is busy",
+             "database is locked",
+             "database is busy"
+           ],
+      do: :lock_not_available
+
+  def error_code(%Exqlite.Error{}), do: :other
+
+  def blob(value), do: if(@adapter == :sqlite, do: {:blob, value}, else: value)
+
+  @doc "Select SQL for the compiled adapter. Only use with static, audited SQL."
+  def sql(postgres, sqlite), do: if(@adapter == :postgres, do: postgres, else: sqlite)
+
+  defmacro sql_fragment(postgres, sqlite, args \\ [], sqlite_args \\ nil) do
+    sql = if @adapter == :postgres, do: postgres, else: sqlite
+    args = if @adapter == :sqlite and sqlite_args, do: sqlite_args, else: args
+
+    quote do
+      fragment(unquote(sql), unquote_splicing(args))
+    end
+  end
+
+  def read_limits!(lock_ms \\ 1_000, statement_ms \\ 5_000) do
+    if @adapter == :postgres do
+      Atoll.Repo.read_query!("SET LOCAL lock_timeout = '#{lock_ms}ms'", [], log: false)
+      Atoll.Repo.read_query!("SET LOCAL statement_timeout = '#{statement_ms}ms'", [], log: false)
+    end
+
+    :ok
+  end
+
   if @adapter == :postgres do
     @doc "Bound the current transaction's lock wait and statement duration."
     def limits!(lock_ms \\ 1_000, statement_ms \\ 5_000) do

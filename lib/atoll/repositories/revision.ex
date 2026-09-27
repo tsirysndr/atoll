@@ -7,7 +7,7 @@ defmodule Atoll.Repositories.Revision do
     field :head, :binary
     field :signing_curve, Ecto.Enum, values: [:k256, :p256]
     field :signing_public_key, :binary
-    field :blocks, {:array, :binary}
+    field :blocks, Atoll.BinaryArray
     timestamps(type: :utc_datetime_usec, updated_at: false)
   end
 end

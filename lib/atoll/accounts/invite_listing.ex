@@ -176,15 +176,14 @@ defmodule Atoll.Accounts.InviteListing do
 
   defp read(fun) do
     Repo.transaction(fn ->
-      Repo.query!("SET LOCAL lock_timeout = '1s'")
-      Repo.query!("SET LOCAL statement_timeout = '5s'")
+      Atoll.Database.limits!(1_000, 5_000)
       # Shared mutation order gives a consistent count/history view without lock upgrades.
       Events.lock!()
       fun.()
     end)
   rescue
-    e in Postgrex.Error ->
-      if e.postgres[:code] in [:lock_not_available, :query_canceled],
+    e in [Postgrex.Error, Exqlite.Error] ->
+      if Atoll.Database.error_code(e) in [:lock_not_available, :query_canceled],
         do: {:error, :admin_busy},
         else: reraise(e, __STACKTRACE__)
   end

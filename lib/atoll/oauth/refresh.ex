@@ -54,7 +54,7 @@ defmodule Atoll.OAuth.Refresh do
         end
     end
   rescue
-    _ in [Postgrex.Error, DBConnection.ConnectionError] ->
+    _ in [Exqlite.Error, Postgrex.Error, DBConnection.ConnectionError] ->
       {:error, :oauth_refresh_store_unavailable}
   end
 
@@ -148,8 +148,7 @@ defmodule Atoll.OAuth.Refresh do
 
   defp commit(candidate, digest, policy, scope, sets) do
     Repo.transaction(fn ->
-      Repo.query!("SET LOCAL lock_timeout = '1s'")
-      Repo.query!("SET LOCAL statement_timeout = '5s'")
+      Atoll.Database.limits!(1_000, 5_000)
       head = Repo.one(from h in Head, where: h.did == ^candidate.did, lock: "FOR SHARE")
 
       if is_nil(head) or head.status != :active or Signup.pending?(head.did),
@@ -272,7 +271,7 @@ defmodule Atoll.OAuth.Refresh do
   end
 
   defp clock! do
-    %{rows: [[now]]} = Repo.query!("SELECT floor(extract(epoch FROM clock_timestamp()))::bigint")
+    now = Atoll.Database.now_seconds!()
     now
   end
 

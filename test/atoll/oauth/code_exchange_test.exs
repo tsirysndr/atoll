@@ -215,6 +215,7 @@ defmodule Atoll.OAuth.CodeExchangeTest do
 
   @tag :independent
   test "concurrent code exchanges issue once then revoke on verified reuse", c do
+    Atoll.DataCase.independent_connections()
     did = "did:plc:exchange#{System.unique_integer([:positive])}"
     key = SigningKey.generate()
     {:ok, tree} = Atoll.MST.new()

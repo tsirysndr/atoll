@@ -80,8 +80,8 @@ defmodule Atoll.Accounts.SigningKeyReservations do
       error -> error
     end
   rescue
-    error in Postgrex.Error ->
-      if error.postgres[:code] in [:lock_not_available, :query_canceled],
+    error in [Postgrex.Error, Exqlite.Error] ->
+      if Atoll.Database.error_code(error) in [:lock_not_available, :query_canceled],
         do: {:error, :admin_busy},
         else: reraise(error, __STACKTRACE__)
   end
@@ -155,14 +155,13 @@ defmodule Atoll.Accounts.SigningKeyReservations do
       {:error, :invalid_rewrap_options}
     end
   rescue
-    _ in Postgrex.Error -> {:error, :rewrap_failed}
+    _ in [Postgrex.Error, Exqlite.Error] -> {:error, :rewrap_failed}
   end
 
   def rewrap(_, _), do: {:error, :invalid_rewrap_options}
 
   defp lock! do
-    Repo.query!("SET LOCAL lock_timeout = '1s'")
-    Repo.query!("SET LOCAL statement_timeout = '5s'")
+    Atoll.Database.limits!(1_000, 5_000)
     Events.lock!()
   end
 

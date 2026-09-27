@@ -285,7 +285,7 @@ defmodule Atoll.Accounts.Authenticator do
     do: Repo.one(from(f in TOTPFactor, where: f.did == ^did, lock: "FOR UPDATE"), log: false)
 
   defp clock! do
-    %{rows: [[now]]} = Repo.query!("SELECT floor(extract(epoch FROM clock_timestamp()))::bigint")
+    now = Atoll.Database.now_seconds!()
     now
   end
 
@@ -296,8 +296,7 @@ defmodule Atoll.Accounts.Authenticator do
       {:error, :totp_inside_transaction}
     else
       case Repo.transaction(fn ->
-             Repo.query!("SET LOCAL lock_timeout = '1s'")
-             Repo.query!("SET LOCAL statement_timeout = '5s'")
+             Atoll.Database.limits!(1_000, 5_000)
              fun.()
            end) do
         {:ok, result} -> result
@@ -305,6 +304,7 @@ defmodule Atoll.Accounts.Authenticator do
       end
     end
   rescue
-    _ in [Postgrex.Error, DBConnection.ConnectionError] -> {:error, :totp_store_unavailable}
+    _ in [Exqlite.Error, Postgrex.Error, DBConnection.ConnectionError] ->
+      {:error, :totp_store_unavailable}
   end
 end

@@ -32,7 +32,7 @@ defmodule Mix.Tasks.Atoll.Blobs.Collect do
         Mix.raise("Blob collection stopped; inspect history and queue state before retrying.")
     end
   rescue
-    _ in [Postgrex.Error, DBConnection.ConnectionError, Ecto.ConstraintError] ->
+    _ in [Exqlite.Error, Postgrex.Error, DBConnection.ConnectionError, Ecto.ConstraintError] ->
       Mix.raise(
         "Blob collection stopped; earlier items or remote deletions may have completed. Inspect history and queue state before retrying."
       )

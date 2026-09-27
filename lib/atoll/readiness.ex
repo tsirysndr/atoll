@@ -31,7 +31,8 @@ defmodule Atoll.Readiness do
        else: :unavailable
   rescue
     # Missing repo processes and connection failures must still produce a health response.
-    _ in [RuntimeError, DBConnection.ConnectionError, Postgrex.Error] -> :unavailable
+    _ in [RuntimeError, DBConnection.ConnectionError, Postgrex.Error, Exqlite.Error] ->
+      :unavailable
   catch
     :exit, _ -> :unavailable
   end

@@ -2,7 +2,7 @@
 
 [![ci](https://github.com/tsirysndr/atoll/actions/workflows/test.yml/badge.svg)](https://github.com/tsirysndr/atoll/actions/workflows/test.yml)
 
-An AT Protocol Personal Data Server (PDS), built with Elixir, Phoenix, and PostgreSQL.
+An AT Protocol Personal Data Server (PDS), built with Elixir, Phoenix, and PostgreSQL or SQLite.
 
 Atoll provides account hosting, signed repositories, blob storage, the
 repository firehose, OAuth, moderation tooling, and operator workflows,
@@ -43,7 +43,7 @@ deployment.
 
 ## Quick start (development)
 
-Requires Elixir/OTP (see `mix.exs`) and PostgreSQL.
+Requires Elixir/OTP (see `mix.exs`) and PostgreSQL, or use [SQLite](docs/sqlite.md) for a single-node server.
 
 ```sh
 mix setup        # deps, database, assets

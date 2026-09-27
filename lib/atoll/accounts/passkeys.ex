@@ -165,7 +165,8 @@ defmodule Atoll.Accounts.Passkeys do
       )
     end
   rescue
-    _ in [Postgrex.Error, DBConnection.ConnectionError] -> {:error, :passkey_store_unavailable}
+    _ in [Exqlite.Error, Postgrex.Error, DBConnection.ConnectionError] ->
+      {:error, :passkey_store_unavailable}
   end
 
   defp admit_login(browser, reference, response) do
@@ -314,7 +315,7 @@ defmodule Atoll.Accounts.Passkeys do
   end
 
   defp issue!(context, browser, attrs) do
-    Repo.query!("SELECT pg_advisory_xact_lock($1)", [@lock])
+    Atoll.Database.serialize_writes!(@lock)
     now = clock!()
 
     expired =
@@ -403,7 +404,7 @@ defmodule Atoll.Accounts.Passkeys do
   defp hash(bytes), do: :crypto.hash(:sha256, bytes)
 
   defp clock! do
-    %{rows: [[now]]} = Repo.query!("SELECT floor(extract(epoch FROM clock_timestamp()))::bigint")
+    now = Atoll.Database.now_seconds!()
     now
   end
 
@@ -412,8 +413,7 @@ defmodule Atoll.Accounts.Passkeys do
       {:error, :passkey_inside_transaction}
     else
       case Repo.transaction(fn ->
-             Repo.query!("SET LOCAL lock_timeout = '1s'")
-             Repo.query!("SET LOCAL statement_timeout = '5s'")
+             Atoll.Database.limits!(1_000, 5_000)
              fun.()
            end) do
         {:ok, result} -> result
@@ -421,6 +421,7 @@ defmodule Atoll.Accounts.Passkeys do
       end
     end
   rescue
-    _ in [Postgrex.Error, DBConnection.ConnectionError] -> {:error, :passkey_store_unavailable}
+    _ in [Exqlite.Error, Postgrex.Error, DBConnection.ConnectionError] ->
+      {:error, :passkey_store_unavailable}
   end
 end

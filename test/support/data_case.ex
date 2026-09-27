@@ -15,6 +15,7 @@ defmodule Atoll.DataCase do
   """
 
   use ExUnit.CaseTemplate
+  require Atoll.Database
 
   using do
     quote do
@@ -37,7 +38,28 @@ defmodule Atoll.DataCase do
   """
   def setup_sandbox(tags) do
     pid = Ecto.Adapters.SQL.Sandbox.start_owner!(Atoll.Repo, shared: not tags[:async])
-    on_exit(fn -> Ecto.Adapters.SQL.Sandbox.stop_owner(pid) end)
+
+    if Atoll.Database.sqlite?() do
+      # Sandbox forces BEGIN DEFERRED regardless of the repo default. Acquire
+      # its writer lock before any reads so it cannot retain a stale WAL snapshot
+      # across another connection's cleanup commit.
+      Atoll.Repo.query!("UPDATE event_retention_state SET cursor_floor = cursor_floor WHERE 0")
+    end
+
+    Process.put({__MODULE__, :sandbox_owner}, pid)
+    on_exit({__MODULE__, :sandbox}, fn -> Ecto.Adapters.SQL.Sandbox.stop_owner(pid) end)
+  end
+
+  # Independent-connection tests use only values from their sandbox fixtures.
+  # Roll those fixtures back before committing separate rows on SQLite, where
+  # a sandbox transaction otherwise holds the database's sole writer lock.
+  def independent_connections do
+    if Atoll.Database.sqlite?() do
+      on_exit({__MODULE__, :sandbox}, fn -> :ok end)
+      Ecto.Adapters.SQL.Sandbox.stop_owner(Process.get({__MODULE__, :sandbox_owner}))
+    end
+
+    :ok
   end
 
   @doc """

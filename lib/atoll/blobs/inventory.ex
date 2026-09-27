@@ -1,5 +1,6 @@
 defmodule Atoll.Blobs.Inventory do
   @moduledoc "Read-only bounded inventory of current S3 objects under Atoll's blobs/ prefix."
+  import Ecto.Query
   alias Atoll.{CID, Repo}
   alias Atoll.Blobs.S3
 
@@ -14,18 +15,19 @@ defmodule Atoll.Blobs.Inventory do
 
       {:ok, states} =
         Repo.read_transaction(fn ->
-          Repo.read_query!("SET LOCAL statement_timeout = '5s'")
-          Repo.read_query!("SET LOCAL lock_timeout = '1s'")
+          Atoll.Database.read_limits!()
 
-          Repo.read_query!(
-            """
-            SELECT cid, 'owned' FROM repository_blobs WHERE backend = 's3' AND cid = ANY($1::bytea[])
-            UNION
-            SELECT cid, 'pending_cleanup' FROM blob_cleanup_jobs WHERE backend = 's3' AND cid = ANY($1::bytea[])
-            """,
-            [cids],
-            log: false
-          ).rows
+          owned =
+            from b in Atoll.Blobs.Blob,
+              where: b.backend == :s3 and b.cid in ^cids,
+              select: [b.cid, "owned"]
+
+          pending =
+            from j in Atoll.Blobs.CleanupJob,
+              where: j.backend == :s3 and j.cid in ^cids,
+              select: [j.cid, "pending_cleanup"]
+
+          Repo.all(union(owned, ^pending), log: false)
         end)
 
       owned = for [cid, "owned"] <- states, into: MapSet.new(), do: cid
@@ -54,7 +56,8 @@ defmodule Atoll.Blobs.Inventory do
       _ -> {:error, :invalid_inventory_query}
     end
   rescue
-    _ in [Postgrex.Error, DBConnection.ConnectionError] -> {:error, :inventory_unavailable}
+    _ in [Exqlite.Error, Postgrex.Error, DBConnection.ConnectionError] ->
+      {:error, :inventory_unavailable}
   end
 
   defp cid("blobs/" <> text) do

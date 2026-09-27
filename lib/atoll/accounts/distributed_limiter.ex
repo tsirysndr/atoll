@@ -12,22 +12,21 @@ defmodule Atoll.Accounts.DistributedLimiter do
       {:error, _} -> unavailable()
     end
   rescue
-    _ in [Postgrex.Error, DBConnection.ConnectionError] -> unavailable()
+    _ in [Exqlite.Error, Postgrex.Error, DBConnection.ConnectionError] -> unavailable()
   catch
     :exit, _ -> unavailable()
   end
 
   defp check!(digest, limit) do
-    Repo.query!("SET LOCAL lock_timeout = '1s'")
-    Repo.query!("SET LOCAL statement_timeout = '2s'")
+    Atoll.Database.limits!(1_000, 2_000)
     # One cluster-wide lock makes quota admission and the global storage cap atomic.
     # It is distinct from repository sequencing and never acquires repository locks.
-    Repo.query!("SELECT pg_advisory_xact_lock($1)", [@lock], log: false)
-    %{rows: [[now]]} = Repo.query!("SELECT floor(extract(epoch FROM clock_timestamp()))::bigint")
+    Atoll.Database.serialize_writes!(@lock)
+    now = Atoll.Database.now_seconds!()
 
     case Repo.query!(
            "SELECT count, expires_at FROM request_rate_buckets WHERE digest = $1",
-           [digest],
+           [Atoll.Database.blob(digest)],
            log: false
          ).rows do
       [[count, expiry]] when expiry > now and count >= limit ->
@@ -36,7 +35,7 @@ defmodule Atoll.Accounts.DistributedLimiter do
       [[_count, expiry]] when expiry > now ->
         Repo.query!(
           "UPDATE request_rate_buckets SET count = count + 1 WHERE digest = $1",
-          [digest],
+          [Atoll.Database.blob(digest)],
           log: false
         )
 
@@ -44,8 +43,11 @@ defmodule Atoll.Accounts.DistributedLimiter do
 
       [[_, _]] ->
         Repo.query!(
-          "UPDATE request_rate_buckets SET count = 1, expires_at = $2 WHERE digest = $1",
-          [digest, now + 300],
+          Atoll.Database.sql(
+            "UPDATE request_rate_buckets SET count = 1, expires_at = $2 WHERE digest = $1",
+            "UPDATE request_rate_buckets SET count = 1, expires_at = ?2 WHERE digest = ?1"
+          ),
+          [Atoll.Database.blob(digest), now + 300],
           log: false
         )
 
@@ -61,11 +63,18 @@ defmodule Atoll.Accounts.DistributedLimiter do
     # statistics. An IN subquery can choose a repeated nested-loop semi join.
     # Reclaim at most one batch before admitting a new key. Idle storage stays bounded.
     Repo.query!(
-      """
-      DELETE FROM request_rate_buckets WHERE digest = ANY(ARRAY(
-        SELECT digest FROM request_rate_buckets WHERE expires_at <= $1 ORDER BY expires_at, digest LIMIT 1000
-      ))
-      """,
+      Atoll.Database.sql(
+        """
+        DELETE FROM request_rate_buckets WHERE digest = ANY(ARRAY(
+          SELECT digest FROM request_rate_buckets WHERE expires_at <= $1 ORDER BY expires_at, digest LIMIT 1000
+        ))
+        """,
+        """
+        DELETE FROM request_rate_buckets WHERE digest IN (
+          SELECT digest FROM request_rate_buckets WHERE expires_at <= $1 ORDER BY expires_at, digest LIMIT 1000
+        )
+        """
+      ),
       [now],
       log: false
     )
@@ -75,7 +84,7 @@ defmodule Atoll.Accounts.DistributedLimiter do
     if count < @capacity do
       Repo.query!(
         "INSERT INTO request_rate_buckets (digest, count, expires_at) VALUES ($1, 1, $2)",
-        [digest, now + 300],
+        [Atoll.Database.blob(digest), now + 300],
         log: false
       )
 

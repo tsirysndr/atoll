@@ -1,4 +1,5 @@
 defmodule Atoll.OAuth.KeyChecks do
+  require Atoll.Database
   @moduledoc "Bounded cursor sweep of confidential sessions using fresh public client key sets."
   import Ecto.Query
   alias Atoll.Repo
@@ -52,7 +53,7 @@ defmodule Atoll.OAuth.KeyChecks do
       end
     end
   rescue
-    _ in [Postgrex.Error, DBConnection.ConnectionError] ->
+    _ in [Exqlite.Error, Postgrex.Error, DBConnection.ConnectionError] ->
       {:error, :oauth_key_checks_store_unavailable}
   end
 
@@ -61,7 +62,12 @@ defmodule Atoll.OAuth.KeyChecks do
       from s in Session,
         where:
           not is_nil(s.client_binding) and
-            s.expires_at > fragment("extract(epoch FROM clock_timestamp())"),
+            s.expires_at >
+              Atoll.Database.sql_fragment(
+                "extract(epoch FROM clock_timestamp())",
+                "unixepoch('now')",
+                []
+              ),
         order_by: [asc: s.client_id, asc: s.id]
 
     query =
@@ -95,8 +101,7 @@ defmodule Atoll.OAuth.KeyChecks do
       {:ok, 0}
     else
       Repo.transaction(fn ->
-        Repo.query!("SET LOCAL lock_timeout = '1s'")
-        Repo.query!("SET LOCAL statement_timeout = '5s'")
+        Atoll.Database.limits!(1_000, 5_000)
         dids = Enum.map(missing, & &1.did) |> Enum.uniq() |> Enum.sort()
         sources = Enum.map(missing, & &1.source_session_id) |> Enum.uniq() |> Enum.sort()
         Repo.all(from(h in Head, where: h.did in ^dids, order_by: h.did, lock: "FOR SHARE"))
@@ -115,8 +120,7 @@ defmodule Atoll.OAuth.KeyChecks do
             log: false
           )
 
-        %{rows: [[now]]} =
-          Repo.query!("SELECT floor(extract(epoch FROM clock_timestamp()))::bigint")
+        now = Atoll.Database.now_seconds!()
 
         revoked =
           Enum.filter(current, fn session ->

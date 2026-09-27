@@ -214,6 +214,7 @@ defmodule Atoll.OAuth.AuthorizationCodesTest do
   end
 
   test "independent concurrent approvals consume a pushed request only once", c do
+    Atoll.DataCase.independent_connections()
     # Seed a committed request without retaining PAR's advisory lock in the
     # outer sandbox transaction; all contenders must acquire real DB locks.
     snapshot = %PushedRequest{

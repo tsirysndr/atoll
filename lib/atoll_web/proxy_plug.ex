@@ -115,7 +115,7 @@ defmodule AtollWeb.ProxyPlug do
       {:error, reason} -> failure(conn, reason, oauth?)
     end
   rescue
-    _ in [Postgrex.Error, DBConnection.ConnectionError] ->
+    _ in [Exqlite.Error, Postgrex.Error, DBConnection.ConnectionError] ->
       error(conn, 503, "ServiceUnavailable", "Proxy authorization is temporarily unavailable.")
   end
 

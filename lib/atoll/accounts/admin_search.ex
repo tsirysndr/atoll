@@ -11,8 +11,7 @@ defmodule Atoll.Accounts.AdminSearch do
          {:ok, limit} <- page_size(params["limit"]),
          {:ok, cursor} <- cursor(params["cursor"], email) do
       Repo.read_transaction(fn ->
-        Repo.read_query!("SET LOCAL lock_timeout = '1s'")
-        Repo.read_query!("SET LOCAL statement_timeout = '5s'")
+        Atoll.Database.read_limits!(1_000, 5_000)
 
         query =
           from p in Profile,
@@ -36,8 +35,8 @@ defmodule Atoll.Accounts.AdminSearch do
       _ -> {:error, :invalid_request}
     end
   rescue
-    error in Postgrex.Error ->
-      if error.postgres[:code] in [:lock_not_available, :query_canceled],
+    error in [Postgrex.Error, Exqlite.Error] ->
+      if Atoll.Database.error_code(error) in [:lock_not_available, :query_canceled],
         do: {:error, :admin_busy},
         else: reraise(error, __STACKTRACE__)
 

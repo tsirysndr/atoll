@@ -106,7 +106,9 @@ defmodule Atoll.PasskeyConcurrencyTest do
       for task <- tasks, do: send(task.pid, :go)
       results = Enum.map(tasks, &Task.await(&1, 10_000))
       assert Enum.count(results, &match?({:ok, _}, &1)) == 1
-      assert Enum.count(results, &(&1 == {:error, :invalid_passkey})) == 1
+
+      assert Enum.count(results, &(&1 == {:error, :invalid_passkey})) == 1,
+             inspect(Enum.filter(results, &match?({:error, _}, &1)))
 
       Sandbox.unboxed_run(Repo, fn ->
         assert Repo.aggregate(from(k in Passkey, where: k.did == ^did), :count) == 1

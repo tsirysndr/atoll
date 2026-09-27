@@ -11,8 +11,7 @@ defmodule Atoll.KeyRewrap do
     if is_nil(after_did) or Syntax.did?(after_did) do
       with {:ok, master} <- MasterKeys.active() do
         Repo.transaction(fn ->
-          Repo.query!("SET LOCAL lock_timeout = '1s'")
-          Repo.query!("SET LOCAL statement_timeout = '5s'")
+          Atoll.Database.limits!(1_000, 5_000)
           Events.lock!()
           query = from h in Head, order_by: h.did, limit: ^(limit + 1)
           query = if after_did, do: from(h in query, where: h.did > ^after_did), else: query
@@ -70,7 +69,7 @@ defmodule Atoll.KeyRewrap do
       {:error, :invalid_rewrap_options}
     end
   rescue
-    _ in Postgrex.Error -> {:error, :rewrap_failed}
+    _ in [Postgrex.Error, Exqlite.Error] -> {:error, :rewrap_failed}
   end
 
   def batch(_, _), do: {:error, :invalid_rewrap_options}

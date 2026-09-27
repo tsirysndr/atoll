@@ -39,7 +39,7 @@ defmodule Atoll.OAuth.Revocation do
         end
     end
   rescue
-    _ in [Postgrex.Error, DBConnection.ConnectionError] ->
+    _ in [Exqlite.Error, Postgrex.Error, DBConnection.ConnectionError] ->
       {:error, :oauth_revocation_store_unavailable}
   end
 
@@ -77,8 +77,7 @@ defmodule Atoll.OAuth.Revocation do
     digest = :crypto.hash(:sha256, params["token"])
 
     Repo.transaction(fn ->
-      Repo.query!("SET LOCAL lock_timeout = '1s'")
-      Repo.query!("SET LOCAL statement_timeout = '5s'")
+      Atoll.Database.limits!(1_000, 5_000)
       # Serialize with refresh and exchange, including lookup of rotated tokens.
       PAR.lock!()
       session = find_session(digest)
