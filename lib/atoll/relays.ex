@@ -40,15 +40,54 @@ defmodule Atoll.Relays do
   end
 
   def request_crawl(opts \\ []) do
+    with {:ok, origins, host} <- configured_batch(opts),
+         do: {:ok, Enum.map(origins, &request(&1, host, opts))}
+  end
+
+  @doc "Operator crawl announcement with durable attempt and completion history."
+  def request_crawl_audited(opts \\ []) do
+    if Atoll.Repo.in_transaction?(),
+      do: {:error, :relay_audit_transaction},
+      else: audited_request_crawl(opts)
+  end
+
+  defp audited_request_crawl(opts) do
+    with {:ok, origins, host} <- configured_batch(opts),
+         {:ok, attempt} <-
+           audit(fn -> Atoll.Moderation.Audit.relay_crawl_attempt!(host, origins) end) do
+      # Do not hold database locks during network requests. An interrupted batch
+      # leaves an attempt without a completion, not a claim of remote failure.
+      results = Enum.map(origins, &request(&1, host, opts))
+
+      case audit(fn ->
+             Atoll.Moderation.Audit.relay_crawl_completed!(attempt.id, host, results)
+           end) do
+        {:ok, _} -> {:ok, results}
+        {:error, _} -> {:error, :relay_outcome_audit_unavailable}
+      end
+    end
+  end
+
+  defp audit(function) do
+    Atoll.Repo.transaction(fn ->
+      Atoll.Repo.query!("SET LOCAL lock_timeout = '1s'")
+      Atoll.Repo.query!("SET LOCAL statement_timeout = '5s'")
+      function.()
+    end)
+  rescue
+    _ in [Postgrex.Error, DBConnection.ConnectionError, Ecto.ConstraintError] ->
+      {:error, :relay_audit_unavailable}
+  end
+
+  defp configured_batch(opts) do
     urls = Application.get_env(:atoll, :relay_urls, [])
     hostname = Keyword.get_lazy(opts, :hostname, fn -> hostname(AtollWeb.Endpoint.url()) end)
 
     with {:ok, origins} <- validate(urls),
          true <- origins != [],
          true <- valid_host?(hostname) do
-      {:ok, Enum.map(origins, &request(&1, String.downcase(hostname), opts))}
+      {:ok, origins, String.downcase(hostname)}
     else
-      false -> {:error, :relay_configuration_invalid}
       _ -> {:error, :relay_configuration_invalid}
     end
   end

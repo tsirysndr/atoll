@@ -1,5 +1,5 @@
 defmodule Atoll.RelaysTest do
-  use ExUnit.Case, async: false
+  use Atoll.DataCase, async: false
   alias Atoll.Relays
 
   setup do
@@ -152,4 +152,98 @@ defmodule Atoll.RelaysTest do
   end
 
   defp request, do: Relays.request_crawl(Application.fetch_env!(:atoll, :relay_request_options))
+
+  test "operator audit precedes network calls and links sanitized completion outcomes" do
+    Application.put_env(:atoll, :relay_urls, [
+      "https://RELAY.example.com/",
+      "https://other.example.com"
+    ])
+
+    Req.Test.expect(__MODULE__, fn conn ->
+      refute Repo.in_transaction?()
+      [attempt] = audit_rows()
+      assert attempt.after_state == %{"phase" => "attempt"}
+
+      assert attempt.requested == %{
+               "relays" => ["https://relay.example.com", "https://other.example.com"]
+             }
+
+      Plug.Conn.send_resp(conn, 200, "private success details")
+    end)
+
+    Req.Test.expect(__MODULE__, fn conn ->
+      Plug.Conn.send_resp(conn, 400, ~s({"error":"HostBanned","message":"private reason"}))
+    end)
+
+    assert {:ok, [%{outcome: :accepted}, %{outcome: :host_banned}]} = audited_request()
+    [attempt, completed] = audit_rows()
+    assert completed.requested == %{"attemptId" => Integer.to_string(attempt.id)}
+
+    assert completed.after_state == %{
+             "phase" => "completed",
+             "results" => [
+               %{"relay" => "https://relay.example.com", "outcome" => "accepted"},
+               %{"relay" => "https://other.example.com", "outcome" => "host_banned"}
+             ]
+           }
+
+    for row <- [attempt, completed] do
+      assert row.did == nil
+      assert row.actor == "operator"
+      assert row.operation == "atoll.relays.requestCrawl"
+      assert row.subject == %{"kind" => "relayAnnouncement", "hostname" => "pds.example.com"}
+      refute Jason.encode!([row.requested, row.before_state, row.after_state]) =~ "private"
+    end
+  end
+
+  test "attempt audit failure prevents network requests" do
+    Repo.query!(
+      "ALTER TABLE moderation_audit_entries ADD CONSTRAINT reject_crawl_audit CHECK (operation <> 'atoll.relays.requestCrawl')"
+    )
+
+    Req.Test.stub(__MODULE__, fn _ -> flunk("audit failure must prevent relay requests") end)
+    assert audited_request() == {:error, :relay_audit_unavailable}
+
+    assert_raise Mix.Error, ~r/no relay requests were sent/, fn ->
+      Mix.Tasks.Atoll.Relays.RequestCrawl.run([])
+    end
+
+    assert audit_rows() == []
+  end
+
+  test "completion audit failure preserves the attempt and reports uncertain history" do
+    Repo.query!(
+      "ALTER TABLE moderation_audit_entries ADD CONSTRAINT reject_crawl_completion CHECK (operation <> 'atoll.relays.requestCrawl' OR after_state->>'phase' <> 'completed')"
+    )
+
+    Req.Test.expect(__MODULE__, &Plug.Conn.send_resp(&1, 200, ""))
+
+    assert_raise Mix.Error, ~r/requests were sent, but outcomes could not be audited/, fn ->
+      Mix.Tasks.Atoll.Relays.RequestCrawl.run([])
+    end
+
+    [attempt] = audit_rows()
+    assert attempt.after_state == %{"phase" => "attempt"}
+  end
+
+  test "interrupted batches leave an attempt without claiming completion" do
+    Req.Test.expect(__MODULE__, fn _ -> raise "interrupted transport" end)
+    assert_raise RuntimeError, "interrupted transport", fn -> audited_request() end
+    [attempt] = audit_rows()
+    assert attempt.after_state == %{"phase" => "attempt"}
+  end
+
+  test "configuration failures and nested transactions cannot create misleading attempts" do
+    assert {:ok, {:error, :relay_audit_transaction}} =
+             Repo.transaction(fn -> audited_request() end)
+
+    Application.put_env(:atoll, :relay_urls, ["http://bad.example.com"])
+    assert audited_request() == {:error, :relay_configuration_invalid}
+    assert audit_rows() == []
+  end
+
+  defp audited_request,
+    do: Relays.request_crawl_audited(Application.fetch_env!(:atoll, :relay_request_options))
+
+  defp audit_rows, do: Repo.all(from a in Atoll.Moderation.AuditEntry, order_by: a.id)
 end

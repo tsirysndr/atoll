@@ -4,6 +4,32 @@ defmodule Atoll.Moderation.Audit do
   alias Atoll.{Repo, Syntax}
   alias Atoll.Moderation.AuditEntry
 
+  @doc "Records the normalized public targets before an operator crawl batch is sent."
+  def relay_crawl_attempt!(hostname, origins) do
+    insert!(
+      "atoll.relays.requestCrawl",
+      nil,
+      %{kind: "relayAnnouncement", hostname: hostname},
+      %{relays: origins},
+      %{},
+      %{phase: "attempt"},
+      "operator"
+    )
+  end
+
+  @doc "Records bounded relay outcome labels, never response bodies or request credentials."
+  def relay_crawl_completed!(attempt_id, hostname, results) do
+    insert!(
+      "atoll.relays.requestCrawl",
+      nil,
+      %{kind: "relayAnnouncement", hostname: hostname},
+      %{attemptId: Integer.to_string(attempt_id)},
+      %{phase: "attempt"},
+      %{phase: "completed", results: results},
+      "operator"
+    )
+  end
+
   @doc "Records expired-session maintenance without session identifiers or token material."
   def session_cleanup!(limit, cutoff, count, actor) do
     insert!(

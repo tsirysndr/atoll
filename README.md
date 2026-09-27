@@ -766,6 +766,7 @@ locking protects shared objects when collectors overlap.
 - [x] PostgreSQL-coordinated automatic identity refreshes with expiring leases and publication fencing.
 - [ ] Remaining authenticated identity-management endpoints.
 - [x] Configurable operator crawl announcements to relay `com.atproto.sync.requestCrawl` endpoints.
+- [x] Durable operator crawl attempt/completion audit records, with no relay request if attempt recording fails.
 - [x] Opt-in supervised periodic crawl announcements to configured relays.
 - [ ] Automatic relay discovery and federation interoperability tests.
 - [x] `com.atproto.server.getServiceAuth` issues short-lived account-signed service JWTs.
@@ -2806,6 +2807,22 @@ a request. JSON output reports `accepted`, `host_banned`, `unavailable`, or
 `rejected` per relay without copying upstream messages. The command exits with an
 error if any relay does not accept the request. Outcome telemetry uses
 `[:atoll, :relay, :crawl]` with a count and outcome only.
+
+The operator command uses `Atoll.Relays.request_crawl_audited/1` to record a
+server-wide `atoll.relays.requestCrawl` audit attempt before sending. The record
+contains the normalized PDS hostname and configured relay origins. A separate
+completion links to the attempt ID and stores only the bounded per-relay outcome
+labels, without response bodies or credentials. Read these entries through
+`mix atoll.moderation.history` without a DID filter. Invalid configuration creates
+no attempt, and failure to persist the attempt prevents network requests.
+
+Network calls run outside the audit transactions. A crash, interruption or failure
+to record completion can leave an attempt without completion even if requests
+reached relays; this means the outcome is unknown. The CLI distinguishes a failed
+attempt record from failed outcome recording and does not retry automatically.
+The audited API refuses calls inside an existing database transaction so the
+attempt can commit before sending. Periodic announcements continue using their
+existing outcome telemetry rather than creating recurring operator audit entries.
 
 Acceptance means the relay accepted the request; it does not prove that it has
 connected, indexed repositories, or satisfied its hosting policies. Crawling requires
