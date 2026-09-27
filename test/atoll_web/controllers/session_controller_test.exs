@@ -178,6 +178,11 @@ defmodule AtollWeb.SessionControllerTest do
       assert %{"error" => "InvalidRequest"} = login(conn, override) |> json_response(400)
     end
 
+    # Clients that send optional factors as empty strings still authenticate.
+    for override <- [%{"authFactorToken" => ""}, %{"totpCode" => ""}] do
+      assert login(conn, override) |> json_response(200)
+    end
+
     Application.delete_env(:atoll, :session_signing_key)
 
     assert %{"error" => "ServiceUnavailable"} =

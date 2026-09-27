@@ -225,22 +225,30 @@ defmodule AtollWeb.SessionController do
 
   defp credentials(%{"identifier" => identifier, "password" => password} = body)
        when is_binary(identifier) and is_binary(password) do
+    # Clients (e.g. the official SDK) send optional second factors as empty
+    # strings rather than omitting them; treat "" as absent.
+    factor = blank_to_nil(Map.get(body, "authFactorToken"))
+    totp = blank_to_nil(body["totpCode"])
+
     if (Atoll.Syntax.did?(identifier) or Atoll.Syntax.handle?(identifier) or
           match?({:ok, _}, Atoll.Accounts.EmailAddress.normalize(identifier))) and
          byte_size(password) in 8..1024 and String.valid?(password) and
          is_boolean(Map.get(body, "allowTakendown", false)) and
-         valid_factor?(Map.get(body, "authFactorToken")) and valid_totp?(body["totpCode"]),
+         valid_factor?(factor) and valid_totp?(totp),
        do:
          {:ok, identifier, password,
           [
-            auth_factor_token: body["authFactorToken"],
-            totp_code: body["totpCode"],
+            auth_factor_token: factor,
+            totp_code: totp,
             allow_takendown: Map.get(body, "allowTakendown", false)
           ]},
        else: {:error, :invalid_request}
   end
 
   defp credentials(_), do: {:error, :invalid_request}
+
+  defp blank_to_nil(""), do: nil
+  defp blank_to_nil(value), do: value
 
   defp valid_totp?(nil), do: true
 
