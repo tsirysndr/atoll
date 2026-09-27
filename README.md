@@ -133,6 +133,7 @@ record Lexicons or grant access to account data.
 
 - [x] Merkle Search Tree construction, lookup, insertion, and deletion (streamed rebuilds on mutation).
 - [x] Bounded canonical MST builder over sorted entries, integrated with transactional record writes.
+- [x] Partial-tree MST editor with canonical split/merge boundaries and inversion tests.
 - [x] Deterministic MST serialization and reference root CID compatibility tests.
 - [x] P-256 and secp256k1 in-memory key generation, compact low-S signing, and signature verification.
 - [x] Version-3 commit signing and verification with expected-DID and schema checks.
@@ -3445,6 +3446,24 @@ BEAM heap measurement. Public batch/body limits still bound prepared records, an
 the database materializes revision arrays. Buffered MST helper APIs and commit-event
 encoding retain whole-tree metadata; compact commit-event inversion proofs remain
 pending. The broad metadata-memory checklist remains open for those paths.
+
+`Atoll.MST.Editor.apply/4` edits a caller-authenticated partial tree using up to
+200 `{:put, path, cid}` / `{:delete, path}` operations. It lazily reads search paths
+and split/merge boundaries, preserves unvisited subtrees as opaque CID links,
+re-encodes canonical prefixes, and creates/prunes empty intermediate/root nodes
+as needed. Results contain the new root, fetched original nodes and generated
+nodes; nothing is persisted. An encoded-byte accounting limit (default 16 MiB,
+including a per-map-entry allowance) bounds both node caches. Per-node size/entry
+limits and key-derived levels constrain decoding. This is not a precise heap
+measurement or a full-tree audit; the caller must authenticate the starting root
+and validate the intended operation semantics.
+
+Tests compare hundreds of edits with independent full canonical reconstruction,
+exercise root-height changes, and replay a mixed batch's inverse using only its
+fetched boundary proof. Missing required nodes, bad CIDs, malformed operations,
+and exhausted budgets fail closed. This editor is the foundation for compact
+inductive commit proofs; firehose encoding still sends full-tree proofs until
+integration and event-level verification are complete.
 
 `Atoll.Repositories.RecordProof.verify/5` accepts a CAR of at most 2 MiB, an
 expected DID/path, and a trusted signing curve/public key. It checks the first CAR
