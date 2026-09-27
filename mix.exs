@@ -10,6 +10,16 @@ defmodule Atoll.MixProject do
       elixir: "~> 1.17",
       elixirc_paths: elixirc_paths(Mix.env()),
       start_permanent: Mix.env() == :prod,
+      # OTLP transport dependencies must start before either SDK initializes exporters.
+      releases: [
+        atoll: [
+          applications: [
+            opentelemetry_exporter: :permanent,
+            opentelemetry: :permanent,
+            opentelemetry_experimental: :permanent
+          ]
+        ]
+      ],
       aliases: aliases(),
       deps: deps(),
       listeners: [Phoenix.CodeReloader]
@@ -55,9 +65,9 @@ defmodule Atoll.MixProject do
       {:ecto_sqlite3, "~> 0.22"},
       {:telemetry_metrics, "~> 1.0"},
       {:telemetry_poller, "~> 1.0"},
+      {:opentelemetry_exporter, "~> 1.11"},
       {:opentelemetry, "~> 1.7"},
       {:opentelemetry_api, "~> 1.5"},
-      {:opentelemetry_exporter, "~> 1.11"},
       {:opentelemetry_api_experimental, "~> 0.6"},
       {:opentelemetry_experimental, "~> 0.6"},
       {:jason, "~> 1.2"},
