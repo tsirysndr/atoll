@@ -2,6 +2,34 @@ groups:
   - name: atoll
     interval: 1m
     rules:
+      - alert: AtollDatabasePoolWait
+        expr: |
+          (
+            sum by (job, instance) (rate(atoll_database_queue_seconds_total{job="atoll"}[5m]))
+            / sum by (job, instance) (rate(atoll_database_queries_total{job="atoll"}[5m]))
+          ) > 0.1
+          and
+          sum by (job, instance) (rate(atoll_database_queries_total{job="atoll"}[5m])) >= 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Atoll has sustained database pool wait
+
+      - alert: AtollDatabaseLatency
+        expr: |
+          (
+            sum by (job, instance) (rate(atoll_database_duration_seconds_total{job="atoll"}[5m]))
+            / sum by (job, instance) (rate(atoll_database_queries_total{job="atoll"}[5m]))
+          ) > 1
+          and
+          sum by (job, instance) (rate(atoll_database_queries_total{job="atoll"}[5m])) >= 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Atoll has sustained database query latency
+
       - alert: AtollWorkerMissing
         expr: |
           (atoll_worker_expected{job="atoll"} == 1)

@@ -1000,6 +1000,7 @@ observations do not produce duplicate events. The
 - [x] Baseline Prometheus alert rules and operator runbook, with firing/recovery/counter-reset tests in CI.
 - [x] Scheduler progress-deadline gauges for all eight background workers, with an overdue-progress alert and rule tests.
 - [x] Configured-worker expectation and process-presence gauges with missing-worker alerts independent of prior heartbeat observations.
+- [x] Prometheus alerts for sustained database pool wait and total query latency, with volume floors, recovery and counter-reset tests.
 - [ ] Comprehensive operational monitoring and alerting.
 - [x] Offline MST and compact-proof interoperability against pinned `@atproto/repo` 0.8.10 fixtures.
 - [x] Opt-in live HTTP integration with the official ATProto client, including signed repository and record-proof verification.
@@ -1102,7 +1103,7 @@ and probes, and omit requests that terminate without an endpoint stop event.
 Durations are totals, not latency histograms or percentiles. This exporter does
 not install Prometheus, configure alert delivery, or monitor disk capacity,
 backlogs, external services, or backup freshness. Baseline scrape, server-error,
-readiness, worker-failure, missing-worker and overdue-progress alerts are available in
+readiness, database pool/total latency, worker-failure, missing-worker and overdue-progress alerts are available in
 [`ops/prometheus/alerts.yml`](ops/prometheus/alerts.yml), with setup instructions,
 limitations and first-response checks in the
 [operator runbook](ops/prometheus/README.md). Validate them with

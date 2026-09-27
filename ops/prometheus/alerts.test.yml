@@ -298,3 +298,107 @@ tests:
       - eval_time: "5m"
         alertname: "AtollWorkerMissing"
         exp_alerts: []
+  - name: "Database queue and total latency fire per instance and recover"
+    interval: "1m"
+    input_series:
+      - series: 'atoll_database_queries_total{job="atoll",instance="slow:443"}'
+        values: "0+120x12 1560+120x10"
+      - series: 'atoll_database_queue_seconds_total{job="atoll",instance="slow:443"}'
+        values: "0+24x12 288+0x10"
+      - series: 'atoll_database_duration_seconds_total{job="atoll",instance="slow:443"}'
+        values: "0+240x12 2880+0x10"
+      - series: 'atoll_database_queries_total{job="atoll",instance="healthy:443"}'
+        values: "0+120x23"
+      - series: 'atoll_database_queue_seconds_total{job="atoll",instance="healthy:443"}'
+        values: "0+1x23"
+      - series: 'atoll_database_duration_seconds_total{job="atoll",instance="healthy:443"}'
+        values: "0+12x23"
+    alert_rule_test:
+      - eval_time: "4m"
+        alertname: "AtollDatabasePoolWait"
+        exp_alerts: []
+      - eval_time: "4m"
+        alertname: "AtollDatabaseLatency"
+        exp_alerts: []
+      - eval_time: "10m"
+        alertname: "AtollDatabasePoolWait"
+        exp_alerts:
+          - exp_labels:
+              job: "atoll"
+              instance: "slow:443"
+              severity: "warning"
+            exp_annotations:
+              summary: "Atoll has sustained database pool wait"
+      - eval_time: "10m"
+        alertname: "AtollDatabaseLatency"
+        exp_alerts:
+          - exp_labels:
+              job: "atoll"
+              instance: "slow:443"
+              severity: "warning"
+            exp_annotations:
+              summary: "Atoll has sustained database query latency"
+      - eval_time: "22m"
+        alertname: "AtollDatabasePoolWait"
+        exp_alerts: []
+      - eval_time: "22m"
+        alertname: "AtollDatabaseLatency"
+        exp_alerts: []
+  - name: "Database alerts ignore low volume, idle, incomplete and unrelated series"
+    interval: "1m"
+    input_series:
+      - series: 'atoll_database_queries_total{job="atoll",instance="low:443"}'
+        values: "0+6x15"
+      - series: 'atoll_database_queue_seconds_total{job="atoll",instance="low:443"}'
+        values: "0+60x15"
+      - series: 'atoll_database_duration_seconds_total{job="atoll",instance="low:443"}'
+        values: "0+120x15"
+      - series: 'atoll_database_queries_total{job="atoll",instance="idle:443"}'
+        values: "0x15"
+      - series: 'atoll_database_queue_seconds_total{job="atoll",instance="idle:443"}'
+        values: "0x15"
+      - series: 'atoll_database_duration_seconds_total{job="atoll",instance="idle:443"}'
+        values: "0x15"
+      - series: 'atoll_database_queries_total{job="atoll",instance="incomplete:443"}'
+        values: "0+120x15"
+      - series: 'atoll_database_queries_total{job="other",instance="other:443"}'
+        values: "0+120x15"
+      - series: 'atoll_database_queue_seconds_total{job="other",instance="other:443"}'
+        values: "0+120x15"
+      - series: 'atoll_database_duration_seconds_total{job="other",instance="other:443"}'
+        values: "0+240x15"
+    alert_rule_test:
+      - eval_time: "15m"
+        alertname: "AtollDatabasePoolWait"
+        exp_alerts: []
+      - eval_time: "15m"
+        alertname: "AtollDatabaseLatency"
+        exp_alerts: []
+  - name: "Database counter resets do not create latency spikes"
+    interval: "1m"
+    input_series:
+      - series: 'atoll_database_queries_total{job="atoll",instance="restart:443"}'
+        values: "10000+120x6 0+120x10"
+      - series: 'atoll_database_queue_seconds_total{job="atoll",instance="restart:443"}'
+        values: "1000+1x6 0+1x10"
+      - series: 'atoll_database_duration_seconds_total{job="atoll",instance="restart:443"}'
+        values: "10000+12x6 0+12x10"
+    alert_rule_test:
+      - eval_time: "6m"
+        alertname: "AtollDatabasePoolWait"
+        exp_alerts: []
+      - eval_time: "12m"
+        alertname: "AtollDatabasePoolWait"
+        exp_alerts: []
+      - eval_time: "16m"
+        alertname: "AtollDatabasePoolWait"
+        exp_alerts: []
+      - eval_time: "6m"
+        alertname: "AtollDatabaseLatency"
+        exp_alerts: []
+      - eval_time: "12m"
+        alertname: "AtollDatabaseLatency"
+        exp_alerts: []
+      - eval_time: "16m"
+        alertname: "AtollDatabaseLatency"
+        exp_alerts: []

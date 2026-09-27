@@ -31,6 +31,8 @@ Prometheus documents [alert rules and delivery](https://prometheus.io/docs/prome
 | `AtollWorkerFailures` | At least one failed/timed-out worker run or failed item appears in the ten-minute counter increase. | Use the `worker` label to inspect the corresponding worker settings and dependencies. Check retry state and relevant external services before intervening. A successful retry does not immediately clear the historical failure window. |
 | `AtollWorkerProgressOverdue` | An observed worker's scheduled progress deadline stays overdue for two minutes while `up=1`. | Inspect worker/supervisor state, mailbox congestion, VM pressure and database/dependency contention. Compare PDS and Prometheus clocks and account for intentional maintenance. |
 | `AtollWorkerMissing` | A worker enabled in application configuration has no registered local process for two minutes while `up=1`. | Check supervisor failures, startup logs, enable flags and planned maintenance. The exporter does not start or restart workers. |
+| `AtollDatabasePoolWait` | Mean pool queue time exceeds 100 ms per query over five minutes, at one or more queries/second, sustained for five minutes. | Check connection-pool demand, long transactions, global write-lock contention and PostgreSQL capacity. Increasing pool size alone can move contention into PostgreSQL. |
+| `AtollDatabaseLatency` | Mean total Ecto query-event duration exceeds one second over five minutes, at one or more queries/second, sustained for five minutes. | Inspect pool wait, PostgreSQL locks/execution, network latency and result decoding. Total duration is broader than database server execution time. |
 
 The delays above are pending periods after the expression first becomes true;
 rolling windows add recovery lag. Counters are processed with `rate()`/`increase()`
@@ -39,6 +41,16 @@ Worker run and item failures for the same worker produce one alert, while failur
 in different workers stay separate. HTTP totals include completed scrapes and
 probes, and exclude requests without an endpoint stop event. Low-volume HTTP
 errors can intentionally stay below the alert floor.
+
+Database latency rules use per-instance rates of accumulated seconds divided by
+query-event rates, with counter-reset handling before aggregation. They include
+failed query events reported by Ecto, expose no SQL/account labels, and measure
+means rather than tail percentiles. Both can fire when pool wait also raises total
+duration. Tune the one-query/second floor and thresholds for small or bursty PDS
+deployments; low-volume latency, completely stuck requests without query telemetry,
+and missing timing series do not trigger these alerts. Use readiness, scrape and
+database-side monitoring alongside them. The supplied tests cover high latency,
+healthy-instance isolation, recovery, sparse/idle/missing series and counter resets.
 
 Missing readiness/worker series or an idle worker do not trigger a failure alert.
 Disabled workers emit no completion events. A removed scrape target disappears
@@ -89,7 +101,8 @@ database or credentials are used. GitHub Actions runs the same check on pushes.
 `alerts.test.yml` exercises firing delays, recovery, instance isolation, unrelated
 jobs, low volume, idle and missing series, failed items, failed/timed-out runs,
 duplicate suppression, counter resets, stalled progress, idle scheduling and
-deadline resets, absent enabled workers and process-registration recovery. These are synthetic rule tests, not a
+deadline resets, absent enabled workers, process-registration recovery and database
+pool/total latency. These are synthetic rule tests, not a
 live scrape or notification delivery test. With a compatible local `promtool`,
 you can also run `promtool check rules alerts.yml` and
 `promtool test rules alerts.test.yml` from this directory.
