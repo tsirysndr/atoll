@@ -22,7 +22,9 @@ defmodule Atoll.Repositories.Compaction do
         index = EventDependencies.backfill!(did)
 
         if index.incomplete do
-          Map.merge(index, %{pruned: 0})
+          result = Map.merge(index, %{pruned: 0})
+          Atoll.Moderation.Audit.revision_compaction!(head, limit, seconds, [], result)
+          result
         else
           %{rows: [[now]]} = Repo.query!("SELECT clock_timestamp() AT TIME ZONE 'UTC'")
           cutoff = now |> DateTime.from_naive!("Etc/UTC") |> DateTime.add(-seconds, :second)
@@ -46,7 +48,9 @@ defmodule Atoll.Repositories.Compaction do
           {count, _} =
             Repo.delete_all(from r in Revision, where: r.did == ^did and r.rev in ^revisions)
 
-          Map.merge(index, %{pruned: count})
+          result = Map.merge(index, %{pruned: count})
+          Atoll.Moderation.Audit.revision_compaction!(head, limit, seconds, revisions, result)
+          result
         end
       end)
     else

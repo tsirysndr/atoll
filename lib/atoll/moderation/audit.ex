@@ -4,6 +4,21 @@ defmodule Atoll.Moderation.Audit do
   alias Atoll.{Repo, Syntax}
   alias Atoll.Moderation.AuditEntry
 
+  @doc "Records bounded revision pruning and dependency backfill in the maintenance transaction."
+  def revision_compaction!(head, limit, seconds, revisions, result) do
+    state = %{head: Atoll.CID.to_base32(head.head), rev: head.rev}
+
+    insert!(
+      "atoll.revisions.prune",
+      head.did,
+      %{kind: "repositoryHistory", did: head.did},
+      %{limit: limit, retentionSeconds: seconds},
+      Map.put(state, :removedRevisions, revisions),
+      Map.merge(state, result),
+      "operator"
+    )
+  end
+
   @doc "Records completion of pending ordinary work against a verified active directory head."
   def active_update!(row, head, before_handle, handle) do
     insert!(

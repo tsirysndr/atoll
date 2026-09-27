@@ -3060,6 +3060,12 @@ plan a migration window for large histories. Existing revisions receive the migr
 time as their conservative age baseline. New revisions record their insertion time.
 Compaction holds the repository head lock and global event mutation lock, with
 one-second lock and five-second SQL statement timeouts. Failed batches roll back.
+Every successful batch, including no-op and dependency-backfill-only batches,
+records an `atoll.revisions.prune` operator audit entry in that same transaction.
+It includes the requested limit and retention, preserved head/revision, removed
+revision identifiers (at most 100), and indexing/pruning results; no record bodies
+or keys are retained. Audit insertion failure rolls back pruning and indexing.
+Inspect these entries with `mix atoll.moderation.history --did DID`.
 
 Reference counts and quota usage update transactionally. Physical block deletion
 is a separate `atoll.blocks.prune` operation after its own grace period; shared

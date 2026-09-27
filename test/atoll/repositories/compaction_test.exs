@@ -1,6 +1,7 @@
 defmodule Atoll.Repositories.CompactionTest do
   use Atoll.DataCase, async: false
   alias Atoll.{Repositories, SigningKey}
+  alias Atoll.Moderation.AuditEntry
 
   alias Atoll.Repositories.{
     Compaction,
@@ -75,6 +76,63 @@ defmodule Atoll.Repositories.CompactionTest do
     assert {:ok, %{pruned: 1}} = Compaction.prune(@did, 1, 3600)
   end
 
+  test "audits removed revisions and the preserved head with bounded operator inputs" do
+    [first, _, current] = history()
+    Repo.delete_all(Event)
+    assert {:ok, result} = Compaction.prune(@did, 1, 3600)
+    entry = Repo.one!(AuditEntry)
+    assert entry.operation == "atoll.revisions.prune"
+    assert entry.actor == "operator"
+    assert entry.did == @did
+    assert entry.subject == %{"kind" => "repositoryHistory", "did" => @did}
+    assert entry.requested == %{"limit" => 1, "retentionSeconds" => 3600}
+
+    assert entry.before_state == %{
+             "head" => Atoll.CID.to_base32(current.head),
+             "rev" => current.rev,
+             "removedRevisions" => [first.rev]
+           }
+
+    assert entry.after_state ==
+             Map.merge(Jason.decode!(Jason.encode!(result)), %{
+               "head" => Atoll.CID.to_base32(current.head),
+               "rev" => current.rev
+             })
+  end
+
+  test "dependency-only batches are audited and audit rows roll back with maintenance" do
+    history()
+    Repo.delete_all(EventDependency)
+
+    assert {:error, :cancelled} =
+             Repo.transaction(fn ->
+               assert {:ok, %{indexed: 3, pruned: 0}} = Compaction.prune(@did)
+               assert Repo.one!(AuditEntry).after_state["indexed"] == 3
+               Repo.rollback(:cancelled)
+             end)
+
+    assert Repo.aggregate(EventDependency, :count) == 0
+    assert Repo.aggregate(AuditEntry, :count) == 0
+    assert {:ok, %{indexed: 3, pruned: 0}} = Compaction.prune(@did)
+    assert Repo.one!(AuditEntry).before_state["removedRevisions"] == []
+  end
+
+  test "audit insertion failure rolls back deleted revisions" do
+    revisions = history()
+    Repo.delete_all(Event)
+    usage = Quota.usage(@did)
+
+    Repo.query!(
+      "ALTER TABLE moderation_audit_entries ADD CONSTRAINT reject_pruning_audit CHECK (operation <> 'atoll.revisions.prune')"
+    )
+
+    assert_raise Ecto.ConstraintError, fn -> Compaction.prune(@did, 1, 3600) end
+
+    assert Repo.all(from r in Revision, order_by: r.rev) == revisions
+    assert Quota.usage(@did) == usage
+    assert Repo.aggregate(AuditEntry, :count) == 0
+  end
+
   test "operator command reports results and rejects invalid or duplicate options" do
     history()
 
@@ -91,6 +149,7 @@ defmodule Atoll.Repositories.CompactionTest do
 
     assert {:error, :not_found} = Compaction.prune("did:plc:missing")
     assert {:error, :invalid_compaction_options} = Compaction.prune(@did, 0)
+    assert Repo.aggregate(AuditEntry, :count) == 1
   end
 
   defp history do
