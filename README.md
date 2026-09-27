@@ -160,7 +160,7 @@ record Lexicons or grant access to account data.
 - [x] Operator completion of retained authority-key rotations after compatible directory advancement, without resubmission.
 - [x] Operator completion of repository signing-key rotations after compatible directory advancement, with atomic commit and custody publication.
 - [x] Operator completion of accepted recoveries after compatible directory advancement, including combined key restoration and credential revocation.
-- [ ] Conflicts caused by incompatible directory identities, and pending operations absent from directory history.
+- [x] Operator closure of pending operations absent from verified directory history, including tombstoned or otherwise incompatible directory identities.
 - [x] Per-revision signing-key provenance for historical record and block verification.
 - [x] Internal atomic repository signing-key replacement with unchanged-tree commits and vault rollback.
 - [x] PostgreSQL repository heads and atomic record, tree, and commit updates with optional head compare-and-swap.
@@ -6906,3 +6906,24 @@ has no signup queue, so the [temporary upstream route](https://github.com/bluesk
 is answered the same way the reference PDS answers without an entryway. As
 upstream, OAuth credentials are refused. The route shares the session rate
 budget and `no-store` responses.
+
+### Absent PLC operation closure
+
+`mix atoll.plc.reconcile_absent DID PENDING_OPERATION_CID EXPECTED_DIRECTORY_HEAD_CID`
+closes a pending journal entry that fresh verified directory history never
+recorded — a submission the directory lost or refused, or a journal stranded
+because the directory identity diverged through an unrelated fork or a
+tombstone. Closure requires operator review of the current head and that the
+operation can no longer land there: its signed predecessor must no longer be
+the surviving head (a tombstoned identity always qualifies). An operation whose
+predecessor is still the current head remains submittable and is refused; use
+submission or active reconciliation instead.
+
+Closure marks the journal with the closure head, erases only pending private
+custody envelopes, and releases the operation's handle reservations, exactly
+like nullification reconciliation; the signed operation history is retained and
+no identity event is emitted. Operations recorded in active history, explicitly
+nullified operations (use `mix atoll.plc.reconcile_nullified`), locally
+completed work, and recovery journals with their own expected-head workflow are
+all rejected. The operator audit entry records the observed head, the tombstone
+flag, and the released reservations; repeated runs are idempotent.

@@ -492,6 +492,119 @@ defmodule Atoll.PLCLocalRecoveryTest do
     assert Agent.get(c.directory, & &1.posts) == 0
   end
 
+  test "absent journal closure requires a superseded predecessor and releases reservations",
+       c do
+    alias Atoll.Identity.PLC.{AbsentUpdates, Updates}
+    {:ok, unsigned} = Operation.successor(c.bad)
+
+    {:ok, orphan} =
+      Operation.sign(Map.put(unsigned, "alsoKnownAs", ["at://orphan.example.com"]), c.low)
+
+    {:ok, cid} = Operation.cid(orphan)
+    {:ok, bad_cid} = Operation.cid(c.bad)
+    assert {:ok, _} = Updates.stage(c.did, c.audit, orphan)
+
+    Repo.insert!(%Atoll.Identity.HandleReservation{
+      did: c.did,
+      cid: cid,
+      handle: "orphan.example.com"
+    })
+
+    # Still submittable at the current head: closure is refused.
+    assert {:error, :plc_update_pending} = AbsentUpdates.reconcile(c.did, cid, bad_cid, c.opts)
+
+    directory_audit = show_nullification(c, c.bad)
+    seq = Events.latest_seq()
+    assert {:error, :plc_conflict} = AbsentUpdates.reconcile(c.did, cid, bad_cid, c.opts)
+
+    assert {:ok, %{result: :closed, tombstoned: false, observed_head: head}} =
+             AbsentUpdates.reconcile(c.did, cid, c.cid, c.opts)
+
+    assert head == c.cid
+    closed = Repo.get_by!(Update, did: c.did, cid: cid)
+    assert closed.nullified_at
+    assert closed.nullified_head == c.cid
+    refute closed.completed_at
+    assert closed.operation == orphan
+    refute Repo.get(Atoll.Identity.HandleReservation, "orphan.example.com")
+    assert Events.latest_seq() == seq
+    assert {:error, :plc_update_nullified} = Updates.submit(c.did, cid, c.opts)
+    assert {:ok, %{result: :already_closed}} = AbsentUpdates.reconcile(c.did, cid, c.cid, c.opts)
+    assert [audit] = Repo.all(Atoll.Moderation.AuditEntry)
+    assert audit.operation == "atoll.plc.reconcileAbsent"
+    assert audit.requested["tombstoned"] == false
+    {:ok, next_unsigned} = Operation.successor(c.recovery)
+    {:ok, next} = Operation.sign(next_unsigned, c.high)
+    assert {:ok, _} = Updates.stage(c.did, directory_audit, next)
+    assert Agent.get(c.directory, & &1.posts) == 0
+  end
+
+  test "absent closure rejects recorded, completed, and recovery journals but closes tombstones",
+       c do
+    alias Atoll.Identity.PLC.{AbsentUpdates, NullifiedUpdates, Updates}
+    {:ok, bad_cid} = Operation.cid(c.bad)
+    assert {:ok, _} = Updates.stage(c.did, c.audit, c.bad)
+
+    # Recorded in active history: not absent.
+    assert {:error, :plc_conflict} = AbsentUpdates.reconcile(c.did, bad_cid, bad_cid, c.opts)
+    directory_audit = show_nullification(c, c.bad)
+
+    # Explicitly nullified in history: the nullification reconciliation owns it.
+    assert {:error, :plc_conflict} = AbsentUpdates.reconcile(c.did, bad_cid, c.cid, c.opts)
+    assert {:ok, _} = NullifiedUpdates.reconcile(c.did, bad_cid, c.cid, c.opts)
+
+    {:ok, unsigned} = Operation.successor(c.recovery)
+
+    {:ok, orphan} =
+      Operation.sign(Map.put(unsigned, "alsoKnownAs", ["at://x.example.com"]), c.high)
+
+    {:ok, cid} = Operation.cid(orphan)
+    assert {:ok, _} = Updates.stage(c.did, directory_audit, orphan)
+    row = Repo.get_by!(Update, did: c.did, cid: cid)
+    row |> Ecto.Changeset.change(confirmed_at: c.now, completed_at: c.now) |> Repo.update!()
+    assert {:error, :plc_update_completed} = AbsentUpdates.reconcile(c.did, cid, c.cid, c.opts)
+
+    Repo.get_by!(Update, did: c.did, cid: cid)
+    |> Ecto.Changeset.change(
+      confirmed_at: nil,
+      completed_at: nil,
+      recovery_expected_head: c.cid,
+      recovery_deadline: DateTime.utc_now(),
+      recovery_nullified_cids: [bad_cid]
+    )
+    |> Repo.update!()
+
+    assert {:error, :plc_conflict} = AbsentUpdates.reconcile(c.did, cid, c.cid, c.opts)
+
+    Repo.get_by!(Update, did: c.did, cid: cid)
+    |> Ecto.Changeset.change(
+      recovery_expected_head: nil,
+      recovery_deadline: nil,
+      recovery_nullified_cids: nil
+    )
+    |> Repo.update!()
+
+    {:ok, tombstone} = Operation.sign(%{"type" => "plc_tombstone", "prev" => c.cid}, c.high)
+    {:ok, tombstone_cid} = Operation.cid(tombstone)
+    tombstoned_audit = directory_audit ++ [entry(c.did, tombstone, DateTime.utc_now())]
+    Agent.update(c.directory, &%{&1 | audit: tombstoned_audit, last: tombstone})
+    Application.put_env(:atoll, :plc_submission_options, Keyword.take(c.opts, [:plug]))
+
+    output =
+      ExUnit.CaptureIO.capture_io(fn ->
+        Mix.Tasks.Atoll.Plc.ReconcileAbsent.run([c.did, cid, tombstone_cid])
+      end)
+      |> Jason.decode!()
+
+    assert output["result"] == "closed"
+    assert output["tombstoned"] == true
+    closed = Repo.get_by!(Update, did: c.did, cid: cid)
+    assert closed.nullified_at
+    assert closed.nullified_head == tombstone_cid
+    assert Repo.aggregate(Atoll.Moderation.AuditEntry, :count) == 2
+    assert Agent.get(c.directory, & &1.posts) == 0
+  end
+
   test "recovery installs authority when local metadata is absent and binds absence to custody",
        c do
     Repo.delete!(Repo.get!(Atoll.Identity.PLC.Registration, c.did))

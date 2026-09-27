@@ -345,6 +345,23 @@ defmodule Atoll.Moderation.Audit do
     )
   end
 
+  @doc "Records operator closure of pending PLC work absent from verified directory history."
+  def absent_update!(row, state, reservations) do
+    insert!(
+      "atoll.plc.reconcileAbsent",
+      row.did,
+      %{kind: "plcUpdate", did: row.did},
+      %{operationCid: row.cid, observedHead: state.cid, tombstoned: state.tombstoned},
+      %{
+        pending: true,
+        repositoryCustody: not is_nil(row.signing_envelope),
+        authorityCustody: not is_nil(row.authority_envelope)
+      },
+      %{pending: false, closed: true, releasedHandleReservations: reservations},
+      "operator"
+    )
+  end
+
   @doc "Records explicit erasure of superseded signup custody, without secret material."
   def signup_key_retirement!(registration, installed) do
     {:ok, old} =
