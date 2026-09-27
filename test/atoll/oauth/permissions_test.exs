@@ -56,8 +56,76 @@ defmodule Atoll.OAuth.PermissionsTest do
       refute Permissions.supported?(scope)
     end
 
-    for scope <- ~w(rpc:* identity:* account:email include:com.example.permissions),
+    for scope <- ~w(rpc:* identity:* include:com.example.permissions),
         do: refute(Permissions.supported?(scope))
+  end
+
+  test "account scopes have scalar attributes and read defaults" do
+    for scope <- ["account:email", "account?attr=email", "account:email?action=read"] do
+      assert {:ok, %{attr: "email", action: "read"}} = Permissions.account(scope)
+      assert Permissions.supported?(scope)
+    end
+
+    assert {:ok, %{attr: "repo", action: "manage"}} =
+             Permissions.account("account?action=manage&attr=repo")
+
+    for scope <- [
+          "account",
+          "account:*",
+          "account:status",
+          "account:email?action=write",
+          "account:email?attr=email",
+          "account?attr=email&attr=repo",
+          "account:email?action=read&action=manage",
+          "account:email?unknown=yes"
+        ] do
+      assert {:error, :invalid_scope} = Permissions.account(scope)
+      refute Permissions.supported?(scope)
+    end
+  end
+
+  test "account manage can narrow to read but cannot cross attributes or grant record writes" do
+    grants = %{"scope" => "atproto account:email?action=manage account:repo?action=manage"}
+    assert ClientMetadata.scopes_allowed?(grants, "atproto account:email account:repo")
+
+    refute ClientMetadata.scopes_allowed?(
+             %{"scope" => "atproto account:email"},
+             "atproto account:email?action=manage"
+           )
+
+    refute ClientMetadata.scopes_allowed?(
+             %{"scope" => "atproto account:email?action=manage"},
+             "atproto account:repo?action=manage"
+           )
+
+    assert Permissions.write_admission?(grants["scope"], :import_repo)
+
+    for action <- [
+          :request_email_confirmation,
+          :confirm_email,
+          :request_email_update,
+          :update_email
+        ] do
+      assert Permissions.write_admission?(grants["scope"], action)
+
+      for scope <- [
+            "atproto",
+            "atproto transition:generic transition:email",
+            "atproto repo:*",
+            "atproto account:email"
+          ] do
+        refute Permissions.write_admission?(scope, action)
+        refute Permissions.write_admission?(scope, :import_repo)
+      end
+    end
+
+    refute Permissions.write_admission?("atproto account:repo", :import_repo)
+
+    for action <- [:create, :put, :delete, :batch, :upload_blob],
+        do: refute(Permissions.write_admission?(grants["scope"], action))
+
+    assert Permissions.allows_account?("atproto transition:email", "email", "read")
+    refute Permissions.allows_account?("atproto transition:email", "email", "manage")
   end
 
   test "narrowing combines grants but cannot widen collections or actions" do

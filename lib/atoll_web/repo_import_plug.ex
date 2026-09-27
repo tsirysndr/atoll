@@ -1,7 +1,7 @@
 defmodule AtollWeb.RepoImportPlug do
   @moduledoc "Authenticated, bounded CAR request ingestion before general parsing."
   import Plug.Conn
-  alias Atoll.Accounts.{SessionLimiter, Sessions}
+  alias Atoll.Accounts.SessionLimiter
   @max_bytes 1024 * 1024 * 1024
 
   def init(opts), do: opts
@@ -14,13 +14,15 @@ defmodule AtollWeb.RepoImportPlug do
 
   defp import_repo(%{method: "POST"} = conn) do
     with :ok <- limit(conn),
-         {:ok, token} <- AtollWeb.BearerToken.get(conn),
-         {:ok, head} <- Sessions.authenticate_management(token),
+         {:ok, token, head} <- authorize(conn),
          :ok <- media_type(conn),
          {:ok, length} <- content_length(conn) do
       conn = %{conn | body_params: %{}}
       put_private(conn, :atoll_repo_import, %{token: token, length: length, head: head.head})
     else
+      {:error, {:oauth, reason}} ->
+        AtollWeb.OAuthResource.error(conn, reason)
+
       {:error, {:rate_limited, seconds}} ->
         conn
         |> put_resp_header("retry-after", Integer.to_string(seconds))
@@ -40,6 +42,21 @@ defmodule AtollWeb.RepoImportPlug do
       Jason.encode!(%{error: "MethodNotAllowed", message: "Use POST to import a repository."})
     )
     |> halt()
+  end
+
+  defp authorize(conn) do
+    if AtollWeb.OAuthResource.attempt?(conn) do
+      with {:ok, credential} <- AtollWeb.OAuthResource.prepare_write(conn),
+           {:ok, head} <- Atoll.Repositories.authorize_import(credential) do
+        {:ok, credential, head}
+      else
+        {:error, reason} -> {:error, {:oauth, reason}}
+      end
+    else
+      with {:ok, token} <- AtollWeb.BearerToken.get(conn),
+           {:ok, head} <- Atoll.Repositories.authorize_import(token),
+           do: {:ok, token, head}
+    end
   end
 
   defp media_type(conn) do

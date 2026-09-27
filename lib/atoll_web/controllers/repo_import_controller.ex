@@ -3,7 +3,7 @@ defmodule AtollWeb.RepoImportController do
   action_fallback AtollWeb.XRPCFallback
 
   def create(%{private: %{atoll_repo_import: upload}} = conn, _params) do
-    with {:ok, _} <- Atoll.Accounts.Sessions.authenticate_management(upload.token) do
+    with {:ok, _} <- Atoll.Repositories.authorize_import(upload.token) do
       source = %{
         conn: conn,
         size: 0,
@@ -29,6 +29,11 @@ defmodule AtollWeb.RepoImportController do
         {:error, reason, source} -> fail(source.conn, reason)
         {:error, reason} -> fail(conn, reason)
       end
+    else
+      {:error, reason} = error ->
+        if match?(%Atoll.OAuth.WriteCredential{}, upload.token),
+          do: fail(conn, reason),
+          else: error
     end
   end
 
@@ -72,6 +77,13 @@ defmodule AtollWeb.RepoImportController do
           {:error, :invalid_request, source}
       end
     end
+  end
+
+  defp fail(conn, reason)
+       when reason in [:invalid_token, :insufficient_scope, :oauth_resource_store_unavailable] do
+    if match?(%Atoll.OAuth.WriteCredential{}, conn.private[:atoll_repo_import][:token]),
+      do: AtollWeb.OAuthResource.error(conn, reason),
+      else: AtollWeb.XRPCFallback.call(conn, {:error, reason})
   end
 
   defp fail(conn, reason) when reason in [:invalid_car, :invalid_snapshot],

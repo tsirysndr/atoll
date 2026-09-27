@@ -41,20 +41,25 @@ defmodule Atoll.OAuth.Resource do
   end
 
   @write_methods %{
-    create: "createRecord",
-    put: "putRecord",
-    delete: "deleteRecord",
-    batch: "applyWrites",
-    upload_blob: "uploadBlob"
+    create: "com.atproto.repo.createRecord",
+    put: "com.atproto.repo.putRecord",
+    delete: "com.atproto.repo.deleteRecord",
+    batch: "com.atproto.repo.applyWrites",
+    upload_blob: "com.atproto.repo.uploadBlob",
+    import_repo: "com.atproto.repo.importRepo",
+    request_email_confirmation: "com.atproto.server.requestEmailConfirmation",
+    confirm_email: "com.atproto.server.confirmEmail",
+    request_email_update: "com.atproto.server.requestEmailUpdate",
+    update_email: "com.atproto.server.updateEmail"
   }
 
-  @doc "Admit a POST proof and issue a process/method-bound internal credential, valid for 30 seconds."
+  @doc "Admit a POST proof and issue a process/method-bound internal credential, valid for 30 seconds (300 for streamed imports)."
   def prepare_write(token, headers, url, opts \\ []) do
     issuer = Keyword.get(opts, :issuer, AtollWeb.Endpoint.url())
 
     action =
       Enum.find_value(@write_methods, fn {action, method} ->
-        if url == issuer <> "/xrpc/com.atproto.repo." <> method, do: action
+        if url == issuer <> "/xrpc/" <> method, do: action
       end)
 
     if action do
@@ -71,7 +76,7 @@ defmodule Atoll.OAuth.Resource do
             "binding" => fingerprint(session),
             "owner" => owner(),
             "action" => Atom.to_string(action),
-            "expires" => clock!() + 30
+            "expires" => clock!() + if(action == :import_repo, do: 300, else: 30)
           }
 
           %WriteCredential{
@@ -86,8 +91,11 @@ defmodule Atoll.OAuth.Resource do
   end
 
   @doc "Recheck an admitted credential inside the caller's write transaction without admitting its proof twice."
-  def recheck(%WriteCredential{receipt: receipt}, action)
-      when is_binary(receipt) and byte_size(receipt) <= 4096 do
+  def recheck(credential, action), do: recheck(credential, action, &Function.identity/1)
+
+  @doc "Recheck authorization and run a trusted read callback while authorization locks remain held."
+  def recheck(%WriteCredential{receipt: receipt}, action, reader)
+      when is_binary(receipt) and byte_size(receipt) <= 4096 and is_function(reader, 1) do
     with true <- action in Map.keys(@write_methods),
          <<_::256>> = secret <- Application.get_env(:atoll, :oauth_nonce_secret),
          {:ok, body} <- Plug.Crypto.MessageVerifier.verify(receipt, receipt_key(secret: secret)),
@@ -105,7 +113,7 @@ defmodule Atoll.OAuth.Resource do
         fn principal ->
           if claims["expires"] <= clock!(), do: Repo.rollback(:invalid_token)
           require_write_permission!(principal, action)
-          principal
+          reader.(principal)
         end,
         []
       )
@@ -117,7 +125,7 @@ defmodule Atoll.OAuth.Resource do
       {:error, :oauth_resource_store_unavailable}
   end
 
-  def recheck(_, _), do: {:error, :invalid_token}
+  def recheck(_, _, _), do: {:error, :invalid_token}
 
   defp require_write_permission!(principal, action) do
     unless Atoll.OAuth.Permissions.write_admission?(principal.scope, action),

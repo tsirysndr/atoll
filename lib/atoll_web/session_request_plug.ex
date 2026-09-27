@@ -113,7 +113,25 @@ defmodule AtollWeb.SessionRequestPlug do
     end
   end
 
-  defp parse(conn, path)
+  defp parse(conn, path) do
+    if path in Enum.map(
+         ~w(requestEmailConfirmation confirmEmail requestEmailUpdate updateEmail),
+         &(@prefix <> &1)
+       ) and
+         AtollWeb.OAuthResource.attempt?(conn) do
+      case AtollWeb.OAuthResource.prepare_write(conn) do
+        {:ok, credential} ->
+          conn |> put_private(:atoll_email_credential, credential) |> parse_body(path)
+
+        {:error, reason} ->
+          AtollWeb.OAuthResource.error(conn, reason)
+      end
+    else
+      parse_body(conn, path)
+    end
+  end
+
+  defp parse_body(conn, path)
        when path in [
               "/xrpc/com.atproto.identity.submitPlcOperation",
               "/xrpc/com.atproto.identity.signPlcOperation",
@@ -163,7 +181,7 @@ defmodule AtollWeb.SessionRequestPlug do
   end
 
   # These methods have no input body. Bound any unexpected body before the general parser.
-  defp parse(conn, _path) do
+  defp parse_body(conn, _path) do
     case read_body(conn, length: 4096, read_length: 4096, read_timeout: 5_000) do
       {:ok, "", conn} -> %{conn | body_params: %{}}
       {:ok, _, conn} -> error(conn, 400, "InvalidRequest", "This method has no request body.")

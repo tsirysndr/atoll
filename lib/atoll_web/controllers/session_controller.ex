@@ -14,28 +14,50 @@ defmodule AtollWeb.SessionController do
          do: json(conn, result)
   end
 
-  def request_email_confirmation(conn, _params) do
-    with {:ok, token} <- bearer(conn),
-         {:ok, _} <- Atoll.Accounts.EmailConfirmation.request(token),
-         do: send_resp(conn, 200, "")
-  end
+  def request_email_confirmation(conn, _params),
+    do:
+      email_action(conn, &Atoll.Accounts.EmailConfirmation.request/1, fn conn, _ ->
+        send_resp(conn, 200, "")
+      end)
 
-  def confirm_email(conn, _params) do
-    with {:ok, token} <- bearer(conn),
-         {:ok, _} <- Atoll.Accounts.EmailConfirmation.confirm(token, conn.body_params),
-         do: send_resp(conn, 200, "")
-  end
+  def confirm_email(conn, _params),
+    do:
+      email_action(conn, &Atoll.Accounts.EmailConfirmation.confirm(&1, conn.body_params), fn conn,
+                                                                                             _ ->
+        send_resp(conn, 200, "")
+      end)
 
-  def request_email_update(conn, _params) do
-    with {:ok, token} <- bearer(conn),
-         {:ok, result} <- Atoll.Accounts.EmailUpdate.request(token),
-         do: json(conn, result)
-  end
+  def request_email_update(conn, _params),
+    do: email_action(conn, &Atoll.Accounts.EmailUpdate.request/1, &json/2)
 
-  def update_email(conn, _params) do
-    with {:ok, token} <- bearer(conn),
-         {:ok, _} <- Atoll.Accounts.EmailUpdate.update(token, conn.body_params),
-         do: send_resp(conn, 200, "")
+  def update_email(conn, _params),
+    do:
+      email_action(conn, &Atoll.Accounts.EmailUpdate.update(&1, conn.body_params), fn conn, _ ->
+        send_resp(conn, 200, "")
+      end)
+
+  defp email_action(conn, action, render) do
+    credential =
+      case conn.private[:atoll_email_credential] do
+        %Atoll.OAuth.WriteCredential{} = credential -> {:ok, credential}
+        _ -> bearer(conn)
+      end
+
+    with {:ok, token} <- credential do
+      case action.(token) do
+        {:ok, result} ->
+          render.(conn, result)
+
+        {:error, reason} = error
+        when reason in [:invalid_token, :insufficient_scope, :oauth_resource_store_unavailable] ->
+          if match?(%Atoll.OAuth.WriteCredential{}, token),
+            do: AtollWeb.OAuthResource.error(conn, reason),
+            else: error
+
+        error ->
+          error
+      end
+    end
   end
 
   def request_password_reset(conn, _params) do
@@ -108,7 +130,7 @@ defmodule AtollWeb.SessionController do
       AtollWeb.OAuthResource.read(conn, fn principal ->
         result = identity(principal)
 
-        if "transition:email" in String.split(principal.scope, " "),
+        if Atoll.OAuth.Permissions.allows_account?(principal.scope, "email", "read"),
           do: Map.delete(result, :emailAuthFactor),
           else: Map.drop(result, [:email, :emailConfirmed, :emailAuthFactor])
       end)

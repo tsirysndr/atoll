@@ -650,6 +650,68 @@ defmodule AtollWeb.OAuthRecordWriteTest do
              )
   end
 
+  @tag scope: "atproto account:repo?action=manage"
+  test "account repo manage imports signed CARs without granting record or blob writes", c do
+    car = import_archive(c)
+    assert import_request(c, car).status == 200
+    assert import_request(c, car).status == 200
+    assert write(c, "putRecord", body(c, "denied")).status == 403
+    assert upload_blob(c, "denied").status == 403
+    assert import_request(c, import_archive(c, "did:plc:anotherowner")).status == 400
+  end
+
+  @tag scope: "atproto account:repo?action=manage"
+  test "import rechecks current permissions after HTTP admission", c do
+    car = import_archive(c)
+
+    conn =
+      Plug.Test.conn(:post, "/xrpc/com.atproto.repo.importRepo", car)
+      |> put_req_header("authorization", "DPoP " <> c.tokens["access_token"])
+      |> put_req_header("dpop", write_proof(c, "importRepo"))
+      |> put_req_header("content-type", "application/vnd.ipld.car")
+      |> put_req_header("content-length", Integer.to_string(byte_size(car)))
+      |> AtollWeb.RepoImportPlug.call([])
+
+    refute conn.halted
+    {:ok, before} = Repositories.get_head(c.did)
+    Repo.update_all(AccessToken, set: [scope: "atproto account:repo"])
+    result = AtollWeb.RepoImportController.create(conn, %{})
+    assert json_response(result, 403) == %{"error" => "insufficient_scope"}
+    assert {:ok, ^before} = Repositories.get_head(c.did)
+  end
+
+  test "generic grants cannot import and denial precedes CAR parsing", c do
+    assert import_request(c, "invalid CAR").status == 403
+  end
+
+  defp import_request(c, bytes) do
+    c.conn
+    |> put_req_header("authorization", "DPoP " <> c.tokens["access_token"])
+    |> put_req_header("dpop", write_proof(c, "importRepo"))
+    |> put_req_header("content-type", "application/vnd.ipld.car")
+    |> put_req_header("content-length", Integer.to_string(byte_size(bytes)))
+    |> post("/xrpc/com.atproto.repo.importRepo", bytes)
+  end
+
+  defp import_archive(c, did \\ nil) do
+    alias Atoll.{CBOR, CID, MST, TID, Commit, CAR}
+    {:ok, head} = Repositories.get_head(c.did)
+    {:ok, key} = Atoll.KeyVault.fetch(c.did)
+    bytes = CBOR.encode!(%{"$type" => "com.example.record", "text" => "imported"})
+    cid = CID.create(bytes, :dag_cbor)
+    {:ok, tree} = MST.new(%{"com.example.record/one" => cid})
+    {:ok, rev} = TID.next(head.rev)
+    {:ok, commit} = Commit.create(did || c.did, tree.root, rev, key)
+
+    {:ok, car} =
+      CAR.encode(
+        [commit.cid],
+        tree.blocks |> Map.put(cid, bytes) |> Map.put(commit.cid, commit.bytes)
+      )
+
+    car
+  end
+
   defp upload_blob(c, bytes, signed \\ nil, mime \\ "application/octet-stream"),
     do:
       c.conn

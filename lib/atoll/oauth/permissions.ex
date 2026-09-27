@@ -1,12 +1,12 @@
 defmodule Atoll.OAuth.Permissions do
-  @moduledoc "Bounded repository, blob and RPC permission scopes with semantic coverage."
+  @moduledoc "Bounded OAuth permission scopes with semantic coverage."
   @legacy ~w(atproto transition:generic transition:chat.bsky transition:email)
   @actions ~w(create update delete)
 
   def supported?(scope),
     do:
       scope in @legacy or match?({:ok, _}, repo(scope)) or match?({:ok, _}, blob(scope)) or
-        match?({:ok, _}, rpc(scope))
+        match?({:ok, _}, rpc(scope)) or match?({:ok, _}, account(scope))
 
   def repo(value) do
     with {:ok, positional, params} <- syntax(value, "repo", ~w(collection action)),
@@ -50,6 +50,19 @@ defmodule Atoll.OAuth.Permissions do
     end
   end
 
+  def account(value) do
+    with {:ok, positional, params} <- syntax(value, "account", ~w(attr action)),
+         true <- is_nil(positional) or not Map.has_key?(params, "attr"),
+         [attr] <- if(positional, do: [positional], else: params["attr"]),
+         true <- attr in ["email", "repo"],
+         [action] <- Map.get(params, "action", ["read"]),
+         true <- action in ["read", "manage"] do
+      {:ok, %{attr: attr, action: action}}
+    else
+      _ -> {:error, :invalid_scope}
+    end
+  end
+
   # A requested permission can be narrower than several declared/granted scopes.
   # In particular, an explicit collection can never cover a requested wildcard.
   def covered?(granted, requested) when is_list(granted) do
@@ -73,12 +86,29 @@ defmodule Atoll.OAuth.Permissions do
                   Enum.all?(permission.methods, &rpc_allowed?(granted, permission.audience, &1))
 
                 _ ->
-                  false
+                  case account(requested) do
+                    {:ok, permission} ->
+                      account_allowed?(granted, permission.attr, permission.action)
+
+                    _ ->
+                      false
+                  end
               end
           end
       end
     end
   end
+
+  def write_admission?(scope, :import_repo), do: allows_account?(scope, "repo", "manage")
+
+  def write_admission?(scope, action)
+      when action in [
+             :request_email_confirmation,
+             :confirm_email,
+             :request_email_update,
+             :update_email
+           ],
+      do: allows_account?(scope, "email", "manage")
 
   def write_admission?(scope, action) do
     scopes = String.split(scope, " ")
@@ -110,6 +140,26 @@ defmodule Atoll.OAuth.Permissions do
 
   def allows_rpc?(scope, audience, method),
     do: rpc_allowed?(String.split(scope, " "), audience, method)
+
+  def allows_account?(scope, attr, action) do
+    scopes = String.split(scope, " ")
+
+    (attr == "email" and action == "read" and "transition:email" in scopes) or
+      account_allowed?(scopes, attr, action)
+  end
+
+  defp account_allowed?(scopes, attr, action),
+    do:
+      Enum.any?(scopes, fn scope ->
+        case account(scope) do
+          {:ok, permission} ->
+            permission.attr == attr and
+              (permission.action == action or (permission.action == "manage" and action == "read"))
+
+          _ ->
+            false
+        end
+      end)
 
   def describe(scope) do
     case repo(scope) do
@@ -146,7 +196,22 @@ defmodule Atoll.OAuth.Permissions do
                 "Call application services: " <> methods <> " on " <> audience
 
               _ ->
-                nil
+                case account(scope) do
+                  {:ok, %{attr: "email", action: "read"}} ->
+                    "Read your email address and confirmation status"
+
+                  {:ok, %{attr: "email", action: "manage"}} ->
+                    "Read and change your email address and email authentication settings"
+
+                  {:ok, %{attr: "repo", action: "manage"}} ->
+                    "Replace your entire public repository by importing an archive"
+
+                  {:ok, %{attr: "repo", action: "read"}} ->
+                    "Read public repository information (no additional access)"
+
+                  _ ->
+                    nil
+                end
             end
         end
     end

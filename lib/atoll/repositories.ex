@@ -128,9 +128,18 @@ defmodule Atoll.Repositories do
 
   def import_archive(_, _, _), do: {:error, :invalid_snapshot}
 
+  @doc "Authorize an import and capture its repository head under the authorization locks."
+  def authorize_import(%Atoll.OAuth.WriteCredential{} = credential),
+    do:
+      Atoll.OAuth.Resource.recheck(credential, :import_repo, fn %{did: did} ->
+        Repo.get!(Head, did)
+      end)
+
+  def authorize_import(token), do: Atoll.Accounts.Sessions.authenticate_management(token)
+
   @doc "Imports a complete snapshot for the token owner, rechecking authorization and the captured head under lock."
   def import_authenticated(token, archive, expected_head) do
-    with {:ok, %{did: did} = prior} <- Atoll.Accounts.Sessions.authenticate_management(token),
+    with {:ok, %{did: did} = prior} <- authorize_import(token),
          {:ok, snapshot} <- authenticated_snapshot(prior, archive) do
       import_snapshot(did, prior, snapshot, expected_head, token)
     end
@@ -146,7 +155,7 @@ defmodule Atoll.Repositories do
       head = locked_head!(did, "FOR UPDATE", is_nil(token))
 
       if token do
-        case Atoll.Accounts.Sessions.authenticate_management(token) do
+        case authorize_import(token) do
           {:ok, _} -> :ok
           {:error, reason} -> Repo.rollback(reason)
         end

@@ -34,7 +34,7 @@ defmodule Atoll.Accounts.EmailUpdate do
 
   defp prepare(access_token) do
     Repo.transaction(fn ->
-      profile = profile!(access_token)
+      profile = profile!(access_token, :request_email_update)
       now = System.system_time(:second)
 
       cond do
@@ -65,7 +65,7 @@ defmodule Atoll.Accounts.EmailUpdate do
          true <- Map.keys(params) -- ["email", "token", "emailAuthFactor"] == [],
          true <- is_boolean(Map.get(params, "emailAuthFactor", false)) do
       Repo.transaction(fn ->
-        profile = profile!(access_token)
+        profile = profile!(access_token, :update_email)
         if profile.email_confirmed_at, do: verify!(profile, params["token"])
 
         factor =
@@ -145,8 +145,8 @@ defmodule Atoll.Accounts.EmailUpdate do
 
   defp verify!(_, _), do: Repo.rollback(:invalid_email_token)
 
-  defp profile!(token) do
-    case Sessions.authenticate_management(token) do
+  defp profile!(token, action) do
+    case authenticate(token, action) do
       {:ok, head} ->
         Repo.one(from(p in Profile, where: p.did == ^head.did, lock: "FOR UPDATE"), log: false) ||
           Repo.rollback(:account_not_found)
@@ -155,6 +155,11 @@ defmodule Atoll.Accounts.EmailUpdate do
         Repo.rollback(reason)
     end
   end
+
+  defp authenticate(%Atoll.OAuth.WriteCredential{} = credential, action),
+    do: Atoll.OAuth.Resource.recheck(credential, action)
+
+  defp authenticate(token, _), do: Sessions.authenticate_management(token)
 
   defp digest(email, code),
     do: :crypto.hash(:sha256, ["atoll.email-update.v1", <<0>>, email, <<0>>, code])

@@ -13,7 +13,9 @@ defmodule AtollWeb.OAuthResourceTest do
           :oauth_nonce_secret,
           :oauth_transport_options,
           :key_encryption_key,
-          :identity_resolution_options
+          :identity_resolution_options,
+          :email_worker,
+          :email_delivery_options
         ] do
       prior = Application.fetch_env(:atoll, name)
 
@@ -818,6 +820,124 @@ defmodule AtollWeb.OAuthResourceTest do
 
     assert json_response(inventory_request(c, "server.checkAccountStatus"), 401)["error"] ==
              "invalid_token"
+  end
+
+  @tag scope: "atproto account:email"
+  test "account email read reveals only email and confirmation and cannot mutate", c do
+    body = read_session(c) |> json_response(200)
+    assert body["email"] == "private@example.com"
+    assert body["emailConfirmed"]
+    refute Map.has_key?(body, "emailAuthFactor")
+
+    for method <- ~w(requestEmailUpdate updateEmail requestEmailConfirmation confirmEmail) do
+      assert email_request(c, method, "{") |> json_response(403) == %{
+               "error" => "insufficient_scope"
+             }
+    end
+
+    Repo.update_all(AccessToken, set: [scope: "atproto"])
+    refute Map.has_key?(read_session(c) |> json_response(200), "email")
+  end
+
+  @tag scope: "atproto account:email?action=manage"
+  test "email management uses Worker codes and preserves confirmation requirements", c do
+    parent = self()
+
+    Application.put_env(:atoll, :email_worker,
+      url: "https://worker.example.com/send",
+      token: "test-secret"
+    )
+
+    Application.put_env(:atoll, :email_delivery_options,
+      plug: fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        message = Jason.decode!(body)
+        [_, code] = Regex.run(~r/code is: ([A-Za-z0-9_-]{32})/, message["text"])
+        send(parent, {:email_code, message["to"], code})
+        Plug.Conn.send_resp(conn, 202, "")
+      end
+    )
+
+    assert email_request(c, "updateEmail", Jason.encode!(%{email: "new@example.com"})).status ==
+             400
+
+    assert email_request(c, "requestEmailUpdate", "") |> json_response(200) == %{
+             "tokenRequired" => true
+           }
+
+    assert_receive {:email_code, "private@example.com", code}
+
+    assert email_request(
+             c,
+             "updateEmail",
+             Jason.encode!(%{email: "new@example.com", token: code})
+           ).status == 200
+
+    body = read_session(c) |> json_response(200)
+    assert body["email"] == "new@example.com"
+    refute body["emailConfirmed"]
+    refute Repo.get!(Atoll.Accounts.Profile, c.did).email_auth_factor
+    assert email_request(c, "requestEmailConfirmation", "").status == 200
+    assert_receive {:email_code, "new@example.com", confirmation}
+    params = Jason.encode!(%{email: "new@example.com", token: confirmation})
+    assert email_request(c, "confirmEmail", params).status == 200
+    assert email_request(c, "confirmEmail", params).status == 400
+    assert (read_session(c) |> json_response(200))["emailConfirmed"]
+  end
+
+  @tag scope: "atproto account:email?action=manage"
+  test "email admission consumes proofs and mutation rechecks narrowed access", c do
+    path = "/xrpc/com.atproto.server.updateEmail"
+
+    signed =
+      resource_proof(c, c.tokens["access_token"], %{
+        "htm" => "POST",
+        "htu" => AtollWeb.Endpoint.url() <> path
+      })
+
+    conn =
+      Plug.Test.conn(:post, path, Jason.encode!(%{email: "changed@example.com"}))
+      |> put_req_header("authorization", "DPoP " <> c.tokens["access_token"])
+      |> put_req_header("dpop", signed)
+      |> put_req_header("content-type", "application/json")
+      |> AtollWeb.SessionRequestPlug.call([])
+
+    refute conn.halted
+    credential = conn.private.atoll_email_credential
+    assert {:error, :invalid_token} = Resource.recheck(credential, :confirm_email)
+    Repo.update_all(AccessToken, set: [scope: "atproto account:email"])
+
+    assert AtollWeb.SessionController.update_email(conn, %{}) |> json_response(403) == %{
+             "error" => "insufficient_scope"
+           }
+
+    assert Repo.get!(Atoll.Accounts.Profile, c.did).email == "private@example.com"
+    Repo.update_all(AccessToken, set: [scope: "atproto account:email?action=manage"])
+
+    replay =
+      c.conn
+      |> put_req_header("authorization", "DPoP " <> c.tokens["access_token"])
+      |> put_req_header("dpop", signed)
+      |> put_req_header("content-type", "application/json")
+      |> post(path, "{}")
+
+    assert replay.status == 401
+  end
+
+  defp email_request(c, method, body) do
+    path = "/xrpc/com.atproto.server." <> method
+
+    signed =
+      resource_proof(c, c.tokens["access_token"], %{
+        "htm" => "POST",
+        "htu" => AtollWeb.Endpoint.url() <> path
+      })
+
+    c.conn
+    |> put_req_header("authorization", "DPoP " <> c.tokens["access_token"])
+    |> put_req_header("dpop", signed)
+    |> put_req_header("content-type", "application/json")
+    |> post(path, body)
   end
 
   defp missing_reference(did, path, bytes) do

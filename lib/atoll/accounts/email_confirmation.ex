@@ -30,7 +30,7 @@ defmodule Atoll.Accounts.EmailConfirmation do
 
   defp prepare(access_token) do
     Repo.transaction(fn ->
-      head = authorize!(access_token)
+      head = authorize!(access_token, :request_email_confirmation)
       profile = profile!(head.did)
       now = System.system_time(:second)
 
@@ -65,7 +65,7 @@ defmodule Atoll.Accounts.EmailConfirmation do
       when is_binary(email) and byte_size(email) <= 254 and is_binary(code) and
              byte_size(code) == 32 do
     Repo.transaction(fn ->
-      head = authorize!(access_token)
+      head = authorize!(access_token, :confirm_email)
       profile = profile!(head.did)
       email = String.downcase(email)
 
@@ -98,12 +98,17 @@ defmodule Atoll.Accounts.EmailConfirmation do
 
   def confirm(_, _), do: {:error, :invalid_request}
 
-  defp authorize!(token) do
-    case Sessions.authenticate_management(token) do
+  defp authorize!(token, action) do
+    case authenticate(token, action) do
       {:ok, head} -> head
       {:error, reason} -> Repo.rollback(reason)
     end
   end
+
+  defp authenticate(%Atoll.OAuth.WriteCredential{} = credential, action),
+    do: Atoll.OAuth.Resource.recheck(credential, action)
+
+  defp authenticate(token, _), do: Sessions.authenticate_management(token)
 
   defp profile!(did) do
     Repo.one(from(p in Profile, where: p.did == ^did, lock: "FOR UPDATE"), log: false) ||

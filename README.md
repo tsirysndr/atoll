@@ -428,7 +428,8 @@ mutation. Deletes and empty batches need no record schema, even with `validate: 
 - [x] Granular repository OAuth permissions by collection/action, browser consent, and semantic scope narrowing.
 - [x] Granular blob OAuth permissions by MIME type, browser consent, scope narrowing and storage-time checks.
 - [x] Granular RPC OAuth permissions for service tokens, with audience/method restrictions, consent and refresh narrowing.
-- [ ] Granular identity and account permissions, dynamically resolved permission sets, and RPC proxy integration.
+- [x] Granular account permissions for email read/manage and signed repository import.
+- [ ] Granular identity permissions, dynamically resolved permission sets, and RPC proxy integration.
 - [x] DPoP blob uploads with transitional generic scope, pre-body proof admission, and transactional authorization rechecks.
 - [x] DPoP service-token issuance with current generic/chat scope checks and authorization locks held through signing.
 - [x] DPoP authentication on public repository/blob export routes without granting inactive-account export privileges.
@@ -1168,7 +1169,7 @@ protected-method restrictions still apply. Already-issued service JWTs remain
 valid until their short expiry. Password recovery revokes all app credentials as
 well as sessions. Taken-down login temporarily narrows either app scope to
 export-only access; restoration refresh recovers the persisted app scope, never
-full account access. OAuth remains pending.
+full account access. OAuth access uses the separate permission and DPoP checks described below.
 
 
 ### Email authentication factors
@@ -4618,7 +4619,7 @@ Requests require `response_type=code`, state, an exactly registered callback,
 declared scopes including `atproto`, and an S256 challenge. Optional `login_hint`
 is preserved but is not account authentication. An optional `dpop_jkt` must match
 the verified proof key. Scope admission accepts `atproto`, the three transitional
-scopes and granular `repo`/`blob`/`rpc` permissions; `transition:chat.bsky` requires
+scopes and granular `repo`/`blob`/`rpc`/`account` permissions; `transition:chat.bsky` requires
 `transition:generic`. Other permission resource types and permission sets await
 implementation. Unknown fields, client secrets,
 verifiers, Request Objects, and supplied request URIs are rejected. Input is capped
@@ -4668,8 +4669,7 @@ client assertions, public/confidential clients, refresh grants, transitional
 scopes and `prompt=create`. Explicit `response_mode=query` is accepted by PAR;
 other response modes are rejected. The static scope list includes `repo:*` and
 `blob:*/*`; parameterized RPC permissions are also supported for service-token
-issuance. The scope list is not exhaustive. Identity/account permissions and
-permission sets remain pending.
+issuance. The scope list is not exhaustive. Identity permissions and permission sets remain pending.
 
 Both documents derive their URLs from Phoenix Endpoint's configured public URL,
 never request or forwarding headers. Configure a canonical HTTPS origin without a
@@ -4936,12 +4936,12 @@ callback cannot restore an admitted proof. Callers may require additional scopes
 This callback is for database reads only, not network requests or writes.
 
 The session response contains DID, handle, and active status. `transition:email`
-in the **access token** adds email and confirmation status; a broader OAuth
+or `account:email` (read or manage) in the **access token** adds email and confirmation status; a broader OAuth
 session cannot restore email access to a narrowed token. OAuth responses omit
 `emailAuthFactor` and never contain password-session JWTs. Inactive accounts,
 expired/revoked tokens or source sessions, and unknown issuers cannot read through
-this guard. Other routes retain their existing authentication requirements;
-OAuth does not grant account-management access.
+this guard. Email management and repository import require explicit account
+permissions as described below; other routes retain their authentication requirements.
 
 The resource header plug runs before XRPC rate/method/query guards, so recognized
 DPoP attempts receive fresh resource nonces even on early errors. CORS permits
@@ -5147,8 +5147,31 @@ rejection and scope changes during schema lookup. Parsing and coverage tests inc
 wildcards, multiple collections, combined grants and rejected encodings. The syntax
 follows the [repository permission specification](https://atproto.com/specs/permission#repo);
 `putRecord` follows the reference PDS requirement for both create and update.
-Granular blob and RPC permissions are described below. Account/identity permissions
+Granular blob and RPC permissions are described below. Identity permissions
 and `include:` permission sets remain pending and are rejected at PAR admission.
+
+### OAuth account permissions
+
+`account:email` (or explicit `action=read`) exposes email and confirmation status
+in `getSession`. `account:email?action=manage` includes read access and authorizes
+`requestEmailUpdate`, `updateEmail`, `requestEmailConfirmation`, and `confirmEmail`.
+Existing confirmation codes, expiry, cooldowns and address checks still apply;
+all email delivery uses the configured Cloudflare Worker. OAuth responses omit
+`emailAuthFactor`. Changing an address clears its confirmation and email factor.
+
+`account:repo?action=manage` authorizes signed CAR import through `importRepo`.
+`account:repo` alone adds no capability. Neither permission grants record writes
+or blob uploads. `transition:generic` and `repo:*` do not grant account management.
+The parser also accepts scalar `attr` query parameters, rejects wildcards and
+unknown attributes, and permits refresh narrowing from manage to read.
+
+Both paths admit DPoP before reading request bodies and recheck current token,
+grant and source-session authorization before mutation. Internal credentials are
+bound to the process and endpoint; imports allow 300 seconds for validation,
+while other write credentials expire after 30 seconds. OAuth requires an active
+account; legacy migration authentication retains its existing inactive-account
+policy. CAR ownership, signature, captured-head and atomic import checks still
+apply. The semantics follow the [account permission specification](https://atproto.com/specs/permission#account).
 
 ### DPoP blob uploads
 
