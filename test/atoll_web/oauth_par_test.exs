@@ -72,6 +72,22 @@ defmodule AtollWeb.OAuthPARTest do
     assert row.parameters["prompt"] == "create"
   end
 
+  test "explicit query response mode is retained and unsupported modes are rejected", c do
+    for mode <- ["fragment", "form_post", "", "QUERY"] do
+      params = Map.put(c.params, "response_mode", mode)
+
+      assert %{"error" => "invalid_request"} =
+               send_form(c, URI.encode_query(params)) |> json_response(400)
+    end
+
+    params = Map.put(c.params, "response_mode", "query")
+    assert send_form(c, URI.encode_query(params) <> "&response_mode=query").status == 400
+    assert Repo.aggregate(Atoll.OAuth.PushedRequest, :count) == 0
+    result = send_form(c, URI.encode_query(params)) |> json_response(201)
+    assert {:ok, row} = PAR.get(@id, result["request_uri"])
+    assert row.parameters["response_mode"] == "query"
+  end
+
   test "nonce challenge happens before metadata fetch or assertion consumption", c do
     signing = JOSE.JWK.generate_key({:ec, :secp256r1})
     {_, public} = JOSE.JWK.to_public_map(signing)
@@ -101,6 +117,7 @@ defmodule AtollWeb.OAuthPARTest do
       URI.encode_query(
         Map.merge(c.params, %{
           "prompt" => "create",
+          "response_mode" => "query",
           "login_hint" => "alice.example.com",
           "dpop_jkt" => JOSE.JWK.thumbprint(c.key),
           "client_assertion" => assertion,

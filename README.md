@@ -413,6 +413,7 @@ mutation. Deletes and empty batches need no record schema, even with `validate: 
 - [x] Internal ES256 WebAuthn registration/assertion verification with a Chrome virtual-authenticator fixture.
 - [x] Internal persisted passkey enrollment, one-use ceremonies, user-verified login, inventory and cascading revocation.
 - [x] Optional passkey browser enrollment, authentication, management, and password-based recovery.
+- [x] OAuth authorization-server and protected-resource discovery metadata with browser CORS.
 - [x] OAuth `prompt=create` account-creation flow, including pushed-request validation and browser signup.
 - [x] Internal RFC 6238 TOTP verification, authenticator provisioning URIs, and account-bound encrypted secret envelopes.
 - [x] Internal persistent TOTP enrollment and confirmation, one-time login codes, database attempt limits, and key rotation.
@@ -4646,17 +4647,52 @@ are described below. Protocol references:
 [PKCE (RFC 7636)](https://www.rfc-editor.org/rfc/rfc7636.html) and
 [PAR (RFC 9126)](https://datatracker.ietf.org/doc/html/rfc9126).
 
+### OAuth server discovery
+
+`GET /.well-known/oauth-protected-resource` identifies this PDS and its colocated
+authorization server. `GET /.well-known/oauth-authorization-server` advertises the
+implemented authorization, PAR and token endpoints, PKCE S256, ES256 DPoP and
+client assertions, public/confidential clients, refresh grants, transitional
+scopes and `prompt=create`. Explicit `response_mode=query` is accepted by PAR;
+other response modes are rejected. Fine-grained permissions remain pending.
+
+Both documents derive their URLs from Phoenix Endpoint's configured public URL,
+never request or forwarding headers. Configure a canonical HTTPS origin without a
+path prefix; non-default ports are allowed. A mismatched request hostname returns
+404, and invalid origin configuration returns 503. HTTP localhost discovery is
+available only with the existing development/test `localhost_dids_enabled` opt-in.
+Behind a reverse proxy, preserve the public Host header and configure the Endpoint
+URL with the external scheme and port.
+
+Discovery requires no credentials or cookies. GET returns JSON; HEAD returns the
+same headers without a body. Both use a five-minute public cache lifetime and
+`Access-Control-Allow-Origin: *`. OPTIONS
+supports browser preflights for GET/HEAD and Accept, Accept-Language, Content-Type
+headers. Query strings and encoded path aliases are rejected; unsupported methods
+return 405 before request-body parsing. Error responses are not cached.
+
+Metadata describes capabilities even when account signup is disabled or secrets
+are unconfigured. PAR/token still require the configured OAuth nonce secret, and
+account login requires the session secrets. Legacy Bearer sessions remain
+supported, so resource metadata does not claim every access token is DPoP-bound.
+No unimplemented registration, revocation, introspection, userinfo or JWKS endpoint
+is advertised. Discovery follows the
+[ATProto server metadata profile](https://atproto.com/specs/oauth#server-metadata).
+HTTP tests follow discovery through PAR, password login, consent, code exchange,
+a DPoP resource read, and source-session logout/revocation. They also cover origin
+configuration, hostname isolation, CORS, HEAD and early method validation.
+
 ### PAR HTTP adapter
 
 `POST /oauth/par` accepts `application/x-www-form-urlencoded` with UTF-8 encoding
 and returns HTTP 201 with `request_uri` and `expires_in` after successful admission.
 Configure `ATOLL_OAUTH_NONCE_SECRET` as described above; without it this route
-returns HTTP 503 `temporarily_unavailable`. No complete OAuth server is advertised:
-discovery, browser authorization/consent, and remaining resource authorization
-still need implementation, so the returned reference cannot yet complete a login.
+returns HTTP 503 `temporarily_unavailable`. Discovery and browser consent are
+available; remaining resource authorization and fine-grained permissions are
+still pending, so full OAuth support remains unchecked.
 
 The boundary runs before general body parsing, method rewriting, and Phoenix
-controller parameter logging. Forms are flat, limited to 12 fields and 48 KiB of
+controller parameter logging. Forms are flat, limited to 13 fields and 48 KiB of
 encoded bytes, with a five-second body read timeout and the internal 16 KiB
 decoded-parameter cap. Duplicate names after percent decoding, invalid percent
 escapes/UTF-8, nested fields, query parameters, compressed bodies, and header-based
@@ -4767,8 +4803,8 @@ Tests cover digest-only storage, binding failures, source-session revocation,
 expiry, client metadata/key changes, access-only clients, capacity rollback,
 marker retention, and concurrent redemption. The HTTP adapter below exposes this
 service. Refresh rotation and DPoP `getSession` are described below. Browser
-consent, discovery, and remaining resource scope enforcement remain unchecked
-above; the periodic key checker is described below.
+consent and discovery are implemented; remaining resource scope enforcement
+remains unchecked above. The periodic key checker is described below.
 
 
 ### Token HTTP adapter
@@ -5198,7 +5234,7 @@ HTTP tests explicitly enable CSRF protection and cover the complete login/list/
 revoke/logout flow, email and DID login, restricted credential rejection, email
 factor prompts, cookie tampering, expired browser/account sessions, HTML escaping,
 request limits, and invalid forms/methods. Browser OAuth consent is described below;
-server discovery remains pending.
+server discovery is described above.
 
 ### Browser OAuth authorization and consent
 
@@ -5245,7 +5281,7 @@ read, denial, logout cascades, CSRF and form tampering, hint mismatches, expired
 requests and duplicate/extra query fields. A transaction-level test verifies the
 displayed account cannot be replaced during code issuance. The shared login shell
 has been visually checked in desktop, mobile and dark mode; a complete browser
-OAuth interoperability run and discovery remain separate tasks.
+OAuth interoperability run remains a separate task.
 
 ### OAuth account creation (`prompt=create`)
 
@@ -5282,7 +5318,7 @@ existing pending signup using exactly the same credentials, email and invitation
 subject to the existing signup recovery policy. Disabled signup returns a local
 error without redirecting to the client.
 
-Tests exercise HTTP admission (including all twelve confidential-client fields),
+Tests exercise HTTP admission (including all thirteen confidential-client fields),
 invalid/duplicate prompts, complete signup/consent/code exchange, existing-login
 isolation, CSRF and context tampering, invitation/hint checks, disabled signup,
 directory retry, and expiry both before and during registration. The rendered signup

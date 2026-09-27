@@ -9,8 +9,8 @@ defmodule Atoll.OAuth.PAR do
   alias Atoll.Repo
   alias Atoll.OAuth.{ClientMetadata, ClientAssertions, Proofs, PKCE, PKCEUse, PushedRequest}
   @prefix "urn:ietf:params:oauth:request_uri:"
-  @fields ~w(client_id response_type redirect_uri scope state code_challenge code_challenge_method login_hint prompt dpop_jkt client_assertion_type client_assertion)
-  @stored ~w(client_id response_type redirect_uri scope state code_challenge code_challenge_method login_hint prompt)
+  @fields ~w(client_id response_type response_mode redirect_uri scope state code_challenge code_challenge_method login_hint prompt dpop_jkt client_assertion_type client_assertion)
+  @stored ~w(client_id response_type response_mode redirect_uri scope state code_challenge code_challenge_method login_hint prompt)
   @scopes ~w(atproto transition:generic transition:chat.bsky transition:email)
   @lock 4_182_026_052
 
@@ -79,7 +79,7 @@ defmodule Atoll.OAuth.PAR do
     _ in [Postgrex.Error, DBConnection.ConnectionError] -> {:error, :oauth_par_store_unavailable}
   end
 
-  defp valid_input?(params) when is_map(params) and map_size(params) <= 12 do
+  defp valid_input?(params) when is_map(params) and map_size(params) <= 13 do
     Enum.all?(params, fn {k, v} ->
       k in @fields and is_binary(v) and byte_size(v) in 1..8192 and String.valid?(v)
     end) and
@@ -89,7 +89,8 @@ defmodule Atoll.OAuth.PAR do
       text?(params["client_id"], 2048) and text?(params["redirect_uri"], 2048) and
       text?(params["scope"], 4096) and
       (not Map.has_key?(params, "login_hint") or text?(params["login_hint"], 2048)) and
-      (not Map.has_key?(params, "prompt") or params["prompt"] == "create")
+      (not Map.has_key?(params, "prompt") or params["prompt"] == "create") and
+      (not Map.has_key?(params, "response_mode") or params["response_mode"] == "query")
   end
 
   defp valid_input?(_), do: false

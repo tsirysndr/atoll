@@ -53,7 +53,60 @@ defmodule AtollWeb.BrowserConsentTest do
     Map.put(c, :uri, uri)
   end
 
-  test "browser consent narrows permissions and exchanges a code; logout revokes its source", c do
+  test "discovered endpoints complete PAR, browser consent, token exchange and resource access",
+       c do
+    prior = Application.fetch_env(:atoll, :localhost_dids_enabled)
+    Application.put_env(:atoll, :localhost_dids_enabled, true)
+
+    on_exit(fn ->
+      case prior do
+        {:ok, value} -> Application.put_env(:atoll, :localhost_dids_enabled, value)
+        :error -> Application.delete_env(:atoll, :localhost_dids_enabled)
+      end
+    end)
+
+    resource =
+      get(c.conn, AtollWeb.Endpoint.url() <> "/.well-known/oauth-protected-resource")
+      |> json_response(200)
+
+    metadata =
+      get(
+        c.conn,
+        hd(resource["authorization_servers"]) <> "/.well-known/oauth-authorization-server"
+      )
+      |> json_response(200)
+
+    Repo.delete_all(PushedRequest)
+    verifier = random()
+
+    params =
+      c.params
+      |> Map.put("response_mode", "query")
+      |> Map.put(
+        "code_challenge",
+        :crypto.hash(:sha256, verifier) |> Base.url_encode64(padding: false)
+      )
+
+    c = %{c | params: params, verifier: verifier, nonce: "initial-nonce"}
+    par_url = metadata["pushed_authorization_request_endpoint"]
+
+    challenge =
+      c.conn
+      |> put_req_header("content-type", "application/x-www-form-urlencoded")
+      |> put_req_header("dpop", proof(c, URI.parse(par_url).path))
+      |> post(par_url, URI.encode_query(params))
+
+    assert json_response(challenge, 400)["error"] == "use_dpop_nonce"
+    c = %{c | nonce: hd(get_resp_header(challenge, "dpop-nonce"))}
+
+    pushed =
+      c.conn
+      |> put_req_header("content-type", "application/x-www-form-urlencoded")
+      |> put_req_header("dpop", proof(c, URI.parse(par_url).path))
+      |> post(par_url, URI.encode_query(params))
+      |> json_response(201)
+
+    c = c |> Map.put(:metadata, metadata) |> Map.put(:uri, pushed["request_uri"])
     page = consent_page(c)
     assert html_response(page, 200) =~ "Connect an application"
     assert page.resp_body =~ c.did
@@ -81,7 +134,7 @@ defmodule AtollWeb.BrowserConsentTest do
     assert c.conn
            |> put_req_header("authorization", "DPoP " <> tokens["access_token"])
            |> put_req_header("dpop", read_proof)
-           |> get("/xrpc/com.atproto.server.getSession")
+           |> get(resource["resource"] <> "/xrpc/com.atproto.server.getSession")
            |> json_response(200)
 
     sessions = approved |> browser() |> get("/account/sessions")
@@ -485,8 +538,12 @@ defmodule AtollWeb.BrowserConsentTest do
     do:
       get(
         c.conn,
-        "/oauth/authorize?" <> URI.encode_query(%{client_id: @client, request_uri: c.uri})
+        authorization_endpoint(c) <>
+          "?" <> URI.encode_query(%{client_id: @client, request_uri: c.uri})
       )
+
+  defp authorization_endpoint(%{metadata: metadata}), do: metadata["authorization_endpoint"]
+  defp authorization_endpoint(_), do: "/oauth/authorize"
 
   defp submit(page, params),
     do: post_form(page, "/oauth/authorize", Map.merge(%{"view" => value(page, "view")}, params))
@@ -513,7 +570,7 @@ defmodule AtollWeb.BrowserConsentTest do
     |> put_req_header("content-type", "application/x-www-form-urlencoded")
     |> put_req_header("dpop", proof(c, "/oauth/token"))
     |> post(
-      "/oauth/token",
+      Map.get(c, :metadata, %{})["token_endpoint"] || "/oauth/token",
       URI.encode_query(%{
         "grant_type" => "authorization_code",
         "client_id" => @client,
