@@ -11,7 +11,6 @@ defmodule Atoll.OAuth.PAR do
   @prefix "urn:ietf:params:oauth:request_uri:"
   @fields ~w(client_id response_type response_mode redirect_uri scope state code_challenge code_challenge_method login_hint prompt dpop_jkt client_assertion_type client_assertion)
   @stored ~w(client_id response_type response_mode redirect_uri scope state code_challenge code_challenge_method login_hint prompt)
-  @scopes ~w(atproto transition:generic transition:chat.bsky transition:email)
   @lock 4_182_026_052
 
   @doc false
@@ -129,7 +128,7 @@ defmodule Atoll.OAuth.PAR do
       not ClientMetadata.scopes_allowed?(metadata, params["scope"]) ->
         {:error, :invalid_scope}
 
-      not Enum.all?(scopes, &(&1 in @scopes)) ->
+      not Enum.all?(scopes, &Atoll.OAuth.Permissions.supported?/1) ->
         {:error, :invalid_scope}
 
       "transition:chat.bsky" in scopes and "transition:generic" not in scopes ->

@@ -144,6 +144,71 @@ defmodule AtollWeb.BrowserConsentTest do
     assert Repo.aggregate(Atoll.OAuth.Session, :count) == 0
   end
 
+  test "granular repository consent displays requested operations and excludes unchecked scopes",
+       c do
+    # A localhost client's declared wildcard covers narrower requested permissions.
+    client =
+      "http://localhost?" <>
+        URI.encode_query(%{"scope" => "atproto repo:*", "redirect_uri" => @redirect_uri})
+
+    verifier = random()
+    scopes = for n <- 1..15, do: "repo:com.example.record#{n}?action=create"
+
+    params =
+      c.params
+      |> Map.put("client_id", client)
+      |> Map.put("scope", Enum.join(["atproto" | scopes], " "))
+      |> Map.put(
+        "code_challenge",
+        :crypto.hash(:sha256, verifier) |> Base.url_encode64(padding: false)
+      )
+
+    Repo.delete_all(PushedRequest)
+    {:ok, %{request_uri: uri}} = PAR.push(params, [proof(c, "/oauth/par")])
+
+    start =
+      get(c.conn, "/oauth/authorize?" <> URI.encode_query(%{client_id: client, request_uri: uri}))
+
+    login = start |> browser() |> get("/account/login")
+
+    signed =
+      post_form(login, "/account/login", %{
+        "identifier" => c.did,
+        "password" => "browser password"
+      })
+
+    page = signed |> browser() |> get("/oauth/authorize")
+    assert html_response(page, 200) =~ "create in com.example.record1"
+    refute page.resp_body =~ "use application services"
+    assert submit(page, %{"decision" => "approve", "permission_999" => "yes"}).status == 400
+    assert submit(page, %{"decision" => "approve", "permission_1" => "repo:*"}).status == 400
+    # More than thirteen form fields are valid only for bounded consent choices.
+    choices = for n <- 1..14, into: %{}, do: {"permission_#{n}", "yes"}
+    approved = submit(page, Map.put(choices, "decision", "approve"))
+
+    callback =
+      redirected_to(approved, 303) |> URI.parse() |> Map.fetch!(:query) |> URI.decode_query()
+
+    tokens =
+      c.conn
+      |> put_req_header("content-type", "application/x-www-form-urlencoded")
+      |> put_req_header("dpop", proof(c, "/oauth/token"))
+      |> post(
+        "/oauth/token",
+        URI.encode_query(%{
+          "grant_type" => "authorization_code",
+          "client_id" => client,
+          "code" => callback["code"],
+          "redirect_uri" => @redirect_uri,
+          "code_verifier" => verifier
+        })
+      )
+      |> json_response(200)
+
+    assert tokens["scope"] == Enum.join(["atproto" | Enum.take(scopes, 14)], " ")
+    refute tokens["scope"] =~ "record15"
+  end
+
   test "denial returns only the stored callback, state and issuer and consumes the request", c do
     page = consent_page(c)
     denied = submit(page, %{"decision" => "deny"})

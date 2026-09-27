@@ -425,6 +425,8 @@ mutation. Deletes and empty batches need no record schema, even with `validate: 
 - [x] Configurable periodic confidential-client key checks, including idle sessions, with bounded revocation and sweep progress after failures.
 - [x] OAuth resource read guard and DPoP `getSession`, with per-access-token email scope enforcement.
 - [x] DPoP repository create/put/delete/applyWrites with transitional generic scope and transactional authorization rechecks.
+- [x] Granular repository OAuth permissions by collection/action, browser consent, and semantic scope narrowing.
+- [ ] Granular blob, RPC, identity and account permissions, and dynamically resolved permission sets.
 - [x] DPoP blob uploads with transitional generic scope, pre-body proof admission, and transactional authorization rechecks.
 - [x] DPoP service-token issuance with current generic/chat scope checks and authorization locks held through signing.
 - [x] DPoP authentication on public repository/blob export routes without granting inactive-account export privileges.
@@ -4500,7 +4502,9 @@ require the client's HTTPS origin or its reversed-domain custom scheme. Explicit
 default HTTPS callback ports are rejected. `redirect_allowed?/2` compares the
 entire callback exactly, including any query, except for virtual localhost
 clients where only the loopback port is ignored. `scopes_allowed?/2` requires
-`atproto` and checks that every requested scope was declared; this does not grant
+`atproto` and checks that every requested scope is covered by the declaration.
+Repository permissions may narrow collections/actions and combine coverage across
+declared scopes; other scopes still require exact membership. This does not grant
 permissions or replace consent and endpoint scope enforcement.
 
 Local bounds are 32 distinct callbacks, 128 scope tokens in a 4 KiB scope string,
@@ -4609,9 +4613,10 @@ expected proof target.
 Requests require `response_type=code`, state, an exactly registered callback,
 declared scopes including `atproto`, and an S256 challenge. Optional `login_hint`
 is preserved but is not account authentication. An optional `dpop_jkt` must match
-the verified proof key. Current scope admission is limited to `atproto` and the
-three transitional scopes; `transition:chat.bsky` requires `transition:generic`.
-Other permissions await scope enforcement. Unknown fields, client secrets,
+the verified proof key. Scope admission accepts `atproto`, the three transitional
+scopes and granular `repo` permissions; `transition:chat.bsky` requires
+`transition:generic`. Other permission resource types and permission sets await
+implementation. Unknown fields, client secrets,
 verifiers, Request Objects, and supplied request URIs are rejected. Input is capped
 at 16 KiB of decoded names/values; state and login hints are capped at 2 KiB.
 The HTTP form adapter rejects duplicate fields before producing a map.
@@ -4657,7 +4662,8 @@ authorization server. `GET /.well-known/oauth-authorization-server` advertises t
 implemented authorization, PAR and token endpoints, PKCE S256, ES256 DPoP and
 client assertions, public/confidential clients, refresh grants, transitional
 scopes and `prompt=create`. Explicit `response_mode=query` is accepted by PAR;
-other response modes are rejected. Fine-grained permissions remain pending.
+other response modes are rejected. Repository permissions are supported and
+`repo:*` is advertised; the other fine-grained permission types remain pending.
 
 Both documents derive their URLs from Phoenix Endpoint's configured public URL,
 never request or forwarding headers. Configure a canonical HTTPS origin without a
@@ -4691,7 +4697,7 @@ configuration, hostname isolation, CORS, HEAD and early method validation.
 and returns HTTP 201 with `request_uri` and `expires_in` after successful admission.
 Configure `ATOLL_OAUTH_NONCE_SECRET` as described above; without it this route
 returns HTTP 503 `temporarily_unavailable`. Discovery and browser consent are
-available; remaining resource authorization and fine-grained permissions are
+available; remaining resource authorization and other fine-grained permissions are
 still pending, so full OAuth support remains unchecked.
 
 The boundary runs before general body parsing, method rewriting, and Phoenix
@@ -4948,7 +4954,7 @@ read and that later reads fail after session deletion. Resource
 challenges follow [RFC 9449 sections 7 and 9](https://www.rfc-editor.org/rfc/rfc9449.html#section-7).
 Repository writes, blob uploads, service authorization, exports and account
 inventory are integrated as described below. Other resource routes and
-fine-grained permissions still need endpoint-specific OAuth authorization.
+other fine-grained permissions still need endpoint-specific OAuth authorization.
 
 
 ### Periodic confidential-client key checks
@@ -5048,14 +5054,15 @@ authenticate with confidential-client assertions.
 Tests cover safe defaults, repeated callbacks, scope parsing, ambiguous IDs and
 queries, loopback restrictions, and a flow through HTTP PAR, internal account
 approval, HTTP code exchange, refresh, and DPoP `getSession` with all metadata
-network access prohibited. Browser login/consent remains unfinished. The behavior
+network access prohibited. Browser login/consent is described below. The behavior
 implements the [ATProto localhost client profile](https://atproto.com/specs/oauth#localhost-client-development).
 
 
 ### DPoP repository record writes
 
 `com.atproto.repo.createRecord`, `putRecord`, `deleteRecord`, and `applyWrites`
-accept DPoP access tokens with `atproto transition:generic`. A token narrowed to
+accept DPoP access tokens with `atproto` and either `transition:generic` or
+applicable granular repository permissions. A token narrowed to
 `atproto` or email access cannot borrow the broader session grant. These routes
 require the canonical XRPC path and a new POST proof bound to the configured
 origin, resource nonce, access-token hash, and original DPoP key. Legacy password
@@ -5090,9 +5097,52 @@ their XRPC responses. Fresh resource nonces and CORS headers remain available.
 Tests cover all four methods, foreign-repository denial, schema and swap failures,
 batch rollback, proof replay after failures, body limits, session revocation and
 scope narrowing during schema lookup, and rejection of altered, expired,
-wrong-operation, or foreign-process internal credentials. Fine-grained repository
-permissions beyond the transitional generic scope remain pending, as do the
-remaining resource integrations listed above. OAuth blob uploads are described below.
+wrong-operation, or foreign-process internal credentials. Granular repository
+permissions are described next; other resource integrations remain tracked above.
+
+### Granular repository permissions
+
+Clients can request `repo:com.example.post` for create/update/delete access to one
+collection, or restrict actions with
+`repo:com.example.post?action=create&action=delete`. `repo:*` grants all collections;
+`repo:*?action=delete` grants deletion only. Repeated `collection` query parameters
+support several collections in one scope, for example
+`repo?collection=com.example.post&collection=com.example.profile&action=create`.
+Partial collection wildcards are rejected. Positional values and query parameters
+support percent encoding; a positional collection cannot also appear in the query.
+Unknown parameters, malformed encoding, invalid NSIDs/actions and duplicate action
+values are rejected. Each scope is bounded by the existing 4 KiB/128-scope budget;
+a single permission has at most 128 query parameters.
+
+Client metadata declarations, consent grants and refresh requests use semantic
+coverage for repository permissions. A broad collection/action grant can cover a
+narrower request, and grants can combine their action coverage. Narrow collections
+cannot cover a wildcard and omitted actions mean all three operations. This does
+not allow a repository scope to become transitional generic access. Other scope
+types retain exact membership checks.
+
+The consent page names the collections and operations and lets the user uncheck
+individual requested permissions. Checked fields refer to stored request scopes;
+clients cannot submit new scope text in the form. Consent accepts up to 131 flat
+fields within its existing 8 KiB body limit, accommodating all bounded scope
+choices and CSRF/context fields. Other OAuth forms retain their 13-field limit.
+
+Record requests must have a relevant permission before body parsing. After parsing,
+each collection/action is checked before network schema lookup and again under
+repository and authorization locks before mutation. `createRecord` requires
+create, `deleteRecord` requires delete, and `putRecord` requires **both create and
+update** even if a record already exists. Each `applyWrites` operation requires its
+own action; one denied operation rejects the entire batch. Repository permissions
+do not authorize blob uploads, email access or service-token issuance.
+
+HTTP tests cover issuance through PAR/code exchange, browser selection of more than
+thirteen permissions, refresh narrowing, collection/action denial, atomic batch
+rejection and scope changes during schema lookup. Parsing and coverage tests include
+wildcards, multiple collections, combined grants and rejected encodings. The syntax
+follows the [repository permission specification](https://atproto.com/specs/permission#repo);
+`putRecord` follows the reference PDS requirement for both create and update.
+Granular blob/RPC/account/identity permissions and `include:` permission sets remain
+pending and are rejected at PAR admission.
 
 ### DPoP blob uploads
 

@@ -13,12 +13,13 @@ defmodule Atoll.Repositories.Writes do
          {:ok, commit} <- swap(body, "swapCommit", false),
          {:ok, did} <- repository_did(body["repo"]),
          true <- did == claims["sub"],
-         {:ok, _} <- authenticate(token, :batch),
+         {:ok, principal} <- authenticate(token, :batch),
+         :ok <- permissions(token, principal, :batch, body),
          {:ok, catalog} <- Atoll.Lexicon.WriteValidation.catalog(body, :batch),
          {:ok, writes} <- batch_operations(body, catalog) do
       Repo.transaction(fn ->
         did = claims["sub"]
-        head = authorize!(token, did, :batch)
+        head = authorize!(token, did, :batch, body)
         if commit != :any and commit != head.head, do: Repo.rollback(:invalid_swap)
 
         {prepared, _} =
@@ -147,7 +148,30 @@ defmodule Atoll.Repositories.Writes do
 
   defp authenticate(token, _action), do: Sessions.authenticate(token)
 
-  defp authorize!(token, did, action) do
+  defp permissions(%Atoll.OAuth.WriteCredential{}, principal, action, body) do
+    operations =
+      case action do
+        :batch ->
+          Enum.map(body["writes"], fn value ->
+            @batch_type <> action = value["$type"]
+            {value["collection"], action}
+          end)
+
+        :put ->
+          [{body["collection"], "create"}, {body["collection"], "update"}]
+
+        _ ->
+          [{body["collection"], Atom.to_string(action)}]
+      end
+
+    if Enum.all?(operations, fn {collection, operation} ->
+         Atoll.OAuth.Permissions.allows_repo?(principal.scope, collection, operation)
+       end), do: :ok, else: {:error, :insufficient_scope}
+  end
+
+  defp permissions(_, _, _, _), do: :ok
+
+  defp authorize!(token, did, action, body) do
     Events.lock!()
     # Write-lock the head before locking the session, matching other authenticated writes.
     head =
@@ -155,8 +179,14 @@ defmodule Atoll.Repositories.Writes do
         Repo.rollback(:invalid_token)
 
     case authenticate(token, action) do
-      {:ok, _} -> head
-      {:error, reason} -> Repo.rollback(reason)
+      {:ok, principal} ->
+        case permissions(token, principal, action, body) do
+          :ok -> head
+          {:error, reason} -> Repo.rollback(reason)
+        end
+
+      {:error, reason} ->
+        Repo.rollback(reason)
     end
   end
 
@@ -167,12 +197,13 @@ defmodule Atoll.Repositories.Writes do
          {:ok, record} <- record_swap(action, body),
          {:ok, did} <- repository_did(body["repo"]),
          true <- did == claims["sub"],
-         {:ok, _} <- authenticate(token, action),
+         {:ok, principal} <- authenticate(token, action),
+         :ok <- permissions(token, principal, action, body),
          {:ok, catalog} <- Atoll.Lexicon.WriteValidation.catalog(body, action),
          {:ok, validation} <- record_validation(action, body, catalog) do
       Repo.transaction(fn ->
         did = claims["sub"]
-        head = authorize!(token, did, action)
+        head = authorize!(token, did, action, body)
 
         rkey =
           case Map.fetch(body, "rkey") do

@@ -1,6 +1,6 @@
 defmodule Atoll.OAuth.ServerMetadata do
   @moduledoc "OAuth discovery for Atoll's colocated authorization and resource server."
-  @scopes ~w(atproto transition:generic transition:chat.bsky transition:email)
+  @scopes ~w(atproto transition:generic transition:chat.bsky transition:email repo:*)
 
   def authorization do
     with {:ok, origin} <- origin() do

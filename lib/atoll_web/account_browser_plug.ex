@@ -110,7 +110,8 @@ defmodule AtollWeb.AccountBrowserPlug do
          {:ok, "application", "x-www-form-urlencoded", _} <- Plug.Conn.Utils.media_type(type),
          {:ok, body, conn} <-
            read_body(conn, length: limit, read_length: limit + 1, read_timeout: 5000),
-         {:ok, params} <- Atoll.OAuth.Form.decode(body) do
+         {:ok, params} <-
+           Atoll.OAuth.Form.decode(body, if(path == "/oauth/authorize", do: 131, else: 13)) do
       dispatch(%{conn | body_params: params, params: params}, path)
     else
       {:more, _, conn} -> fail(conn, 413, "Form is too large.")

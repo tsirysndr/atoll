@@ -33,11 +33,11 @@ defmodule Atoll.OAuth.ClientMetadata do
 
   def redirect_allowed?(_, _), do: false
 
-  @doc "Checks requested scope syntax, required atproto, and membership in declared scopes."
+  @doc "Checks requested scope syntax, required atproto, and coverage by declared scopes."
   def scopes_allowed?(%{"scope" => declared}, requested) do
     with {:ok, allowed} <- scopes(declared),
          {:ok, values} <- scopes(requested),
-         do: Enum.all?(values, &(&1 in allowed)),
+         do: Enum.all?(values, &Atoll.OAuth.Permissions.covered?(allowed, &1)),
          else: (_ -> false)
   end
 

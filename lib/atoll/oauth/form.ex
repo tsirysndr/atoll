@@ -1,9 +1,12 @@
 defmodule Atoll.OAuth.Form do
   @moduledoc "Bounded flat OAuth form decoding with duplicate field rejection."
-  def decode(body) when is_binary(body) and byte_size(body) in 1..49_152 do
+  def decode(body, max_fields \\ 13)
+
+  def decode(body, max_fields)
+      when is_binary(body) and byte_size(body) in 1..49_152 and max_fields in 1..131 do
     pairs = String.split(body, "&")
 
-    if length(pairs) <= 13 and not Regex.match?(~r/%(?![0-9a-fA-F]{2})/, body) do
+    if length(pairs) <= max_fields and not Regex.match?(~r/%(?![0-9a-fA-F]{2})/, body) do
       Enum.reduce_while(pairs, {:ok, %{}}, fn pair, {:ok, acc} ->
         case String.split(pair, "=", parts: 2) do
           [key, value] ->
@@ -24,5 +27,5 @@ defmodule Atoll.OAuth.Form do
     end
   end
 
-  def decode(_), do: {:error, :invalid_request}
+  def decode(_, _), do: {:error, :invalid_request}
 end

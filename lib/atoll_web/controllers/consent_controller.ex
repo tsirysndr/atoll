@@ -49,10 +49,12 @@ defmodule AtollWeb.ConsentController do
     p = conn.body_params
     context = get_session(conn, :oauth_pending)
 
-    with true <- Map.keys(p) -- ~w(_csrf_token view decision generic chat email) == [],
-         %{"view" => view, "did" => did, "uri" => uri} <- context,
+    with %{"view" => view, "did" => did, "uri" => uri} <- context,
          true <- p["view"] == view,
          {:ok, request} <- BrowserConsent.load(context),
+         true <-
+           Map.keys(p) --
+             (~w(_csrf_token view decision) ++ Enum.map(permissions(request), &elem(&1, 1))) == [],
          true <- BrowserConsent.creation_matches?(context, request, did),
          :ok <- BrowserConsent.account_matches(request, did),
          {:ok, decision} <- decision(p, request),
@@ -103,16 +105,11 @@ defmodule AtollWeb.ConsentController do
     with {:ok, request} <- BrowserConsent.load(context),
          true <- BrowserConsent.creation_matches?(context, request, did),
          :ok <- BrowserConsent.account_matches(request, did) do
-      scopes = String.split(request.parameters["scope"], " ")
-
       choices =
-        Enum.map_join(@labels, "", fn {scope, field, label} ->
-          if scope in scopes,
-            do:
-              "<label><input type=\"checkbox\" name=\"" <>
-                field <>
-                "\" value=\"yes\" checked>" <> e(label) <> "</label>",
-            else: ""
+        Enum.map_join(permissions(request), "", fn {_, field, label} ->
+          "<label><input type=\"checkbox\" name=\"" <>
+            field <>
+            "\" value=\"yes\" checked>" <> e(label) <> "</label>"
         end)
 
       # A form-action restriction on the initiating page can block the OAuth callback redirect.
@@ -158,17 +155,40 @@ defmodule AtollWeb.ConsentController do
   defp decision(%{"decision" => "deny"}, _), do: {:ok, :deny}
 
   defp decision(%{"decision" => "approve"} = p, request) do
-    requested = String.split(request.parameters["scope"], " ")
-    selected = Enum.filter(@labels, fn {_, field, _} -> p[field] == "yes" end)
+    choices = permissions(request)
+    selected = Enum.filter(choices, fn {_, field, _} -> p[field] == "yes" end)
 
-    if Enum.all?(@labels, fn {scope, field, _} ->
-         is_nil(p[field]) or (p[field] == "yes" and scope in requested)
+    if Enum.all?(choices, fn {_, field, _} ->
+         is_nil(p[field]) or p[field] == "yes"
        end),
        do: {:ok, {:approve, Enum.join(["atproto" | Enum.map(selected, &elem(&1, 0))], " ")}},
        else: {:error, :invalid_scope}
   end
 
   defp decision(_, _), do: {:error, :invalid_consent}
+
+  defp permissions(request) do
+    scopes = String.split(request.parameters["scope"], " ")
+    legacy = Enum.filter(@labels, fn {scope, _, _} -> scope in scopes end)
+
+    granular =
+      scopes
+      |> Enum.with_index()
+      |> Enum.flat_map(fn {scope, index} ->
+        case Atoll.OAuth.Permissions.repo(scope) do
+          {:ok, _} ->
+            [
+              {scope, "permission_" <> Integer.to_string(index),
+               Atoll.OAuth.Permissions.describe(scope)}
+            ]
+
+          _ ->
+            []
+        end
+      end)
+
+    legacy ++ granular
+  end
 
   defp transport,
     do:

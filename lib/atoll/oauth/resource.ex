@@ -63,7 +63,9 @@ defmodule Atoll.OAuth.Resource do
         headers,
         "POST",
         url,
-        fn access, session, _ ->
+        fn access, session, principal ->
+          require_write_permission!(principal, action)
+
           claims = %{
             "digest" => Base.url_encode64(access.digest, padding: false),
             "binding" => fingerprint(session),
@@ -76,7 +78,7 @@ defmodule Atoll.OAuth.Resource do
             receipt: Plug.Crypto.MessageVerifier.sign(Jason.encode!(claims), receipt_key(opts))
           }
         end,
-        Keyword.put(opts, :required_scopes, ["transition:generic"])
+        opts
       )
     else
       {:error, :invalid_request}
@@ -102,9 +104,10 @@ defmodule Atoll.OAuth.Resource do
         session,
         fn principal ->
           if claims["expires"] <= clock!(), do: Repo.rollback(:invalid_token)
+          require_write_permission!(principal, action)
           principal
         end,
-        required_scopes: ["transition:generic"]
+        []
       )
     else
       _ -> {:error, :invalid_token}
@@ -115,6 +118,11 @@ defmodule Atoll.OAuth.Resource do
   end
 
   def recheck(_, _), do: {:error, :invalid_token}
+
+  defp require_write_permission!(principal, action) do
+    unless Atoll.OAuth.Permissions.write_admission?(principal.scope, action),
+      do: Repo.rollback(:insufficient_scope)
+  end
 
   defp owner, do: :erlang.term_to_binary(self()) |> Base.url_encode64(padding: false)
 

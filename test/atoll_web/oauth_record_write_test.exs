@@ -5,7 +5,9 @@ defmodule AtollWeb.OAuthRecordWriteTest do
   alias Atoll.Accounts.Sessions
   @id "https://app.example.com/metadata.json"
 
-  setup %{conn: conn} do
+  setup %{conn: conn} = context do
+    scope = context[:scope] || "atproto transition:generic transition:email"
+
     for name <- [
           :oauth_nonce_secret,
           :oauth_transport_options,
@@ -31,7 +33,7 @@ defmodule AtollWeb.OAuthRecordWriteTest do
       "client_id" => @id,
       "grant_types" => ["authorization_code", "refresh_token"],
       "response_types" => ["code"],
-      "scope" => "atproto transition:generic transition:email",
+      "scope" => scope,
       "redirect_uris" => ["https://app.example.com/callback"],
       "dpop_bound_access_tokens" => true
     }
@@ -53,7 +55,7 @@ defmodule AtollWeb.OAuthRecordWriteTest do
       "client_id" => @id,
       "response_type" => "code",
       "redirect_uri" => "https://app.example.com/callback",
-      "scope" => "atproto transition:generic transition:email",
+      "scope" => scope,
       "state" => "private-state",
       "code_challenge_method" => "S256",
       "code_challenge" => :crypto.hash(:sha256, verifier) |> Base.url_encode64(padding: false)
@@ -81,7 +83,7 @@ defmodule AtollWeb.OAuthRecordWriteTest do
         pair.access_jwt,
         @id,
         uri,
-        {:approve, "atproto transition:generic transition:email"},
+        {:approve, scope},
         Keyword.put(
           Application.fetch_env!(:atoll, :oauth_transport_options),
           :session_options,
@@ -441,6 +443,107 @@ defmodule AtollWeb.OAuthRecordWriteTest do
     Application.put_env(:atoll, :blob_storage, config)
     assert upload_blob(c, "bytes") |> json_response(200)
     assert Repo.one!(Atoll.Blobs.Blob).backend == :s3
+  end
+
+  @tag scope: "atproto repo:com.example.record?action=create&action=delete"
+  test "collection and action permissions control writes without granting media access", c do
+    assert write(c, "createRecord", body(c, "scoped")).status == 200
+    assert write(c, "putRecord", body(c, "scoped")).status == 403
+    assert upload_blob(c, "not-authorized").status == 403
+    Application.put_env(:atoll, :network_lexicons_enabled, true)
+
+    Application.put_env(:atoll, :lexicon_resolution_options,
+      fetch: fn _, _ -> flunk("ungranted collection must fail before schema lookup") end
+    )
+
+    foreign =
+      body(c, "other")
+      |> Map.put("collection", "com.other.record")
+      |> Map.put("record", %{"$type" => "com.other.record"})
+
+    assert write(c, "createRecord", foreign).status == 403
+    assert write(c, "deleteRecord", Map.delete(body(c, "scoped"), "record")).status == 200
+  end
+
+  @tag scope: "atproto repo:com.example.record?action=create&action=update"
+  test "put requires create and update and every batch operation must be permitted", c do
+    assert write(c, "putRecord", body(c, "scoped")).status == 200
+    assert write(c, "putRecord", body(c, "scoped")).status == 200
+    {:ok, before} = Repositories.get_head(c.did)
+
+    batch = %{
+      "repo" => c.did,
+      "writes" => [
+        %{
+          "$type" => "com.atproto.repo.applyWrites#create",
+          "collection" => "com.example.record",
+          "rkey" => "allowed",
+          "value" => %{"$type" => "com.example.record"}
+        },
+        %{
+          "$type" => "com.atproto.repo.applyWrites#delete",
+          "collection" => "com.example.record",
+          "rkey" => "scoped"
+        }
+      ]
+    }
+
+    assert write(c, "applyWrites", batch).status == 403
+    {:ok, after_denial} = Repositories.get_head(c.did)
+    assert before.head == after_denial.head
+    assert {:error, :not_found} = Repositories.get_record(c.did, "com.example.record/allowed")
+
+    update = %{
+      "$type" => "com.atproto.repo.applyWrites#update",
+      "collection" => "com.example.record",
+      "rkey" => "scoped",
+      "value" => %{"$type" => "com.example.record", "text" => "changed"}
+    }
+
+    assert write(c, "applyWrites", Map.put(batch, "writes", [update])).status == 200
+  end
+
+  @tag scope: "atproto repo:*"
+  test "refresh narrows wildcard repository grants to collection and action", c do
+    narrowed_scope = "atproto repo:com.example.record?action=create"
+
+    params = %{
+      "grant_type" => "refresh_token",
+      "client_id" => @id,
+      "refresh_token" => c.tokens["refresh_token"],
+      "scope" => narrowed_scope
+    }
+
+    tokens = send_form(c, URI.encode_query(params)) |> json_response(200)
+    assert tokens["scope"] == narrowed_scope
+    narrowed = %{c | tokens: tokens}
+    assert write(narrowed, "createRecord", body(c, "narrowed")).status == 200
+    assert write(narrowed, "putRecord", body(c, "narrowed")).status == 403
+
+    assert write(narrowed, "deleteRecord", Map.delete(body(c, "narrowed"), "record")).status ==
+             403
+
+    # The original token retains its original permissions until expiry/revocation.
+    assert write(c, "putRecord", body(c, "narrowed")).status == 200
+  end
+
+  @tag scope: "atproto repo:*"
+  test "collection changes during schema lookup are rechecked before committing", c do
+    Application.put_env(:atoll, :network_lexicons_enabled, true)
+
+    Application.put_env(:atoll, :lexicon_resolution_options,
+      fetch: fn _, _ ->
+        Repo.update_all(AccessToken, set: [scope: "atproto repo:com.other.record"])
+        {:error, :lexicon_not_found}
+      end
+    )
+
+    assert write(c, "putRecord", body(c, "changed-scope")) |> json_response(403) == %{
+             "error" => "insufficient_scope"
+           }
+
+    assert {:error, :not_found} =
+             Repositories.get_record(c.did, "com.example.record/changed-scope")
   end
 
   defp upload_blob(c, bytes, signed \\ nil),
