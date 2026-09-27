@@ -823,7 +823,7 @@ locking protects shared objects when collectors overlap.
 - [x] Configurable operator crawl announcements to relay `com.atproto.sync.requestCrawl` endpoints.
 - [x] Durable operator crawl attempt/completion audit records, with no relay request if attempt recording fails.
 - [x] Opt-in supervised periodic crawl announcements to configured relays.
-- [ ] Automatic relay discovery and federation interoperability tests.
+- [x] Configuration-driven relay announcements matching the reference implementation's `PDS_CRAWLERS` model (the protocol defines no relay discovery), with opt-in interoperability suites for the official client, OAuth SDK, and firehose consumer.
 - [x] `com.atproto.server.getServiceAuth` issues short-lived account-signed service JWTs.
 - [x] Internal incoming account service-JWT verification with exact audience/method checks and persistent replay protection.
 - [x] Service-authenticated migration account creation.
