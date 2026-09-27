@@ -4,6 +4,19 @@ defmodule Atoll.Moderation.Audit do
   alias Atoll.{Repo, Syntax}
   alias Atoll.Moderation.AuditEntry
 
+  @doc "Records bounded orphan block deletion without retaining block contents."
+  def block_cleanup!(limit, grace, cutoff, cids, count) do
+    insert!(
+      "atoll.blocks.prune",
+      nil,
+      %{kind: "repositoryBlocks"},
+      %{limit: limit, graceSeconds: grace, cutoff: DateTime.to_iso8601(cutoff)},
+      %{removedCids: Enum.map(cids, &Atoll.CID.to_base32/1)},
+      %{deleted: count},
+      "operator"
+    )
+  end
+
   @doc "Records an operator encryption-maintenance page using public identifiers and counts only."
   def key_rewrap!(operation, limit, cursor, identifiers, result)
       when operation in ["atoll.keys.rewrap", "atoll.keys.rewrapReserved"] do

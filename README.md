@@ -1467,6 +1467,11 @@ GIN index accelerates revision-inventory membership checks. Row locks skip locke
 candidates; lock waits are limited to one second and SQL statements to five seconds.
 Timeouts roll back the batch. Run again or schedule recurring invocations to clear
 a backlog. No automatic block-cleanup scheduler is enabled.
+Each successful batch, including a no-op, atomically records an
+`atoll.blocks.prune` operator audit entry with the requested limit/grace, exact
+cutoff, deleted count, and removed CIDs (at most 1000). It retains no block contents.
+Audit insertion failure rolls back block deletion. Inspect these server-wide
+entries with `mix atoll.moderation.history` without a DID filter.
 
 Historical revisions remain owners even after a record is updated/deleted or an
 account is deactivated. Account deletion removes those ownership inventories,

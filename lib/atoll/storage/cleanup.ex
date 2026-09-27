@@ -56,6 +56,7 @@ defmodule Atoll.Storage.Cleanup do
 
         cids = Repo.all(candidates)
         {count, _} = Repo.delete_all(from b in Block, where: b.cid in ^cids)
+        Atoll.Moderation.Audit.block_cleanup!(limit, grace, cutoff, cids, count)
         count
       end,
       timeout: 10_000

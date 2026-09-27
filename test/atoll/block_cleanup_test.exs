@@ -2,6 +2,7 @@ defmodule Atoll.BlockCleanupTest do
   # Cleanup deliberately times out on the global mutation lock after one second.
   # These success-path tests must not contend with unrelated async repository writes.
   use Atoll.DataCase, async: false
+  alias Atoll.Moderation.AuditEntry
   alias Atoll.{CID, Repositories, SigningKey, Storage}
   alias Atoll.Repositories.{Event, Events, Head, Revision}
   alias Atoll.Storage.{Block, Cleanup}
@@ -108,6 +109,48 @@ defmodule Atoll.BlockCleanupTest do
 
     assert {:ok, {:error, :cleanup_requires_own_transaction}} =
              Repo.transaction(fn -> Cleanup.prune() end)
+
+    assert Repo.aggregate(AuditEntry, :count) == 0
+  end
+
+  test "operator batches audit exact removed CIDs and no-op results" do
+    {:ok, cid} = Storage.put_node(%{"private" => "block content"})
+    age([cid])
+
+    output =
+      ExUnit.CaptureIO.capture_io(fn ->
+        Mix.Tasks.Atoll.Blocks.Prune.run(["--limit", "1", "--grace-seconds", "3600"])
+      end)
+
+    assert output =~ "Deleted 1 unreferenced repository blocks"
+    entry = Repo.one!(AuditEntry)
+    assert entry.operation == "atoll.blocks.prune"
+    assert entry.actor == "operator"
+    assert entry.did == nil
+    assert entry.subject == %{"kind" => "repositoryBlocks"}
+    assert Map.drop(entry.requested, ["cutoff"]) == %{"limit" => 1, "graceSeconds" => 3600}
+    assert {:ok, cutoff, 0} = DateTime.from_iso8601(entry.requested["cutoff"])
+    assert DateTime.diff(DateTime.utc_now(), cutoff) in 3600..3610
+    assert entry.before_state == %{"removedCids" => [CID.to_base32(cid)]}
+    assert entry.after_state == %{"deleted" => 1}
+    assert {:ok, 0} = Cleanup.prune()
+    [_, idle] = Repo.all(from a in AuditEntry, order_by: a.id)
+    assert idle.before_state == %{"removedCids" => []}
+    assert idle.after_state == %{"deleted" => 0}
+  end
+
+  test "audit insertion failure rolls back physical block deletion" do
+    {:ok, cid} = Storage.put_node(%{"orphan" => true})
+    age([cid])
+    before = Repo.get!(Block, cid)
+
+    Repo.query!(
+      "ALTER TABLE moderation_audit_entries ADD CONSTRAINT reject_block_audit CHECK (operation <> 'atoll.blocks.prune')"
+    )
+
+    assert_raise Ecto.ConstraintError, fn -> Cleanup.prune() end
+    assert Repo.get!(Block, cid) == before
+    assert Repo.aggregate(AuditEntry, :count) == 0
   end
 
   defp owned(did),
