@@ -429,6 +429,8 @@ defmodule AtollWeb.BrowserConsentTest do
     c = create_request(c)
     page = signup_page(c)
     assert html_response(page, 200) =~ "Create an account"
+    refute page.resp_body =~ "Invitation code"
+    refute page.resp_body =~ "name=\"inviteCode\""
     assert get_resp_header(page, "cache-control") == ["no-store"]
     assert get_resp_header(page, "content-security-policy") |> hd() =~ "style-src 'self'"
     accept_registration()
@@ -668,6 +670,9 @@ defmodule AtollWeb.BrowserConsentTest do
     assert signup(page).status == 400
     assert Repo.aggregate(Atoll.Accounts.Profile, :count) == 0
     Application.put_env(:atoll, :invite_code_required, true)
+    page = signup_page(c)
+    assert html_response(page, 200) =~ "Invitation code"
+    assert page.resp_body =~ "name=\"inviteCode\" maxlength=\"256\" required"
     assert signup(page, %{"handle" => "different.users.example.com"}).status == 400
     assert Repo.aggregate(Atoll.Accounts.Profile, :count) == 0
     {:ok, invite} = Atoll.Accounts.Invites.create()
@@ -877,8 +882,7 @@ defmodule AtollWeb.BrowserConsentTest do
       "view" => value(page, "view"),
       "handle" => "alice.users.example.com",
       "email" => "alice@example.com",
-      "password" => "signup account password",
-      "inviteCode" => ""
+      "password" => "signup account password"
     }
 
   defp signup(page, changes \\ %{}),

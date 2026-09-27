@@ -156,8 +156,11 @@ defmodule AtollWeb.SignupController do
         ""
       end
 
-    invite_required =
-      if Application.get_env(:atoll, :invite_code_required, false), do: " required", else: ""
+    invitation_field =
+      if Atoll.Accounts.Invites.required?(),
+        do:
+          "<label>Invitation code<input name=\"inviteCode\" maxlength=\"256\" required></label>",
+        else: ""
 
     UI.page(
       conn,
@@ -179,9 +182,8 @@ defmodule AtollWeb.SignupController do
         e(handle) <>
         "\"></label><label>Email (optional)<input name=\"email\" type=\"email\" autocomplete=\"email\" maxlength=\"320\"></label>" <>
         "<label>Password<input name=\"password\" type=\"password\" autocomplete=\"new-password\" required minlength=\"8\" maxlength=\"1024\"></label>" <>
-        "<label>Invitation code<input name=\"inviteCode\" maxlength=\"256\"" <>
-        invite_required <>
-        "></label><p>Keep your password. Creating an account switches this browser to the new account; applications connected to an existing account stay connected.</p><button name=\"action\" value=\"create\">Create account</button>" <>
+        invitation_field <>
+        "<p>Keep your password. Creating an account switches this browser to the new account; applications connected to an existing account stay connected.</p><button name=\"action\" value=\"create\">Create account</button>" <>
         reserve_button <> "</form>"
     )
   end
