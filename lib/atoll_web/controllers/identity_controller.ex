@@ -6,7 +6,7 @@ defmodule AtollWeb.IdentityController do
       Application.get_env(:atoll, :identity_resolution_options, [])
       |> Keyword.merge(Application.get_env(:atoll, :plc_submission_options, []))
 
-    with {:ok, token} <- AtollWeb.BearerToken.get(conn),
+    with {:ok, token} <- identity_credential(conn),
          {:ok, _} <- Atoll.Identity.PLC.Submission.submit(token, params, opts) do
       send_resp(conn, 200, "")
     else
@@ -14,14 +14,14 @@ defmodule AtollWeb.IdentityController do
         AtollWeb.XRPCFallback.call(conn, {:error, :invalid_request})
 
       error ->
-        AtollWeb.XRPCFallback.call(conn, error)
+        identity_error(conn, error)
     end
   end
 
   def sign_operation(conn, params) do
     opts = Application.get_env(:atoll, :plc_submission_options, [])
 
-    with {:ok, token} <- AtollWeb.BearerToken.get(conn),
+    with {:ok, token} <- identity_credential(conn),
          {:ok, result} <- Atoll.Identity.PLC.Signing.sign(token, params, opts) do
       json(conn, result)
     else
@@ -29,12 +29,12 @@ defmodule AtollWeb.IdentityController do
         AtollWeb.XRPCFallback.call(conn, {:error, :invalid_request})
 
       error ->
-        AtollWeb.XRPCFallback.call(conn, error)
+        identity_error(conn, error)
     end
   end
 
   def request_signature(conn, _) do
-    with {:ok, token} <- AtollWeb.BearerToken.get(conn),
+    with {:ok, token} <- identity_credential(conn),
          :ok <- Atoll.Identity.PLC.SignatureChallenges.request(token) do
       send_resp(conn, 200, "")
     else
@@ -42,7 +42,7 @@ defmodule AtollWeb.IdentityController do
         AtollWeb.XRPCFallback.call(conn, {:error, :invalid_request})
 
       error ->
-        AtollWeb.XRPCFallback.call(conn, error)
+        identity_error(conn, error)
     end
   end
 
@@ -51,7 +51,7 @@ defmodule AtollWeb.IdentityController do
       Application.get_env(:atoll, :identity_resolution_options, [])
       |> Keyword.merge(Application.get_env(:atoll, :plc_submission_options, []))
 
-    with {:ok, token} <- AtollWeb.BearerToken.get(conn),
+    with {:ok, token} <- identity_credential(conn),
          {:ok, _} <- Atoll.Identity.HandleChanges.update(token, params, opts) do
       send_resp(conn, 200, "")
     else
@@ -69,9 +69,25 @@ defmodule AtollWeb.IdentityController do
         AtollWeb.XRPCFallback.call(conn, {:error, :identity_unavailable})
 
       error ->
-        AtollWeb.XRPCFallback.call(conn, error)
+        identity_error(conn, error)
     end
   end
+
+  defp identity_credential(conn) do
+    case conn.private[:atoll_identity_credential] do
+      %Atoll.OAuth.WriteCredential{} = credential -> {:ok, credential}
+      _ -> AtollWeb.BearerToken.get(conn)
+    end
+  end
+
+  defp identity_error(conn, {:error, reason} = error)
+       when reason in [:invalid_token, :insufficient_scope, :oauth_resource_store_unavailable] do
+    if match?(%Atoll.OAuth.WriteCredential{}, conn.private[:atoll_identity_credential]),
+      do: AtollWeb.OAuthResource.error(conn, reason),
+      else: AtollWeb.XRPCFallback.call(conn, error)
+  end
+
+  defp identity_error(conn, error), do: AtollWeb.XRPCFallback.call(conn, error)
 
   def refresh(conn, params) do
     opts = Application.get_env(:atoll, :identity_resolution_options, [])

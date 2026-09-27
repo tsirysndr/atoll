@@ -56,7 +56,7 @@ defmodule Atoll.OAuth.PermissionsTest do
       refute Permissions.supported?(scope)
     end
 
-    for scope <- ~w(rpc:* identity:* include:com.example.permissions),
+    for scope <- ~w(rpc:* include:com.example.permissions),
         do: refute(Permissions.supported?(scope))
   end
 
@@ -126,6 +126,46 @@ defmodule Atoll.OAuth.PermissionsTest do
 
     assert Permissions.allows_account?("atproto transition:email", "email", "read")
     refute Permissions.allows_account?("atproto transition:email", "email", "manage")
+  end
+
+  test "identity scopes distinguish handle authority from full DID control" do
+    for scope <- ["identity:handle", "identity?attr=handle", "identity:%68andle?"] do
+      assert {:ok, %{attr: "handle"}} = Permissions.identity(scope)
+      assert Permissions.supported?(scope)
+      assert Permissions.write_admission?("atproto " <> scope, :update_handle)
+      refute Permissions.write_admission?("atproto " <> scope, :sign_plc_operation)
+    end
+
+    assert ClientMetadata.scopes_allowed?(
+             %{"scope" => "atproto identity:*"},
+             "atproto identity:handle"
+           )
+
+    refute ClientMetadata.scopes_allowed?(
+             %{"scope" => "atproto identity:handle"},
+             "atproto identity:*"
+           )
+
+    for action <- [
+          :update_handle,
+          :request_plc_signature,
+          :sign_plc_operation,
+          :submit_plc_operation
+        ] do
+      assert Permissions.write_admission?("atproto identity:*", action)
+      refute Permissions.write_admission?("atproto transition:generic", action)
+    end
+
+    for scope <- [
+          "identity",
+          "identity:did",
+          "identity:handle?attr=handle",
+          "identity?attr=*&attr=handle",
+          "identity:*?action=manage"
+        ] do
+      assert {:error, :invalid_scope} = Permissions.identity(scope)
+      refute Permissions.supported?(scope)
+    end
   end
 
   test "narrowing combines grants but cannot widen collections or actions" do

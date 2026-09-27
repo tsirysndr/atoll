@@ -229,6 +229,58 @@ defmodule AtollWeb.PLCSigningControllerTest do
     assert Repo.get!(Profile, ctx.did).plc_signature_digest
   end
 
+  test "OAuth full identity authority still requires a single-use Worker signing code", ctx do
+    client = Atoll.OAuthFixture.grant(ctx.pair, "atproto identity:*")
+    directory(ctx)
+
+    assert Atoll.OAuthFixture.conn(client, @path)
+           |> post(@path, "{}")
+           |> json_response(400)
+           |> Map.fetch!("error") == "TokenRequired"
+
+    path = "/xrpc/com.atproto.identity.requestPlcOperationSignature"
+    assert Atoll.OAuthFixture.conn(client, path) |> post(path, "") |> response(200) == ""
+    assert_receive {:signing_code, code}
+    input = Jason.encode!(%{token: code})
+
+    op =
+      Atoll.OAuthFixture.conn(client, @path)
+      |> post(@path, input)
+      |> json_response(200)
+      |> Map.fetch!("operation")
+
+    assert {:ok, _} = Operation.verify_update(ctx.previous, op)
+    assert Repo.aggregate(Update, :count) == 0
+
+    assert Atoll.OAuthFixture.conn(client, @path)
+           |> post(@path, input)
+           |> json_response(400)
+           |> Map.fetch!("error") == "InvalidToken"
+  end
+
+  test "OAuth scope changes during directory lookup prevent signing without consuming the code",
+       ctx do
+    client = Atoll.OAuthFixture.grant(ctx.pair, "atproto identity:*")
+    path = "/xrpc/com.atproto.identity.requestPlcOperationSignature"
+    assert Atoll.OAuthFixture.conn(client, path) |> post(path, "") |> response(200) == ""
+    assert_receive {:signing_code, code}
+
+    Req.Test.stub(__MODULE__, fn conn ->
+      Repo.update_all(Atoll.OAuth.AccessToken, set: [scope: "atproto identity:handle"])
+
+      if String.ends_with?(conn.request_path, "/log/audit"),
+        do: Req.Test.json(conn, Agent.get(ctx.state, & &1.audit)),
+        else: Req.Test.json(conn, ctx.previous)
+    end)
+
+    assert Atoll.OAuthFixture.conn(client, @path)
+           |> post(@path, Jason.encode!(%{token: code}))
+           |> json_response(403) == %{"error" => "insufficient_scope"}
+
+    assert Repo.get!(Profile, ctx.did).plc_signature_digest
+    assert Repo.aggregate(Update, :count) == 0
+  end
+
   defp directory(ctx) do
     Req.Test.stub(__MODULE__, fn conn ->
       assert conn.method == "GET"

@@ -429,7 +429,8 @@ mutation. Deletes and empty batches need no record schema, even with `validate: 
 - [x] Granular blob OAuth permissions by MIME type, browser consent, scope narrowing and storage-time checks.
 - [x] Granular RPC OAuth permissions for service tokens, with audience/method restrictions, consent and refresh narrowing.
 - [x] Granular account permissions for email read/manage and signed repository import.
-- [ ] Granular identity permissions, dynamically resolved permission sets, and RPC proxy integration.
+- [x] Granular OAuth identity permissions for handle changes, PLC signature requests, signing and submission.
+- [ ] Dynamically resolved permission sets and RPC proxy integration.
 - [x] DPoP blob uploads with transitional generic scope, pre-body proof admission, and transactional authorization rechecks.
 - [x] DPoP service-token issuance with current generic/chat scope checks and authorization locks held through signing.
 - [x] DPoP authentication on public repository/blob export routes without granting inactive-account export privileges.
@@ -3025,10 +3026,10 @@ command below; no private key is inferred from public history.
 
 ### PLC signing authorization email
 
-`POST /xrpc/com.atproto.identity.requestPlcOperationSignature` takes a full access
-token and no body. It requires a PLC account with a confirmed email, and sends the
-code exclusively through the configured Cloudflare email Worker. Active and
-user-deactivated accounts can request it; app passwords, suspended/taken-down
+`POST /xrpc/com.atproto.identity.requestPlcOperationSignature` takes a full password-session
+access token or an OAuth token with `identity:*`, and no body. It requires a PLC account with a confirmed email, and sends the
+code exclusively through the configured Cloudflare email Worker. Active accounts
+and user-deactivated accounts using password sessions can request it; app passwords, suspended/taken-down
 accounts, and unsupported DID methods cannot. The endpoint returns empty HTTP 200
 only after Worker acceptance. A persistent one-minute cooldown limits issuance.
 
@@ -3040,7 +3041,7 @@ automatic retry or SMTP fallback. Email changes, password resets, and operator
 password/email changes invalidate these challenges alongside existing account codes.
 
 `SignatureChallenges.consume!/2` is the internal signing-transaction boundary: it
-rechecks full-session authorization and confirmed email, verifies expiry and the
+rechecks current session or OAuth identity authorization and confirmed email, verifies expiry and the
 digest, and clears the token atomically. Signing failure must roll back the same
 transaction, preserving the authorization for retry. The public `signPlcOperation` endpoint now consumes these codes;
 `submitPlcOperation` is available for operations matching this local account. Requesting a code does not itself sign or
@@ -3050,7 +3051,8 @@ submit a PLC operation.
 ### Email-authorized PLC signing
 
 `POST /xrpc/com.atproto.identity.signPlcOperation` requires a full active or
-user-deactivated account session and the current email code in `token`. Optional
+user-deactivated password session, or an active OAuth session with `identity:*`,
+and the current email code in `token`. Optional
 `rotationKeys`, `alsoKnownAs`, `verificationMethods`, and `services` replace the
 corresponding fields of the fresh verified predecessor; omitted fields are preserved.
 Callers cannot supply `prev`, `sig`, `type`, or another DID. It returns
@@ -4619,7 +4621,7 @@ Requests require `response_type=code`, state, an exactly registered callback,
 declared scopes including `atproto`, and an S256 challenge. Optional `login_hint`
 is preserved but is not account authentication. An optional `dpop_jkt` must match
 the verified proof key. Scope admission accepts `atproto`, the three transitional
-scopes and granular `repo`/`blob`/`rpc`/`account` permissions; `transition:chat.bsky` requires
+scopes and granular `repo`/`blob`/`rpc`/`account`/`identity` permissions; `transition:chat.bsky` requires
 `transition:generic`. Other permission resource types and permission sets await
 implementation. Unknown fields, client secrets,
 verifiers, Request Objects, and supplied request URIs are rejected. Input is capped
@@ -4669,7 +4671,7 @@ client assertions, public/confidential clients, refresh grants, transitional
 scopes and `prompt=create`. Explicit `response_mode=query` is accepted by PAR;
 other response modes are rejected. The static scope list includes `repo:*` and
 `blob:*/*`; parameterized RPC permissions are also supported for service-token
-issuance. The scope list is not exhaustive. Identity permissions and permission sets remain pending.
+issuance. The scope list is not exhaustive. Identity and account scopes are also advertised. Permission sets remain pending.
 
 Both documents derive their URLs from Phoenix Endpoint's configured public URL,
 never request or forwarding headers. Configure a canonical HTTPS origin without a
@@ -5147,8 +5149,39 @@ rejection and scope changes during schema lookup. Parsing and coverage tests inc
 wildcards, multiple collections, combined grants and rejected encodings. The syntax
 follows the [repository permission specification](https://atproto.com/specs/permission#repo);
 `putRecord` follows the reference PDS requirement for both create and update.
-Granular blob and RPC permissions are described below. Identity permissions
-and `include:` permission sets remain pending and are rejected at PAR admission.
+Granular blob, RPC, account and identity permissions are described below.
+`include:` permission sets remain pending and are rejected at PAR admission.
+
+### OAuth identity permissions
+
+`identity:handle` authorizes `com.atproto.identity.updateHandle`; `identity:*`
+also authorizes `requestPlcOperationSignature`, `signPlcOperation` and
+`submitPlcOperation`. The full grant can be narrowed to handle-only access through
+client metadata, consent and refresh. Scalar `attr` query syntax is accepted;
+unknown attributes, extra parameters and repeated attributes are rejected.
+Transitional generic access does not grant these operations. Consent distinguishes
+handle changes from control over DID keys and migration.
+
+DPoP proof admission precedes body parsing. Each operation receives an endpoint-
+and process-bound internal credential, and current authorization is checked again
+inside the existing mutation transactions. Directory and handle-resolution calls
+run outside those transactions. A token narrowed or revoked during lookup cannot
+authorize subsequent staging, signing or local completion. Already submitted
+external operations cannot be rolled back by local revocation; the durable PLC
+journal remains available for reconciliation and an authorized retry.
+
+Existing identity safeguards still apply: bidirectional custom-handle resolution,
+name reservations, verified directory history and head, local signing-key/service
+compatibility, and atomic profile/identity-event updates. `did:web` handle changes
+require the owner-updated DID document. PLC signing still requires a confirmed
+email and a single-use code delivered by the configured Cloudflare Worker; it
+returns a signature without publishing or changing local identity. OAuth requires
+an active account, while legacy migration sessions retain their existing policy.
+The 30-second credential expiry bounds each request; a retry requires a new proof.
+
+The scope semantics follow the [identity permission specification](https://atproto.com/specs/permission#identity).
+OAuth support for `getRecommendedDidCredentials` and `refreshIdentity` remains
+pending; their existing password-session paths are available.
 
 ### OAuth account permissions
 

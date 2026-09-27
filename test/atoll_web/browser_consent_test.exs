@@ -151,7 +151,7 @@ defmodule AtollWeb.BrowserConsentTest do
       "http://localhost?" <>
         URI.encode_query(%{
           "scope" =>
-            "atproto repo:* blob:*/* rpc:app.example.getFeed?aud=* account:email?action=manage account:repo?action=manage",
+            "atproto repo:* blob:*/* rpc:app.example.getFeed?aud=* account:email?action=manage account:repo?action=manage identity:*",
           "redirect_uri" => @redirect_uri
         })
 
@@ -164,6 +164,7 @@ defmodule AtollWeb.BrowserConsentTest do
           "rpc:app.example.getFeed?aud=*",
           "account:email?action=manage",
           "account:repo?action=manage",
+          "identity:handle",
           "blob:text/plain"
         ]
 
@@ -196,11 +197,12 @@ defmodule AtollWeb.BrowserConsentTest do
     assert page.resp_body =~ "Call application services: app.example.getFeed on any service"
     assert page.resp_body =~ "Read and change your email address"
     assert page.resp_body =~ "Replace your entire public repository"
+    assert page.resp_body =~ "Change your handle"
     refute page.resp_body =~ "use application services"
     assert submit(page, %{"decision" => "approve", "permission_999" => "yes"}).status == 400
     assert submit(page, %{"decision" => "approve", "permission_1" => "repo:*"}).status == 400
     # More than thirteen form fields are valid only for bounded consent choices.
-    choices = for n <- 1..16, into: %{}, do: {"permission_#{n}", "yes"}
+    choices = for n <- 1..17, into: %{}, do: {"permission_#{n}", "yes"}
     approved = submit(page, Map.put(choices, "decision", "approve"))
 
     callback =
@@ -222,7 +224,7 @@ defmodule AtollWeb.BrowserConsentTest do
       )
       |> json_response(200)
 
-    assert tokens["scope"] == Enum.join(["atproto" | Enum.take(scopes, 16)], " ")
+    assert tokens["scope"] == Enum.join(["atproto" | Enum.take(scopes, 17)], " ")
     assert tokens["scope"] =~ "blob:image/*"
     assert tokens["scope"] =~ "rpc:app.example.getFeed?aud=*"
     refute tokens["scope"] =~ "blob:text/plain"

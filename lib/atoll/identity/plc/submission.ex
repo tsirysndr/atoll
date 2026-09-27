@@ -2,7 +2,7 @@ defmodule Atoll.Identity.PLC.Submission do
   @moduledoc "Full-session submission of signed PLC updates matching this PDS's local account."
   import Ecto.Query
   alias Atoll.{CBOR, KeyVault, Multikey, Repo}
-  alias Atoll.Accounts.{Profile, Sessions, Signup}
+  alias Atoll.Accounts.{Profile, Signup}
   alias Atoll.Identity.{Handle, HandleReservation, Observation}
   alias Atoll.Identity.PLC.{Client, Operation, Update, Updates}
   alias Atoll.Repositories.{Events, Head}
@@ -12,14 +12,15 @@ defmodule Atoll.Identity.PLC.Submission do
   def submit(token, %{"operation" => operation} = params, opts)
       when map_size(params) == 1 and is_map(operation) do
     with false <- Repo.in_transaction?(),
-         {:ok, head} <- Sessions.authenticate_management(token),
+         {:ok, head} <-
+           Atoll.Identity.OAuthAuthorization.authenticate(token, :submit_plc_operation),
          :ok <- Operation.validate_submission(operation),
          {:ok, cid} <- Operation.cid(operation),
          :ok <- compatible(head, operation),
          :ok <- forward(head.did, operation, opts),
          {:ok, %{entries: audit}} <- Client.fetch_audit(head.did, Keyword.take(opts, [:plug])),
          {:ok, _} <- stage(token, head.did, audit, operation),
-         {:ok, _} <- Sessions.authenticate_management(token),
+         {:ok, _} <- Atoll.Identity.OAuthAuthorization.authenticate(token, :submit_plc_operation),
          {:ok, _} <- Updates.submit(head.did, cid, Keyword.take(opts, [:plug])),
          {:ok, %{state: state}} <- Client.fetch_audit(head.did, Keyword.take(opts, [:plug])),
          true <- state.cid == cid,
@@ -122,7 +123,7 @@ defmodule Atoll.Identity.PLC.Submission do
       Repo.one(from h in Head, where: h.did == ^did, lock: "FOR UPDATE") ||
         Repo.rollback(:account_not_found)
 
-    unwrap!(Sessions.authenticate_management(token))
+    unwrap!(Atoll.Identity.OAuthAuthorization.authenticate(token, :submit_plc_operation))
     head
   end
 

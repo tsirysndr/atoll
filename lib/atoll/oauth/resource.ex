@@ -41,6 +41,10 @@ defmodule Atoll.OAuth.Resource do
   end
 
   @write_methods %{
+    update_handle: "com.atproto.identity.updateHandle",
+    request_plc_signature: "com.atproto.identity.requestPlcOperationSignature",
+    sign_plc_operation: "com.atproto.identity.signPlcOperation",
+    submit_plc_operation: "com.atproto.identity.submitPlcOperation",
     create: "com.atproto.repo.createRecord",
     put: "com.atproto.repo.putRecord",
     delete: "com.atproto.repo.deleteRecord",

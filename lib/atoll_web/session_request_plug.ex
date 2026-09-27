@@ -114,17 +114,29 @@ defmodule AtollWeb.SessionRequestPlug do
   end
 
   defp parse(conn, path) do
-    if path in Enum.map(
-         ~w(requestEmailConfirmation confirmEmail requestEmailUpdate updateEmail),
-         &(@prefix <> &1)
-       ) and
-         AtollWeb.OAuthResource.attempt?(conn) do
-      case AtollWeb.OAuthResource.prepare_write(conn) do
-        {:ok, credential} ->
-          conn |> put_private(:atoll_email_credential, credential) |> parse_body(path)
+    email_paths =
+      Enum.map(
+        ~w(requestEmailConfirmation confirmEmail requestEmailUpdate updateEmail),
+        &(@prefix <> &1)
+      )
 
-        {:error, reason} ->
-          AtollWeb.OAuthResource.error(conn, reason)
+    identity_paths =
+      Enum.map(
+        ~w(updateHandle requestPlcOperationSignature signPlcOperation submitPlcOperation),
+        &("/xrpc/com.atproto.identity." <> &1)
+      )
+
+    credential_key =
+      cond do
+        path in email_paths -> :atoll_email_credential
+        path in identity_paths -> :atoll_identity_credential
+        true -> nil
+      end
+
+    if credential_key && AtollWeb.OAuthResource.attempt?(conn) do
+      case AtollWeb.OAuthResource.prepare_write(conn) do
+        {:ok, credential} -> conn |> put_private(credential_key, credential) |> parse_body(path)
+        {:error, reason} -> AtollWeb.OAuthResource.error(conn, reason)
       end
     else
       parse_body(conn, path)

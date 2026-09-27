@@ -427,6 +427,55 @@ defmodule AtollWeb.HandleUpdateControllerTest do
     |> post(@admin_path, Jason.encode!(body))
   end
 
+  test "OAuth handle permission completes a verified directory update", ctx do
+    client = Atoll.OAuthFixture.grant(ctx.pair, "atproto identity:handle")
+    directory(ctx)
+
+    assert Atoll.OAuthFixture.conn(client, @path)
+           |> post(@path, Jason.encode!(%{handle: "oauth.example.com"}))
+           |> response(200) == ""
+
+    assert Repo.get!(Profile, ctx.did).handle == "oauth.example.com"
+    assert length(Agent.get(ctx.state, & &1.posts)) == 1
+
+    for method <- ~w(requestPlcOperationSignature signPlcOperation submitPlcOperation) do
+      path = "/xrpc/com.atproto.identity." <> method
+
+      assert Atoll.OAuthFixture.conn(client, path) |> post(path, "{") |> json_response(403) == %{
+               "error" => "insufficient_scope"
+             }
+    end
+  end
+
+  test "OAuth handle authority is checked before parsing and again before staging", ctx do
+    client = Atoll.OAuthFixture.grant(ctx.pair, "atproto identity:handle")
+    Repo.update_all(Atoll.OAuth.AccessToken, set: [scope: "atproto"])
+
+    assert Atoll.OAuthFixture.conn(client, @path) |> post(@path, "{") |> json_response(403) == %{
+             "error" => "insufficient_scope"
+           }
+
+    Repo.update_all(Atoll.OAuth.AccessToken, set: [scope: "atproto identity:handle"])
+
+    Req.Test.stub(__MODULE__, fn conn ->
+      assert conn.method == "GET"
+      Repo.update_all(Atoll.OAuth.AccessToken, set: [scope: "atproto"])
+      audit = Agent.get(ctx.state, & &1.audit)
+
+      if String.ends_with?(conn.request_path, "/log/audit"),
+        do: Req.Test.json(conn, audit),
+        else: Req.Test.json(conn, List.last(audit)["operation"])
+    end)
+
+    assert Atoll.OAuthFixture.conn(client, @path)
+           |> post(@path, Jason.encode!(%{handle: "denied.example.com"}))
+           |> json_response(403) == %{"error" => "insufficient_scope"}
+
+    assert Repo.get!(Profile, ctx.did).handle == "alice.example.com"
+    assert Repo.aggregate(Update, :count) == 0
+    assert Repo.aggregate(HandleReservation, :count) == 0
+  end
+
   defp request(ctx, body) do
     id = rem(System.unique_integer([:positive]), 65_536)
 

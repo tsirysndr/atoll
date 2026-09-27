@@ -205,6 +205,22 @@ defmodule AtollWeb.PLCSubmissionControllerTest do
     assert Repo.aggregate(Update, :count) == 0
   end
 
+  test "OAuth full identity scope submits a compatible signed operation for an active owner",
+       ctx do
+    {:ok, _} = Repositories.set_status(ctx.did, :active)
+    client = Atoll.OAuthFixture.grant(ctx.pair, "atproto identity:*")
+    directory(ctx)
+
+    for _ <- 1..2 do
+      assert Atoll.OAuthFixture.conn(client, @path)
+             |> post(@path, Jason.encode!(%{operation: ctx.operation}))
+             |> response(200) == ""
+    end
+
+    assert Agent.get(ctx.state, & &1.posts) == [ctx.operation]
+    assert Repo.one!(Update).completed_at
+  end
+
   defp request(ctx, operation) do
     id = rem(System.unique_integer([:positive]), 65_536)
 

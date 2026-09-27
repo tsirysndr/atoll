@@ -2,7 +2,7 @@ defmodule Atoll.Identity.PLC.SignatureChallenges do
   @moduledoc "Purpose-bound, single-use email authorization for PLC operation signing."
   import Ecto.Query
   alias Atoll.Repo
-  alias Atoll.Accounts.{Profile, Sessions}
+  alias Atoll.Accounts.Profile
 
   def request(token) do
     if Repo.in_transaction?() do
@@ -25,7 +25,7 @@ defmodule Atoll.Identity.PLC.SignatureChallenges do
 
   defp prepare(token) do
     Repo.transaction(fn ->
-      profile = authorize!(token)
+      profile = authorize!(token, :request_plc_signature)
       now = System.system_time(:second)
 
       if profile.plc_signature_requested_at && now - profile.plc_signature_requested_at < 60,
@@ -50,7 +50,7 @@ defmodule Atoll.Identity.PLC.SignatureChallenges do
     unless Repo.in_transaction?(),
       do: raise(ArgumentError, "PLC challenge consumption requires a transaction")
 
-    profile = authorize!(token)
+    profile = authorize!(token, :sign_plc_operation)
     verify!(profile, code)
 
     profile
@@ -63,7 +63,7 @@ defmodule Atoll.Identity.PLC.SignatureChallenges do
   @doc "Check before external lookups without consuming; signing must recheck and consume atomically."
   def verify(token, code) do
     Repo.transaction(fn ->
-      profile = authorize!(token)
+      profile = authorize!(token, :sign_plc_operation)
       verify!(profile, code)
       profile.did
     end)
@@ -91,9 +91,9 @@ defmodule Atoll.Identity.PLC.SignatureChallenges do
     end
   end
 
-  defp authorize!(token) do
+  defp authorize!(token, action) do
     head =
-      case Sessions.authenticate_management(token) do
+      case Atoll.Identity.OAuthAuthorization.authenticate(token, action) do
         {:ok, head} -> head
         {:error, reason} -> Repo.rollback(reason)
       end

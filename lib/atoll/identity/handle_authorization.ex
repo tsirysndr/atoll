@@ -15,6 +15,9 @@ defmodule Atoll.Identity.HandleAuthorization do
     end
   end
 
+  def authenticate(%Atoll.OAuth.WriteCredential{} = credential),
+    do: Atoll.Identity.OAuthAuthorization.authenticate(credential, :update_handle)
+
   def authenticate(token), do: Sessions.authenticate_management(token)
 
   # Operators may repair inactive accounts without changing their availability.

@@ -6,7 +6,8 @@ defmodule Atoll.OAuth.Permissions do
   def supported?(scope),
     do:
       scope in @legacy or match?({:ok, _}, repo(scope)) or match?({:ok, _}, blob(scope)) or
-        match?({:ok, _}, rpc(scope)) or match?({:ok, _}, account(scope))
+        match?({:ok, _}, rpc(scope)) or match?({:ok, _}, account(scope)) or
+        match?({:ok, _}, identity(scope))
 
   def repo(value) do
     with {:ok, positional, params} <- syntax(value, "repo", ~w(collection action)),
@@ -63,6 +64,28 @@ defmodule Atoll.OAuth.Permissions do
     end
   end
 
+  def identity(value) do
+    with {:ok, positional, params} <- syntax(value, "identity", ["attr"]),
+         true <- is_nil(positional) or not Map.has_key?(params, "attr"),
+         [attr] <- if(positional, do: [positional], else: params["attr"]),
+         true <- attr in ["handle", "*"] do
+      {:ok, %{attr: attr}}
+    else
+      _ -> {:error, :invalid_scope}
+    end
+  end
+
+  def allows_identity?(scope, attr), do: identity_allowed?(String.split(scope, " "), attr)
+
+  defp identity_allowed?(scopes, attr) do
+    Enum.any?(scopes, fn scope ->
+      case identity(scope) do
+        {:ok, permission} -> permission.attr == "*" or permission.attr == attr
+        _ -> false
+      end
+    end)
+  end
+
   # A requested permission can be narrower than several declared/granted scopes.
   # In particular, an explicit collection can never cover a requested wildcard.
   def covered?(granted, requested) when is_list(granted) do
@@ -91,13 +114,22 @@ defmodule Atoll.OAuth.Permissions do
                       account_allowed?(granted, permission.attr, permission.action)
 
                     _ ->
-                      false
+                      case identity(requested) do
+                        {:ok, permission} -> identity_allowed?(granted, permission.attr)
+                        _ -> false
+                      end
                   end
               end
           end
       end
     end
   end
+
+  def write_admission?(scope, :update_handle), do: allows_identity?(scope, "handle")
+
+  def write_admission?(scope, action)
+      when action in [:request_plc_signature, :sign_plc_operation, :submit_plc_operation],
+      do: allows_identity?(scope, "*")
 
   def write_admission?(scope, :import_repo), do: allows_account?(scope, "repo", "manage")
 
@@ -210,7 +242,16 @@ defmodule Atoll.OAuth.Permissions do
                     "Read public repository information (no additional access)"
 
                   _ ->
-                    nil
+                    case identity(scope) do
+                      {:ok, %{attr: "handle"}} ->
+                        "Change your handle"
+
+                      {:ok, %{attr: "*"}} ->
+                        "Control your DID and handle, including account migration and identity keys"
+
+                      _ ->
+                        nil
+                    end
                 end
             end
         end
