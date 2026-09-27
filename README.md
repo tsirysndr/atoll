@@ -831,6 +831,8 @@ locking protects shared objects when collectors overlap.
 - [x] Service-authenticated migration account creation.
 - [x] Internal proxy service resolution and bounded, public-IP-pinned HTTPS transport.
 - [x] Authenticated request proxying to AppViews and other services, with an optional default AppView.
+- [x] Phase-1 service-auth audiences: proxied grants are checked against the `did#service` form while outbound JWTs carry the bare DID the receiving services verify.
+- [x] `app.bsky.feed.getFeed` proxying that resolves the feed's published generator record and mints `getFeedSkeleton` tokens for the generator DID, with dual RPC grant checks for OAuth callers.
 - [x] Default moderation-report and ozone method routing to configured moderation/report services.
 
 The internal `Atoll.Proxy.Target` resolver requires a concrete DID with a service
@@ -7050,3 +7052,23 @@ current signed commit CID as `root` with the same availability rules as
 `com.atproto.sync.getRepo`, ignoring any `since` parameter, and shares
 `getRepo`'s owner-token and operator export authorization for inactive
 accounts. New consumers should use `getLatestCommit` and `getRepo`.
+
+### Feed generator proxying and service-token audiences
+
+Proxied requests follow the upstream phase-1 service-auth model: permission
+checks (OAuth `rpc:` grants and consent) see the combined `did#service`
+audience, while the outbound account-signed JWT carries the bare DID that
+AppViews, chat services and feed generators actually verify today. Tokens
+requested explicitly through `com.atproto.server.getServiceAuth` keep exactly
+the audience the caller asked for.
+
+`app.bsky.feed.getFeed` gets the reference implementation's special handling:
+after caller authorization, Atoll fetches the feed's published generator
+record from the destination service without credentials, requires a valid
+`did` in it, and signs the forwarded request with `aud` set to that generator
+and `lxm` of `app.bsky.feed.getFeedSkeleton`, so generators accept skeletons
+requested through the AppView. OAuth callers need RPC grants for both
+`getFeed` and `getFeedSkeleton` at the destination, exactly as upstream
+asserts. Missing, malformed, or unresolvable feed references return
+`400 UnknownFeed` after authorization, and the feed lookup happens only for
+admitted callers.

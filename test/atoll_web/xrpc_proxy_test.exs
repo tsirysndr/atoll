@@ -93,7 +93,7 @@ defmodule AtollWeb.XRPCProxyTest do
   defp oauth(client, path \\ @path, method \\ "GET"),
     do: OAuthFixture.conn(client, path, method) |> put_req_header("atproto-proxy", @aud)
 
-  defp claims(conn, key, nsid) do
+  defp claims(conn, key, nsid, aud \\ nil) do
     ["Bearer " <> jwt] = get_req_header(conn, "authorization")
     [header, payload, signature] = String.split(jwt, ".")
     <<r::256, s::256>> = Base.url_decode64!(signature, padding: false)
@@ -103,7 +103,8 @@ defmodule AtollWeb.XRPCProxyTest do
 
     claims = payload |> Base.url_decode64!(padding: false) |> Jason.decode!()
     assert claims["iss"] == @did
-    assert claims["aud"] == @aud
+    # Phase 1 of service-auth updates keeps a bare-DID audience in the JWT.
+    assert claims["aud"] == (aud || @service)
     assert claims["lxm"] == nsid
     assert claims["exp"] - claims["iat"] == 60
     assert byte_size(claims["jti"]) == 32
@@ -354,6 +355,74 @@ defmodule AtollWeb.XRPCProxyTest do
 
     {:ok, _} = Repositories.set_status(@did, :deactivated)
     assert request |> post(report, "{}") |> json_response(400)
+  end
+
+  test "getFeed mints skeleton tokens for the published feed generator", c do
+    feed = "at://did:plc:feedowner1234567890abcdef/app.bsky.feed.generator/cool"
+    feedgen = "did:web:feedgen.example.com"
+    path = "/xrpc/app.bsky.feed.getFeed"
+    query = "?feed=" <> URI.encode_www_form(feed)
+
+    stub = fn generator ->
+      configure(fn conn ->
+        case conn.request_path do
+          "/xrpc/com.atproto.repo.getRecord" ->
+            assert conn.method == "GET"
+            assert get_req_header(conn, "authorization") == []
+
+            assert URI.decode_query(conn.query_string) == %{
+                     "repo" => "did:plc:feedowner1234567890abcdef",
+                     "collection" => "app.bsky.feed.generator",
+                     "rkey" => "cool"
+                   }
+
+            Req.Test.json(conn, %{"uri" => feed, "value" => generator})
+
+          ^path ->
+            claims(conn, c.key, "app.bsky.feed.getFeedSkeleton", feedgen)
+            Req.Test.json(conn, %{feed: []})
+        end
+      end)
+    end
+
+    stub.(%{"$type" => "app.bsky.feed.generator", "did" => feedgen})
+    assert legacy(c) |> get(path <> query) |> json_response(200) == %{"feed" => []}
+
+    assert legacy(c) |> get(path) |> json_response(400) == %{
+             "error" => "UnknownFeed",
+             "message" => "could not resolve feed did"
+           }
+
+    assert legacy(c) |> get(path <> "?feed=not-a-uri") |> json_response(400)
+    stub.(%{"$type" => "app.bsky.feed.generator"})
+
+    assert legacy(c) |> get(path <> query) |> json_response(400) == %{
+             "error" => "UnknownFeed",
+             "message" => "could not resolve feed did"
+           }
+
+    stub.(%{"$type" => "app.bsky.feed.generator", "did" => feedgen})
+
+    partial =
+      OAuthFixture.grant(
+        c.pair,
+        "atproto rpc:app.bsky.feed.getFeed?aud=#{URI.encode_www_form(@aud)}"
+      )
+
+    assert oauth(partial, path, "GET") |> get(path <> query) |> json_response(403) == %{
+             "error" => "insufficient_scope"
+           }
+
+    full =
+      OAuthFixture.grant(
+        c.pair,
+        "atproto rpc:app.bsky.feed.getFeed?aud=#{URI.encode_www_form(@aud)} " <>
+          "rpc:app.bsky.feed.getFeedSkeleton?aud=#{URI.encode_www_form(@aud)}"
+      )
+
+    assert oauth(full, path, "GET") |> get(path <> query) |> json_response(200) == %{
+             "feed" => []
+           }
   end
 
   test "preflight needs no authentication or resolution and allows only GET and POST", c do

@@ -18,11 +18,11 @@ defmodule Atoll.Proxy.Transport do
   def send(%Target{} = target, method, nsid, query, headers, body, jwt, opts)
       when method in [:get, :post] and is_binary(query) and byte_size(query) <= 8192 and
              is_list(headers) and is_binary(body) and byte_size(body) <= @max_request and
-             is_binary(jwt) and byte_size(jwt) in 1..8192 do
+             (is_nil(jwt) or (is_binary(jwt) and byte_size(jwt) in 1..8192)) do
     with true <- Syntax.nsid?(nsid) and Resolver.public_address?(target.address),
          true <- method == :post or body == "",
          false <- Regex.match?(~r/[\x00-\x20\x7f#]/, query),
-         false <- Regex.match?(~r/[\x00-\x20\x7f]/, jwt),
+         false <- is_binary(jwt) and Regex.match?(~r/[\x00-\x20\x7f]/, jwt),
          {:ok, headers} <- request_headers(headers) do
       request(target, method, nsid, query, headers, body, jwt, opts)
     else
@@ -54,9 +54,9 @@ defmodule Atoll.Proxy.Transport do
         body: body,
         headers:
           headers ++
+            if(jwt, do: [{"authorization", "Bearer " <> jwt}], else: []) ++
             [
               {"host", authority},
-              {"authorization", "Bearer " <> jwt},
               {"accept-encoding", "identity"}
             ],
         redirect: false,

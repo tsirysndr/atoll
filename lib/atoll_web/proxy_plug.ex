@@ -122,12 +122,66 @@ defmodule AtollWeb.ProxyPlug do
     end
   end
 
+  # Feed requests are forwarded to the AppView while the service token is
+  # minted for the feed generator declared by the feed's published record.
+  defp authorize(conn, audience, "app.bsky.feed.getFeed" = nsid, oauth?, prepare) do
+    prepare = fn ->
+      with {:ok, feed} <- feed_reference(conn),
+           {:ok, prepared} <- prepare.(),
+           {:ok, feed_did} <- feed_generator(feed, prepared.target) do
+        {:ok, prepared,
+         %{"token_aud" => feed_did, "token_lxm" => "app.bsky.feed.getFeedSkeleton"}}
+      end
+    end
+
+    if oauth? do
+      AtollWeb.OAuthResource.with_proxy(conn, audience, nsid, prepare,
+        grants: ["app.bsky.feed.getFeedSkeleton"]
+      )
+    else
+      with {:ok, token} <- AtollWeb.BearerToken.get(conn),
+           do: Atoll.Accounts.ServiceAuth.with_proxy(token, audience, nsid, prepare)
+    end
+  end
+
   defp authorize(conn, audience, nsid, true, prepare),
     do: AtollWeb.OAuthResource.with_proxy(conn, audience, nsid, prepare)
 
   defp authorize(conn, audience, nsid, false, prepare) do
     with {:ok, token} <- AtollWeb.BearerToken.get(conn),
          do: Atoll.Accounts.ServiceAuth.with_proxy(token, audience, nsid, prepare)
+  end
+
+  defp feed_reference(conn) do
+    with true <- byte_size(conn.query_string) <= 8192,
+         %{"feed" => feed} <- URI.decode_query(conn.query_string),
+         true <- Atoll.Syntax.at_uri?(feed),
+         ["at:", "", authority, collection, rkey] <- String.split(feed, "/") do
+      {:ok, {authority, collection, rkey}}
+    else
+      _ -> {:error, :unknown_feed}
+    end
+  end
+
+  defp feed_generator({authority, collection, rkey}, target) do
+    query = URI.encode_query(%{"repo" => authority, "collection" => collection, "rkey" => rkey})
+    opts = Application.get_env(:atoll, :proxy_options, [])
+
+    case Transport.send(target, :get, "com.atproto.repo.getRecord", query, [], "", nil, opts) do
+      {:ok, %{status: 200, body: body}} ->
+        with {:ok, %{"value" => %{"did" => did}}} when is_binary(did) <- Jason.decode(body),
+             true <- Atoll.Syntax.did?(did) do
+          {:ok, did}
+        else
+          _ -> {:error, :unknown_feed}
+        end
+
+      {:ok, _} ->
+        {:error, :unknown_feed}
+
+      error ->
+        error
+    end
   end
 
   defp prepare(conn, audience, opts) do
@@ -158,6 +212,9 @@ defmodule AtollWeb.ProxyPlug do
 
   defp failure(conn, :proxy_body_unavailable, _),
     do: error(conn, 408, "RequestTimeout", "Could not read the proxy request body.")
+
+  defp failure(conn, :unknown_feed, _),
+    do: error(conn, 400, "UnknownFeed", "could not resolve feed did")
 
   defp failure(conn, :proxy_timeout, _),
     do: error(conn, 504, "UpstreamTimeout", "The service did not respond in time.")

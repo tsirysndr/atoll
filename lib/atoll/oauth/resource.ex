@@ -32,7 +32,15 @@ defmodule Atoll.OAuth.Resource do
   def with_proxy(token, headers, method, url, audience, nsid, prepare, opts \\ [])
       when is_function(prepare, 0) do
     issuer = Keyword.get(opts, :issuer, AtollWeb.Endpoint.url())
-    params = %{"aud" => audience, "lxm" => nsid}
+
+    grants =
+      for lxm <- [nsid | Keyword.get(opts, :grants, [])], do: %{"aud" => audience, "lxm" => lxm}
+
+    params = %{
+      "aud" => audience,
+      "lxm" => nsid,
+      "token_aud" => Atoll.Accounts.ServiceAuth.bare_audience(audience)
+    }
 
     with true <- method in ["GET", "POST"] and Atoll.Syntax.nsid?(nsid),
          true <- url == issuer <> "/xrpc/" <> nsid,
@@ -44,20 +52,27 @@ defmodule Atoll.OAuth.Resource do
              method,
              url,
              fn access, candidate, principal ->
-               case Atoll.Accounts.ServiceAuth.authorize_oauth(principal, params) do
-                 :ok -> {access, candidate}
-                 {:error, reason} -> Repo.rollback(reason)
+               for grant <- grants do
+                 case Atoll.Accounts.ServiceAuth.authorize_oauth(principal, grant) do
+                   :ok -> :ok
+                   {:error, reason} -> Repo.rollback(reason)
+                 end
                end
+
+               {access, candidate}
              end,
              opts
            ),
-         {:ok, prepared} <- prepare.(),
+         {:ok, prepared, overrides} <- prepared(prepare.()),
          {:ok, jwt} <-
            locked_read(
              access,
              candidate,
              fn principal ->
-               case Atoll.Accounts.ServiceAuth.issue_oauth(principal, params) do
+               case Atoll.Accounts.ServiceAuth.issue_oauth(
+                      principal,
+                      Map.merge(params, overrides)
+                    ) do
                  {:ok, %{token: jwt}} -> jwt
                  {:error, reason} -> Repo.rollback(reason)
                end
@@ -73,6 +88,10 @@ defmodule Atoll.OAuth.Resource do
     _ in [Postgrex.Error, DBConnection.ConnectionError] ->
       {:error, :oauth_resource_store_unavailable}
   end
+
+  defp prepared({:ok, prepared}), do: {:ok, prepared, %{}}
+  defp prepared({:ok, prepared, %{} = overrides}), do: {:ok, prepared, overrides}
+  defp prepared(error), do: error
 
   @doc "Admit a read, resolve external data without locks, then recheck authorization for the final read."
   def read_with_resolution(token, headers, url, resolver, reader, opts \\ [])

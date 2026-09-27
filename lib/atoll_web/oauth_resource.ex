@@ -85,7 +85,7 @@ defmodule AtollWeb.OAuthResource do
            )
   end
 
-  def with_proxy(conn, audience, nsid, prepare) do
+  def with_proxy(conn, audience, nsid, prepare, opts \\ []) do
     with {:ok, token} <- token(get_req_header(conn, "authorization")) do
       Resource.with_proxy(
         token,
@@ -94,7 +94,8 @@ defmodule AtollWeb.OAuthResource do
         AtollWeb.Endpoint.url() <> conn.request_path,
         audience,
         nsid,
-        prepare
+        prepare,
+        opts
       )
     end
   end

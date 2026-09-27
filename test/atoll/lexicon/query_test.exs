@@ -3,7 +3,12 @@ defmodule Atoll.Lexicon.QueryTest do
   alias Atoll.Lexicon.Query
 
   test "every routed GET method has a vendored schema" do
-    methods = for %{verb: :get, path: "/xrpc/" <> nsid} <- AtollWeb.Router.__routes__(), do: nsid
+    # The service health probe is a basic route, not a lexicon method.
+    methods =
+      for %{verb: :get, path: "/xrpc/" <> nsid} <- AtollWeb.Router.__routes__(),
+          nsid != "_health",
+          do: nsid
+
     assert Enum.sort(["com.atproto.sync.subscribeRepos" | methods]) == Enum.sort(Query.methods())
   end
 

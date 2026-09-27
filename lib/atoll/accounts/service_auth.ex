@@ -27,7 +27,7 @@ defmodule Atoll.Accounts.ServiceAuth do
 
   @doc "Admit a proxy caller, prepare outside locks, and recheck the active session before signing."
   def with_proxy(token, audience, nsid, prepare) when is_function(prepare, 0) do
-    params = %{"aud" => audience, "lxm" => nsid}
+    params = %{"aud" => audience, "lxm" => nsid, "token_aud" => bare_audience(audience)}
 
     cond do
       Repo.in_transaction?() ->
@@ -39,23 +39,39 @@ defmodule Atoll.Accounts.ServiceAuth do
       true ->
         with :ok <- method(nsid),
              {:ok, _} <- authorize_session(token, params, :proxy),
-             {:ok, prepared} <- prepare.(),
-             {:ok, %{token: jwt}} <- issue(token, params, :proxy) do
+             {:ok, prepared, overrides} <- prepared(prepare.()),
+             {:ok, %{token: jwt}} <- issue(token, Map.merge(params, overrides), :proxy) do
           {:ok, {prepared, jwt}}
         end
     end
   end
+
+  defp prepared({:ok, prepared}), do: {:ok, prepared, %{}}
+  defp prepared({:ok, prepared, %{} = overrides}), do: {:ok, prepared, overrides}
+  defp prepared(error), do: error
+
+  # Phase 1 of upstream service-auth: proxied grants check the did#service form
+  # while their outbound JWTs carry a bare DID audience. Delegated tokens keep
+  # the audience the caller requested.
+  @doc false
+  def token_claims(params),
+    do: {params["token_aud"] || params["aud"], Map.get(params, "token_lxm", params["lxm"])}
+
+  @doc false
+  def bare_audience(audience), do: audience |> String.split("#") |> hd()
 
   defp issue(token, params, policy) do
     with true <- audience?(params["aud"]),
          :ok <- method(params["lxm"]),
          {:ok, expiry} <- expiration(params["exp"]) do
       Repo.transaction(fn ->
+        {aud, lxm} = token_claims(params)
+
         with {:ok, %{did: did}} <- authorize_session(token, params, policy),
              now = System.system_time(:second),
              {:ok, exp} <- bounded_expiry(expiry, params["lxm"], now),
              {:ok, key} <- KeyVault.fetch(did),
-             {:ok, jwt} <- sign(key, did, params["aud"], params["lxm"], now, exp) do
+             {:ok, jwt} <- sign(key, did, aud, lxm, now, exp) do
           %{token: jwt}
         else
           {:error, reason} -> Repo.rollback(reason)
@@ -75,12 +91,14 @@ defmodule Atoll.Accounts.ServiceAuth do
     unless Repo.in_transaction?(),
       do: raise(ArgumentError, "OAuth service signing requires an authorized transaction")
 
+    {aud, lxm} = token_claims(params)
+
     with :ok <- authorize_oauth(principal, params),
          {:ok, expiry} <- expiration(params["exp"]),
          now = System.system_time(:second),
          {:ok, exp} <- bounded_expiry(expiry, params["lxm"], now),
          {:ok, key} <- KeyVault.fetch(did),
-         {:ok, jwt} <- sign(key, did, params["aud"], params["lxm"], now, exp) do
+         {:ok, jwt} <- sign(key, did, aud, lxm, now, exp) do
       {:ok, %{token: jwt}}
     else
       false -> {:error, :invalid_request}
