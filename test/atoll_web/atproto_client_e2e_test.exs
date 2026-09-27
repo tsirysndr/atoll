@@ -9,6 +9,7 @@ defmodule AtollWeb.AtprotoClientE2ETest do
     } do
       api = System.fetch_env!("ATOLL_ATPROTO_API_PATH") |> Path.expand()
       repo = System.fetch_env!("ATOLL_ATPROTO_REPO_PATH") |> Path.expand()
+      stream = System.fetch_env!("ATOLL_ATPROTO_XRPC_SERVER_PATH") |> Path.expand()
       keys = [:session_signing_key, :key_encryption_key, :blob_storage]
       previous = Map.new(keys, &{&1, Application.fetch_env(:atoll, &1)})
       endpoint = Application.fetch_env!(:atoll, AtollWeb.Endpoint)
@@ -56,7 +57,9 @@ defmodule AtollWeb.AtprotoClientE2ETest do
             AtollWeb.Endpoint.url(),
             did,
             password,
-            public
+            public,
+            stream,
+            Integer.to_string(Atoll.Repositories.Events.latest_seq())
           ],
           stderr_to_stdout: true
         )

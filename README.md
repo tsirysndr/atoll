@@ -935,6 +935,7 @@ observations do not produce duplicate events. The
 - [ ] Comprehensive operational monitoring and alerting.
 - [x] Offline MST and compact-proof interoperability against pinned `@atproto/repo` 0.8.10 fixtures.
 - [x] Opt-in live HTTP integration with the official ATProto client, including signed repository and record-proof verification.
+- [x] Upstream WebSocket firehose decoding, signed commit application, live delivery, cursor resumption and error-frame integration tests.
 - [ ] End-to-end compatibility tests with existing ATProto clients and servers.
 
 ## Local development
@@ -1179,23 +1180,27 @@ An optional `interop` test starts Atoll on a random loopback HTTP port and drive
 it with `@atproto/api` **0.13.35**. It independently verifies served CAR commits,
 MST contents, record inclusion and deletion-absence proofs with `@atproto/repo`
 **0.8.10**, using the test account's signing public key for both secp256k1 and P-256
-repositories. These are pinned test
-versions, not a claim of compatibility with all client releases.
+repositories. `@atproto/xrpc-server` **0.7.19** supplies the upstream WebSocket
+subscription/frame decoder; the API package validates commit event schemas.
+These are pinned test versions, not a claim of compatibility with all client releases.
+The integration suite has been run locally with Node.js 24.13.1.
 
-With Node.js and existing installations of those two packages, supply their
+With Node.js and existing installations of those three packages, supply their
 absolute package-directory paths:
 
 ```sh
 ATOLL_ATPROTO_API_PATH=/absolute/path/node_modules/@atproto/api \
 ATOLL_ATPROTO_REPO_PATH=/absolute/path/node_modules/@atproto/repo \
+ATOLL_ATPROTO_XRPC_SERVER_PATH=/absolute/path/node_modules/@atproto/xrpc-server \
   mix test --include interop test/atoll_web/atproto_client_e2e_test.exs
 ```
 
 The harness checks package names and exact versions and does not install or
 modify them. It creates a synthetic account and encrypted signing-key custody in
 the test database's rollback sandbox. The Node client's requests are restricted
-to the temporary server's origin, redirects are rejected, and requests have a
-five-second deadline with a 45-second overall client deadline. The supervised
+to the temporary server's origin and redirects are rejected. HTTP requests and
+WebSocket handshakes have five-second deadlines, subscriptions have ten-second
+deadlines, and the overall client deadline is 45 seconds. The supervised
 server stops after the test; no real accounts or credentials are used.
 
 Coverage includes password login, session inspection/refresh/revocation,
@@ -1206,11 +1211,24 @@ proofs. The pinned client decodes `text/plain` blob responses as strings; the
 test compares their encoded bytes with the upload. It explicitly supplies the
 current refresh token for session deletion.
 
+Firehose checks begin with an independently verified baseline repository. The
+upstream subscriber replays create, update, batch and delete commits after that
+baseline cursor. The repository verifier checks each signed CAR against the prior
+mirror and compares its computed changes with the event's operations, including
+new and prior record CIDs. Tests check increasing sequences, prior revisions,
+`prevData`, commit CIDs and revisions, and the mirror's resulting records. An
+already connected subscriber receives a new write; a second connection resumes
+at the last consumed cursor and receives only the following delete. The final
+mirror matches the HTTP repository head. A future cursor is decoded as an upstream
+`FutureCursor` error.
+
 This test is excluded from `mix precommit` and CI because it requires separately
 installed upstream packages. OAuth, handle/DID discovery, account creation,
-migration, firehose consumption, relay federation and newer client versions are
-outside this test's coverage. Full external-client/server interoperability remains
-on the checklist.
+migration, relay federation and newer client versions are outside this test's
+coverage. Firehose sync fallback, identity/account events, expired replay windows
+and slow-consumer behavior are also outside this upstream integration test; local
+tests cover those paths separately. Full external-client/server interoperability
+remains on the checklist.
 
 ### MinIO integration tests
 

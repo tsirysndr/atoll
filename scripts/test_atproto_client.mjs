@@ -3,7 +3,7 @@ import { createRequire } from 'node:module'
 import { resolve } from 'node:path'
 
 // Uses an existing installation; never installs packages or contacts a public PDS.
-const [apiPath, repoPath, service, did, password, signingKey] = process.argv.slice(2)
+const [apiPath, repoPath, service, did, password, signingKey, streamPath, initialCursor] = process.argv.slice(2)
 const load = (directory, name, version) => {
   const require = createRequire(resolve(directory, 'package.json'))
   const pkg = require('./package.json')
@@ -11,8 +11,9 @@ const load = (directory, name, version) => {
   assert.equal(pkg.version, version, `Expected ${name}@${version}`)
   return require(directory)
 }
-const { AtpAgent } = load(apiPath, '@atproto/api', '0.13.35')
-const { verifyRepoCar, verifyRecords, verifyProofs } = load(repoPath, '@atproto/repo', '0.8.10')
+const { AtpAgent, ComAtprotoSyncSubscribeRepos } = load(apiPath, '@atproto/api', '0.13.35')
+const { verifyRepoCar, verifyRecords, verifyProofs, verifyDiffCar, MemoryBlockstore, Repo } = load(repoPath, '@atproto/repo', '0.8.10')
+const { Subscription } = load(streamPath, '@atproto/xrpc-server', '0.7.19')
 const origin = new URL(service)
 assert.equal(origin.protocol, 'http:')
 assert.equal(origin.hostname, '127.0.0.1')
@@ -25,6 +26,30 @@ const localFetch = (input, init) => {
 }
 const agent = new AtpAgent({ service, fetch: localFetch })
 const anon = new AtpAgent({ service, fetch: localFetch })
+const streams = []
+const subscribe = cursor => {
+  const abort = new AbortController()
+  const iterator = new Subscription({
+    service: origin.origin.replace('http:', 'ws:'),
+    method: 'com.atproto.sync.subscribeRepos',
+    getParams: () => ({ cursor }),
+    signal: AbortSignal.any([abort.signal, AbortSignal.timeout(10_000)]),
+    followRedirects: false,
+    handshakeTimeout: 5_000,
+    maxPayload: 3_000_000,
+    onReconnectError: () => abort.abort(new Error('Unexpected reconnect')),
+    validate: message => {
+      assert.equal(ComAtprotoSyncSubscribeRepos.validateCommit(message).success, true)
+      return message
+    },
+  })[Symbol.asyncIterator]()
+  const close = async () => {
+    abort.abort()
+    await iterator.return()
+  }
+  streams.push(close)
+  return { iterator, close }
+}
 let stage = 'login'
 const deadline = setTimeout(() => {
   console.error(`ATProto interoperability timed out during ${stage}`)
@@ -36,6 +61,39 @@ try {
   await agent.login({ identifier: did, password })
   assert.equal(agent.session.did, did)
   assert.equal((await agent.com.atproto.server.getSession()).data.did, did)
+  const baseline = await verifyRepoCar((await anon.com.atproto.sync.getRepo({ did })).data, did, signingKey)
+  const mirrorStore = new MemoryBlockstore()
+  await mirrorStore.applyCommit(baseline.commit)
+  let mirror = await Repo.load(mirrorStore)
+  let sequence = Number(initialCursor)
+  assert.ok(Number.isSafeInteger(sequence) && sequence >= 0)
+  const consume = async (pending, actions) => {
+    stage = `firehose ${actions.join('/')} event metadata`
+    const { value: event, done } = await pending
+    assert.equal(done, false)
+    assert.equal(event.repo, did)
+    assert.ok(Number.isSafeInteger(event.seq) && event.seq > sequence)
+    assert.equal(event.since, mirror.commit.rev)
+    assert.equal(event.prevData.toString(), mirror.commit.data.toString())
+    assert.equal(event.tooBig, false)
+    assert.equal(event.rebase, false)
+    assert.deepEqual(event.ops.map(op => op.action).sort(), [...actions].sort())
+    stage = `firehose ${actions.join('/')} signed CAR verification`
+    const diff = await verifyDiffCar(mirror, event.blocks, did, signingKey)
+    assert.equal(diff.commit.cid.toString(), event.commit.toString())
+    assert.equal(diff.commit.rev, event.rev)
+    assert.deepEqual(
+      diff.writes.map(op => {
+        const cid = op.action === 'delete' ? '' : op.cid.toString()
+        const prev = op.action === 'delete' ? op.cid.toString() : op.prev?.toString() ?? ''
+        return `${op.action}:${op.collection}/${op.rkey}:${cid}:${prev}`
+      }).sort(),
+      event.ops.map(op => `${op.action}:${op.path}:${op.cid?.toString() ?? ''}:${op.prev?.toString() ?? ''}`).sort(),
+    )
+    mirror = await mirror.applyCommit(diff.commit)
+    sequence = event.seq
+    return event
+  }
 
   stage = 'createRecord'
   const collection = 'app.bsky.feed.post'
@@ -111,6 +169,38 @@ try {
   assert.equal(absent.verified.length, 1)
   assert.equal(absent.unverified.length, 0)
 
+  stage = 'upstream firehose replay and compact CAR application'
+  const replay = subscribe(sequence)
+  for (const actions of [['create'], ['update'], ['create', 'create'], ['delete']]) {
+    await consume(replay.iterator.next(), actions)
+  }
+  assert.equal(mirror.cid.toString(), after.commit.cid.toString())
+  assert.deepEqual(await mirror.getRecord(collection, firstKey), changed)
+  assert.equal(await mirror.getRecord(collection, secondKey), null)
+
+  stage = 'live firehose delivery'
+  const pendingLive = replay.iterator.next()
+  // Keep a rejected pending read handled if the concurrent HTTP mutation fails first.
+  pendingLive.catch(() => {})
+  const live = await agent.com.atproto.repo.createRecord({ repo: did, collection, record })
+  const liveEvent = await consume(pendingLive, ['create'])
+  assert.equal(liveEvent.commit.toString(), live.data.commit.cid)
+  await replay.close()
+
+  stage = 'exclusive firehose cursor resumption'
+  const resumed = subscribe(sequence)
+  const pendingResume = resumed.iterator.next()
+  pendingResume.catch(() => {})
+  await agent.com.atproto.repo.deleteRecord({ repo: did, collection, rkey: live.data.uri.split('/').at(-1) })
+  await consume(pendingResume, ['delete'])
+  assert.equal(mirror.cid.toString(), (await anon.com.atproto.sync.getLatestCommit({ did })).data.cid)
+  await resumed.close()
+
+  stage = 'firehose error frame decoding'
+  const future = subscribe(Number.MAX_SAFE_INTEGER)
+  await assert.rejects(future.iterator.next(), error => error.error === 'FutureCursor')
+  await future.close()
+
   stage = 'session refresh and revocation'
   const oldRefresh = agent.session.refreshJwt
   const refreshed = await agent.com.atproto.server.refreshSession(undefined, {
@@ -127,5 +217,6 @@ try {
   console.error(`ATProto interoperability failed during ${stage}: ${error.name}; code=${error.error ?? error.code ?? 'assertion'}`)
   process.exitCode = 1
 } finally {
+  for (const close of streams) await close().catch(() => {})
   clearTimeout(deadline)
 }
