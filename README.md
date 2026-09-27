@@ -16,7 +16,7 @@ Every item below is implemented in this repository. This is the project's develo
 - [x] `GET /health` HTTP liveness endpoint (does not check database readiness).
 - [x] `GET /xrpc/_health` version and database probe, plus the reference `robots.txt` allowing public-API crawling.
 - [x] `GET /` plain-text ATProto ASCII banner and API location.
-- [x] `GET /xrpc/com.atproto.server.describeServer` with configurable `did` and `availableUserDomains`.
+- [x] `GET /xrpc/com.atproto.server.describeServer` with configurable `did`, `availableUserDomains`, invite requirement, blob limit, and optional policy links and operator contact (`ATOLL_PRIVACY_POLICY_URL`, `ATOLL_TERMS_OF_SERVICE_URL`, `ATOLL_CONTACT_EMAIL`).
 - [x] Controller test for unauthenticated server description.
 - [x] Validated runtime server DID and advertised domain configuration (development defaults to `did:web:localhost`).
 - [x] Configured hostname-based server DID document publication with a stable service key.

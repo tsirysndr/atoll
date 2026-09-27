@@ -23,7 +23,51 @@ defmodule Atoll.ServerConfig do
     pds = []
     pds = if did, do: Keyword.put(pds, :did, did), else: pds
     pds = if domains, do: Keyword.put(pds, :available_user_domains, domains), else: pds
+
+    pds =
+      Enum.reduce(
+        [
+          privacy_policy_url: url!(env, "ATOLL_PRIVACY_POLICY_URL"),
+          terms_of_service_url: url!(env, "ATOLL_TERMS_OF_SERVICE_URL"),
+          contact_email: email!(env, "ATOLL_CONTACT_EMAIL")
+        ],
+        pds,
+        fn
+          {_key, nil}, acc -> acc
+          {key, value}, acc -> Keyword.put(acc, key, value)
+        end
+      )
+
     %{pds: pds, host: host && String.downcase(host)}
+  end
+
+  defp url!(env, name) do
+    case env[name] do
+      nil ->
+        nil
+
+      value ->
+        with true <- is_binary(value) and byte_size(value) <= 2048,
+             {:ok, %URI{scheme: "https", host: host}} when is_binary(host) and host != "" <-
+               URI.new(value) do
+          value
+        else
+          _ -> raise "#{name} must be an HTTPS URL"
+        end
+    end
+  end
+
+  defp email!(env, name) do
+    case env[name] do
+      nil ->
+        nil
+
+      value ->
+        case Atoll.Accounts.EmailAddress.normalize(value) do
+          {:ok, email} -> email
+          _ -> raise "#{name} must be a valid email address"
+        end
+    end
   end
 
   defp parse_domains!(value) do
