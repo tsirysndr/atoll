@@ -435,6 +435,7 @@ mutation. Deletes and empty batches need no record schema, even with `validate: 
 - [x] DPoP service-token issuance with current generic/chat scope checks and authorization locks held through signing.
 - [x] DPoP authentication on public repository/blob export routes without granting inactive-account export privileges.
 - [x] DPoP account-status and missing-blob inventory, scoped to the authenticated account with authorization rechecks.
+- [x] DPoP recommended DID credentials and owner-requested identity refresh with base `atproto` scope.
 - [ ] OAuth authorization for remaining resource routes.
 - [x] Localhost virtual public-client metadata, loopback callback matching, and flow integration without metadata network requests.
 - [ ] OAuth nonce challenges and proof admission integrated into remaining authorization/resource server routes.
@@ -2023,11 +2024,12 @@ in PLC. It removes the account from this PDS; it cannot erase copies held elsewh
 
 ### Owner-requested identity refresh
 
-`POST com.atproto.identity.refreshIdentity` takes a full account access token and
-JSON `identifier` containing the account's DID or a handle resolving to that DID.
+`POST com.atproto.identity.refreshIdentity` takes a full password-session access
+token or a DPoP-bound OAuth token with base `atproto` scope, and JSON `identifier`
+containing the account's DID or a handle resolving to that DID.
 Atoll restricts this endpoint to the requesting account; app passwords and
-taken-down export tokens cannot use it. Active and deactivated accounts are
-supported. Refreshing another DID returns `Forbidden`.
+taken-down export tokens cannot use it. OAuth requires an active account; password
+sessions also support deactivated accounts. Refreshing another DID returns `Forbidden`.
 
 The response contains `did`, the bidirectionally verified `handle` (or
 `handle.invalid`), and the complete `didDoc`. DID lookup bypasses and refreshes the
@@ -2040,7 +2042,9 @@ resolution policy.
 
 Resolution runs outside database locks. Before storing the observation, Atoll
 rechecks the live session and account availability under the repository/event lock
-order. Revocation during resolution prevents publication. Observation changes and
+order. OAuth also rechecks the current access token and grant, expiry and base scope;
+proof admission precedes JSON parsing and stays consumed after a failed refresh.
+Revocation during resolution prevents publication. Observation changes and
 identity events commit together; unchanged observations emit no duplicate event.
 Refreshing does not change the account's stored handle, signing key, hosting status,
 or DID document at its authority.
@@ -5180,8 +5184,20 @@ an active account, while legacy migration sessions retain their existing policy.
 The 30-second credential expiry bounds each request; a retry requires a new proof.
 
 The scope semantics follow the [identity permission specification](https://atproto.com/specs/permission#identity).
-OAuth support for `getRecommendedDidCredentials` and `refreshIdentity` remains
-pending; their existing password-session paths are available.
+`GET /xrpc/com.atproto.identity.getRecommendedDidCredentials` accepts base `atproto`
+OAuth scope and returns only the authenticated account's public repository signing
+key, PDS service and current observed handle (falling back to the profile handle
+when no observation exists). Unknown or unverified handles are omitted. It checks
+key custody and holds current authorization/account locks while reading; it never
+returns private keys, email or password-session credentials. Custody failures
+retain their existing domain error responses. PLC rotation-key recommendations
+are not currently included.
+
+`refreshIdentity` also accepts base `atproto` scope because it only re-resolves and
+publishes public identity observations; it cannot change DID keys or account
+hosting. The existing owner-only, bounded-resolution and event-deduplication rules
+apply. Both endpoints preserve their password-session paths, including the
+existing deactivated-account migration policy.
 
 ### OAuth account permissions
 

@@ -92,7 +92,7 @@ defmodule AtollWeb.IdentityController do
   def refresh(conn, params) do
     opts = Application.get_env(:atoll, :identity_resolution_options, [])
 
-    with {:ok, token} <- AtollWeb.BearerToken.get(conn),
+    with {:ok, token} <- identity_credential(conn),
          {:ok, result} <- Atoll.Identity.Updates.refresh_authenticated(token, params, opts) do
       json(conn, result)
     else
@@ -115,7 +115,7 @@ defmodule AtollWeb.IdentityController do
         AtollWeb.XRPCFallback.call(conn, {:error, :identity_unavailable})
 
       error ->
-        AtollWeb.XRPCFallback.call(conn, error)
+        identity_error(conn, error)
     end
   end
 
@@ -144,11 +144,21 @@ defmodule AtollWeb.IdentityController do
     do: AtollWeb.XRPCFallback.call(conn, {:error, :identity_unavailable})
 
   def recommended(conn, _params) do
-    with {:ok, token} <- AtollWeb.BearerToken.get(conn),
-         {:ok, result} <- Atoll.Identity.Recommended.get(token) do
-      json(conn, result)
+    if AtollWeb.OAuthResource.attempt?(conn) do
+      case AtollWeb.OAuthResource.read_result(conn, fn principal ->
+             Atoll.Identity.Recommended.for_account(principal.did)
+           end) do
+        {:ok, {:ok, result}} -> json(conn, result)
+        {:ok, {:error, _} = error} -> AtollWeb.XRPCFallback.call(conn, error)
+        {:error, conn} -> conn
+      end
     else
-      error -> AtollWeb.XRPCFallback.call(conn, error)
+      with {:ok, token} <- AtollWeb.BearerToken.get(conn),
+           {:ok, result} <- Atoll.Identity.Recommended.get(token) do
+        json(conn, result)
+      else
+        error -> AtollWeb.XRPCFallback.call(conn, error)
+      end
     end
   end
 

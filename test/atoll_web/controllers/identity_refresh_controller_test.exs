@@ -163,6 +163,96 @@ defmodule AtollWeb.IdentityRefreshControllerTest do
     assert request(c, @did) |> json_response(429)
   end
 
+  test "OAuth base scope refreshes only its owner and emits one event for a new observation", c do
+    client = Atoll.OAuthFixture.grant(c.pair, "atproto")
+    seq = Events.latest_seq()
+
+    for identifier <- [@did, String.upcase(@handle)] do
+      assert Atoll.OAuthFixture.conn(client, @path)
+             |> post(@path, Jason.encode!(%{identifier: identifier}))
+             |> json_response(200) == %{"did" => @did, "handle" => @handle, "didDoc" => c.doc}
+    end
+
+    assert {:ok, [event]} = Events.list_after(seq)
+    assert event.kind == :identity
+    assert {:ok, %{status: :active}} = Repositories.get_head(@did)
+
+    Application.put_env(:atoll, :identity_resolution_options,
+      lookup: fn _ -> flunk("cross-account request must not resolve") end
+    )
+
+    assert Atoll.OAuthFixture.conn(client, @path)
+           |> post(@path, Jason.encode!(%{identifier: "did:web:other.example.com"}))
+           |> json_response(403)
+  end
+
+  test "OAuth refresh rechecks authorization after resolution without restoring its admitted proof",
+       c do
+    client = Atoll.OAuthFixture.grant(c.pair, "atproto")
+    seq = Events.latest_seq()
+
+    opts =
+      Keyword.put(
+        options(c.doc),
+        :request,
+        Req.new(
+          plug: fn conn ->
+            Repo.update_all(Atoll.OAuth.AccessToken, set: [scope: ""])
+            Req.Test.json(conn, c.doc)
+          end
+        )
+      )
+
+    Application.put_env(:atoll, :identity_resolution_options, opts)
+    conn = Atoll.OAuthFixture.conn(client, @path)
+
+    assert post(conn, @path, Jason.encode!(%{identifier: @did})) |> json_response(403) == %{
+             "error" => "insufficient_scope"
+           }
+
+    assert Repo.get(Observation, @did) == nil
+    assert Events.latest_seq() == seq
+    Repo.update_all(Atoll.OAuth.AccessToken, set: [scope: "atproto"])
+
+    assert post(conn, @path, Jason.encode!(%{identifier: @did})) |> json_response(401) == %{
+             "error" => "invalid_dpop_proof"
+           }
+  end
+
+  test "OAuth refresh rejects revocation during resolution and inactive accounts before network access",
+       c do
+    client = Atoll.OAuthFixture.grant(c.pair, "atproto")
+
+    opts =
+      Keyword.put(
+        options(c.doc),
+        :request,
+        Req.new(
+          plug: fn conn ->
+            {:ok, :ok} = Sessions.revoke(c.pair.refresh_jwt)
+            Req.Test.json(conn, c.doc)
+          end
+        )
+      )
+
+    Application.put_env(:atoll, :identity_resolution_options, opts)
+
+    assert Atoll.OAuthFixture.conn(client, @path)
+           |> post(@path, Jason.encode!(%{identifier: @did}))
+           |> json_response(401)
+
+    assert Repo.get(Observation, @did) == nil
+    {:ok, pair} = Sessions.create(@did, "identity refresh password")
+    client = Atoll.OAuthFixture.grant(pair, "atproto")
+    {:ok, _} = Repositories.set_status(@did, :deactivated)
+
+    Application.put_env(:atoll, :identity_resolution_options,
+      lookup: fn _ -> flunk("inactive account must not resolve") end
+    )
+
+    assert Atoll.OAuthFixture.conn(client, @path) |> post(@path, "{") |> json_response(401)
+  end
+
   defp request(c, identifier),
     do:
       c.conn

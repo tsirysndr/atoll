@@ -66,23 +66,23 @@ defmodule Atoll.OAuthFixture do
     Map.merge(client, %{nonce: nonce, token: tokens.access_token})
   end
 
-  def conn(client, path) do
+  def conn(client, path, method \\ "POST") do
     id = rem(System.unique_integer([:positive]), 65_536)
 
     %{Phoenix.ConnTest.build_conn() | remote_ip: {10, 90, div(id, 256), rem(id, 256)}}
     |> put_req_header("authorization", "DPoP " <> client.token)
-    |> put_req_header("dpop", proof(client, path))
+    |> put_req_header("dpop", proof(client, path, method))
     |> put_req_header("content-type", "application/json")
   end
 
-  def proof(client, path) do
+  def proof(client, path, method \\ "POST") do
     {_, public} = JOSE.JWK.to_public_map(client.key)
 
     claims = %{
       "jti" => random(),
       "iat" => System.system_time(:second),
       "nonce" => client.nonce,
-      "htm" => "POST",
+      "htm" => method,
       "htu" => AtollWeb.Endpoint.url() <> path
     }
 

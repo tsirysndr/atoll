@@ -122,7 +122,7 @@ defmodule AtollWeb.SessionRequestPlug do
 
     identity_paths =
       Enum.map(
-        ~w(updateHandle requestPlcOperationSignature signPlcOperation submitPlcOperation),
+        ~w(updateHandle refreshIdentity requestPlcOperationSignature signPlcOperation submitPlcOperation),
         &("/xrpc/com.atproto.identity." <> &1)
       )
 

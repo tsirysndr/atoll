@@ -940,6 +940,54 @@ defmodule AtollWeb.OAuthResourceTest do
     |> post(path, body)
   end
 
+  @tag scope: "atproto"
+  test "recommended DID credentials expose only owned public identity with base OAuth scope", c do
+    body = inventory_request(c, "identity.getRecommendedDidCredentials") |> json_response(200)
+    {:ok, head} = Repositories.get_head(c.did)
+    {:ok, key_id} = Atoll.Multikey.to_did_key(head.curve, head.public_key)
+
+    assert body == %{
+             "verificationMethods" => %{"atproto" => key_id},
+             "alsoKnownAs" => ["at://account.example.com"],
+             "services" => %{
+               "atproto_pds" => %{
+                 "type" => "AtprotoPersonalDataServer",
+                 "endpoint" => AtollWeb.Endpoint.url()
+               }
+             }
+           }
+
+    signed = inventory_proof(c, "identity.getRecommendedDidCredentials")
+
+    assert inventory_request(c, "identity.getRecommendedDidCredentials", %{}, signed).status ==
+             200
+
+    assert inventory_request(c, "identity.getRecommendedDidCredentials", %{}, signed).status ==
+             401
+
+    Repo.insert!(%Atoll.Identity.Observation{
+      did: c.did,
+      handle: "handle.invalid",
+      fingerprint: :crypto.strong_rand_bytes(32)
+    })
+
+    refute Map.has_key?(
+             inventory_request(c, "identity.getRecommendedDidCredentials") |> json_response(200),
+             "alsoKnownAs"
+           )
+
+    Repo.update_all(AccessToken, set: [expires_at: System.system_time(:second) - 1])
+    assert inventory_request(c, "identity.getRecommendedDidCredentials").status == 401
+  end
+
+  @tag scope: "atproto"
+  test "recommended credentials preserve custody errors and reject inactive OAuth accounts", c do
+    Repo.delete_all(Atoll.Repositories.EncryptedKey)
+    assert inventory_request(c, "identity.getRecommendedDidCredentials").status == 503
+    {:ok, _} = Repositories.set_status(c.did, :deactivated)
+    assert inventory_request(c, "identity.getRecommendedDidCredentials").status == 401
+  end
+
   defp missing_reference(did, path, bytes) do
     cid = Atoll.CID.create(bytes, :raw)
     {:ok, head} = Repositories.get_head(did)

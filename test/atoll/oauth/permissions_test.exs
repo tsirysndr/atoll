@@ -129,6 +129,9 @@ defmodule Atoll.OAuth.PermissionsTest do
   end
 
   test "identity scopes distinguish handle authority from full DID control" do
+    assert Permissions.write_admission?("atproto", :refresh_identity)
+    refute Permissions.write_admission?("identity:*", :refresh_identity)
+
     for scope <- ["identity:handle", "identity?attr=handle", "identity:%68andle?"] do
       assert {:ok, %{attr: "handle"}} = Permissions.identity(scope)
       assert Permissions.supported?(scope)

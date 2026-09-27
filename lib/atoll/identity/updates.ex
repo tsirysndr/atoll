@@ -7,7 +7,7 @@ defmodule Atoll.Identity.Updates do
   lookup leaves the previous observation intact. Unverified handles are reported
   as handle.invalid. Observations do not change repository keys or hosting status.
   Callers authorize refreshes; an opt-in worker schedules periodic refreshes.
-  Owners can request an authenticated refresh; identity mutation APIs are pending.
+  Owners can request an authenticated refresh using a password session or an admitted OAuth credential.
   """
   import Ecto.Query
   alias Atoll.{CBOR, Repo, Repositories}
@@ -24,7 +24,7 @@ defmodule Atoll.Identity.Updates do
       when map_size(params) == 1 do
     opts = Keyword.put(opts, :force_refresh, true)
 
-    with {:ok, head} <- Atoll.Accounts.Sessions.authenticate_management(token),
+    with {:ok, head} <- Atoll.Identity.OAuthAuthorization.authenticate(token, :refresh_identity),
          :ok <- own_identifier(identifier, head.did, opts),
          {:ok, result} <- refresh_result(head.did, opts, token) do
       {:ok, result.info}
@@ -87,7 +87,7 @@ defmodule Atoll.Identity.Updates do
             do: Atoll.Identity.RefreshLeases.assert_current!(did, opts[:refresh_lease])
 
           if token do
-            case Atoll.Accounts.Sessions.authenticate_management(token) do
+            case Atoll.Identity.OAuthAuthorization.authenticate(token, :refresh_identity) do
               {:ok, %{did: ^did}} -> :ok
               {:error, reason} -> Repo.rollback(reason)
             end

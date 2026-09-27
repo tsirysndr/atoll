@@ -41,6 +41,7 @@ defmodule Atoll.OAuth.Resource do
   end
 
   @write_methods %{
+    refresh_identity: "com.atproto.identity.refreshIdentity",
     update_handle: "com.atproto.identity.updateHandle",
     request_plc_signature: "com.atproto.identity.requestPlcOperationSignature",
     sign_plc_operation: "com.atproto.identity.signPlcOperation",

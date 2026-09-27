@@ -125,6 +125,8 @@ defmodule Atoll.OAuth.Permissions do
     end
   end
 
+  def write_admission?(scope, :refresh_identity), do: "atproto" in String.split(scope, " ")
+
   def write_admission?(scope, :update_handle), do: allows_identity?(scope, "handle")
 
   def write_admission?(scope, action)
