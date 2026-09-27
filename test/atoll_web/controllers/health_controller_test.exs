@@ -57,6 +57,31 @@ defmodule AtollWeb.HealthControllerTest do
              end)
   end
 
+  test "the XRPC health route reports the version and database availability", %{conn: conn} do
+    version = to_string(Application.spec(:atoll, :vsn))
+    response = get(conn, "/xrpc/_health")
+    assert json_response(response, 200) == %{"version" => version}
+    assert get_resp_header(response, "cache-control") == ["no-store"]
+    assert_receive {:readiness, _, %{outcome: :ready}}
+
+    result = post(conn, "/xrpc/_health")
+    assert json_response(result, 405)
+    assert get_resp_header(result, "allow") == ["GET"]
+
+    assert {:error, :probe_test} =
+             Atoll.Repo.transaction(fn ->
+               assert {:error, %Postgrex.Error{}} =
+                        Atoll.Repo.query("SELECT 1 / 0", [], log: false)
+
+               assert get(conn, "/xrpc/_health") |> json_response(503) == %{
+                        "version" => version,
+                        "error" => "Service Unavailable"
+                      }
+
+               Atoll.Repo.rollback(:probe_test)
+             end)
+  end
+
   def telemetry(_event, measurements, metadata, owner) do
     if self() == owner, do: send(owner, {:readiness, measurements, metadata})
   end

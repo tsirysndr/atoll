@@ -48,6 +48,12 @@ defmodule AtollWeb.SyncController do
     end
   end
 
+  def get_head(conn, params) do
+    with {:ok, head} <- head(params), :ok <- Repositories.availability(head) do
+      json(conn, %{root: CID.to_base32(head.head)})
+    end
+  end
+
   def repo_status(conn, params) do
     with {:ok, head} <- head(params) do
       json(conn, Repositories.status_fields(head))

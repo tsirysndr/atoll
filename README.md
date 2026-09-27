@@ -14,6 +14,7 @@ Every item below is implemented in this repository. This is the project's develo
 - [x] Phoenix API application with a PostgreSQL connection through Ecto.
 - [x] Database migrations and isolated database tests.
 - [x] `GET /health` HTTP liveness endpoint (does not check database readiness).
+- [x] `GET /xrpc/_health` version and database probe, plus the reference `robots.txt` allowing public-API crawling.
 - [x] `GET /` plain-text ATProto ASCII banner and API location.
 - [x] `GET /xrpc/com.atproto.server.describeServer` with configurable `did` and `availableUserDomains`.
 - [x] Controller test for unauthenticated server description.
@@ -46,7 +47,7 @@ Phoenix for server-side reporting. Non-XRPC routes retain their existing error
 format. Failures rejected by the HTTP adapter before reaching Phoenix and errors
 after a response or WebSocket upgrade has begun are outside this JSON renderer.
 
-Routed GET query parameters are checked against 28 unmodified upstream Lexicons
+Routed GET query parameters are checked against 30 unmodified upstream Lexicons
 vendored in `priv/lexicons`, pinned to the revision recorded there with its MIT
 license. Validation covers required parameters, string identifier formats and
 lengths, integer bounds, booleans, and repeated-key arrays. Controller-specific
@@ -799,6 +800,7 @@ locking protects shared objects when collectors overlap.
 - [x] Bounded operator revision-history compaction preserving current heads and retained replay dependencies.
 - [x] `com.atproto.sync.listReposByCollection` with indexed collection lookup, distinct active DIDs and exclusive pagination.
 - [x] `getLatestCommit`, `getRepoStatus`, and paginated `listRepos` sync endpoints with persistent repository status.
+- [x] Deprecated `com.atproto.sync.getHead` and `getCheckout` for older consumers, sharing current availability checks and export authorization.
 - [x] `com.atproto.sync.getRecord` compact signed existence and absence proofs.
 - [x] Bounded verification of partial MST search paths and signed record CAR inclusion proofs.
 - [x] `com.atproto.sync.getBlocks` for current and retained historical repository blocks (1–100 CIDs; repeated `cids` query parameters).
@@ -7031,3 +7033,20 @@ Bluesky's entryway, not by the reference PDS at the pinned revision, whose only
 local `temp` route is the signup-queue check implemented above. Atoll matches
 that surface; fresh signups gate on invite codes, email confirmation and rate
 limits instead.
+
+### Service health and legacy sync endpoints
+
+`GET /xrpc/_health` reports the application version and probes the database
+with the bounded readiness query, returning `{"version": ...}` or a 503 with
+`error: "Service Unavailable"`, matching the reference PDS's route used by
+relays and monitors. It bypasses proxy candidacy and request-rate admission,
+answers only GET, and is never cached. `GET /robots.txt` explicitly allows
+crawling the public API, as the reference server does.
+
+The deprecated `com.atproto.sync.getHead` and `com.atproto.sync.getCheckout`
+remain served for older consumers, as they are upstream. `getHead` returns the
+current signed commit CID as `root` with the same availability rules as
+`getLatestCommit`; `getCheckout` streams the same complete CAR snapshot as
+`com.atproto.sync.getRepo`, ignoring any `since` parameter, and shares
+`getRepo`'s owner-token and operator export authorization for inactive
+accounts. New consumers should use `getLatestCommit` and `getRepo`.

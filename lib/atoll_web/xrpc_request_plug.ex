@@ -16,6 +16,23 @@ defmodule AtollWeb.XRPCRequestPlug do
 
   def call(conn, _opts) do
     case Enum.map(conn.path_info, &URI.decode/1) do
+      ["xrpc", "_health"] ->
+        # The health probe bypasses proxying and rate admission, like /health.
+        conn = AtollWeb.XRPCCORS.headers(conn)
+
+        cond do
+          conn.method == "GET" ->
+            conn
+
+          AtollWeb.XRPCCORS.preflight?(conn) ->
+            AtollWeb.XRPCCORS.preflight(conn, "GET")
+
+          true ->
+            conn
+            |> put_resp_header("allow", "GET")
+            |> error(405, "MethodNotAllowed", "Unsupported request method.")
+        end
+
       ["xrpc" | segments] ->
         conn = AtollWeb.XRPCCORS.headers(conn)
 

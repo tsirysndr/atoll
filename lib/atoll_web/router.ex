@@ -97,6 +97,8 @@ defmodule AtollWeb.Router do
     post "/com.atproto.repo.importRepo", RepoImportController, :create
     get "/com.atproto.repo.describeRepo", RepoController, :describe
     get "/com.atproto.repo.listRecords", RepoController, :list_records
+    get "/_health", HealthController, :xrpc
+    get "/com.atproto.sync.getHead", SyncController, :get_head
     get "/com.atproto.sync.getLatestCommit", SyncController, :latest_commit
     get "/com.atproto.sync.getRepoStatus", SyncController, :repo_status
     get "/com.atproto.sync.listReposByCollection", SyncController, :list_repos_by_collection
@@ -106,6 +108,7 @@ defmodule AtollWeb.Router do
 
   scope "/xrpc", AtollWeb do
     get "/com.atproto.sync.getRepo", RepoController, :get_repo
+    get "/com.atproto.sync.getCheckout", RepoController, :get_checkout
     get "/com.atproto.sync.getRecord", SyncController, :get_record
     get "/com.atproto.sync.getBlocks", SyncController, :get_blocks
     get "/com.atproto.sync.getBlob", BlobController, :get_blob

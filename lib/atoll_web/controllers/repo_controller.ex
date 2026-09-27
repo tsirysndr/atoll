@@ -83,6 +83,10 @@ defmodule AtollWeb.RepoController do
     AtollWeb.ExportToken.authorize(conn, &get_repo(conn, params, &1))
   end
 
+  def get_checkout(conn, params) do
+    AtollWeb.ExportToken.authorize(conn, &get_repo(conn, Map.put(params, "since", nil), &1))
+  end
+
   defp get_repo(conn, params, token) do
     with true <- Syntax.did?(params["did"]),
          true <- is_nil(params["since"]) or TID.valid?(params["since"]),

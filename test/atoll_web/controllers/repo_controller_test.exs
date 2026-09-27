@@ -19,6 +19,36 @@ defmodule AtollWeb.RepoControllerTest do
     %{key: key, head: head}
   end
 
+  test "deprecated head and checkout endpoints mirror the current commit and full export", %{
+    conn: conn,
+    head: head
+  } do
+    assert conn |> get("/xrpc/com.atproto.sync.getHead", %{did: @did}) |> json_response(200) ==
+             %{"root" => CID.to_base32(head.head)}
+
+    full = conn |> get(@export, %{did: @did}) |> response(200)
+    checkout = get(conn, "/xrpc/com.atproto.sync.getCheckout", %{did: @did})
+    assert response(checkout, 200) == full
+    assert get_resp_header(checkout, "content-type") == ["application/vnd.ipld.car"]
+
+    # A supplied since parameter is ignored: checkouts are always complete.
+    assert conn
+           |> get("/xrpc/com.atproto.sync.getCheckout", %{did: @did, since: head.rev})
+           |> response(200) == full
+
+    assert conn
+           |> get("/xrpc/com.atproto.sync.getHead", %{did: "did:plc:absentabsentabsentabsent"})
+           |> json_response(400)
+
+    {:ok, _} = Repositories.set_status(@did, :deactivated)
+
+    assert %{"error" => "RepoDeactivated"} =
+             conn |> get("/xrpc/com.atproto.sync.getHead", %{did: @did}) |> json_response(400)
+
+    assert %{"error" => "RepoDeactivated"} =
+             conn |> get("/xrpc/com.atproto.sync.getCheckout", %{did: @did}) |> json_response(400)
+  end
+
   test "returns a current record with a string CID and optional matching CID", %{conn: conn} do
     params = %{repo: @did, collection: @collection, rkey: "a"}
     body = conn |> get(@get, params) |> json_response(200)

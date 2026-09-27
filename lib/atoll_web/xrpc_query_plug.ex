@@ -7,6 +7,9 @@ defmodule AtollWeb.XRPCQueryPlug do
 
   def call(%{method: "GET"} = conn, _) do
     case Enum.map(conn.path_info, &URI.decode/1) do
+      ["xrpc", "_health"] ->
+        conn
+
       ["xrpc", nsid] ->
         case Atoll.Lexicon.Query.decode(nsid, conn.query_string) do
           {:ok, params} ->

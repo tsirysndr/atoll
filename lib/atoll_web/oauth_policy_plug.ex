@@ -11,7 +11,9 @@ defmodule AtollWeb.OAuthPolicyPlug do
   alias AtollWeb.OAuthResource
 
   @public ~w(
+    _health
     com.atproto.server.describeServer
+    com.atproto.sync.getHead
     com.atproto.identity.resolveDid
     com.atproto.identity.resolveIdentity
     com.atproto.identity.resolveHandle
@@ -51,6 +53,7 @@ defmodule AtollWeb.OAuthPolicyPlug do
     com.atproto.repo.importRepo
     com.atproto.repo.listMissingBlobs
     com.atproto.sync.getRepo
+    com.atproto.sync.getCheckout
     com.atproto.sync.getBlob
     com.atproto.sync.listBlobs
   )
