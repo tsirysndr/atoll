@@ -56,6 +56,7 @@ defmodule AtollWeb.OAuthPolicyPlug do
   )
 
   @non_oauth ~w(
+    com.atproto.temp.checkSignupQueue
     com.atproto.server.createInviteCode
     com.atproto.server.createInviteCodes
     com.atproto.server.getAccountInviteCodes

@@ -37,6 +37,7 @@ defmodule AtollWeb.SessionRequestPlug do
   @queries @identity_queries ++
              [
                @preferences_get,
+               "/xrpc/com.atproto.temp.checkSignupQueue",
                @prefix <> "getAccountInviteCodes",
                @prefix <> "listAppPasswords",
                @prefix <> "getSession",

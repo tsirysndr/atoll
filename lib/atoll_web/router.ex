@@ -68,6 +68,7 @@ defmodule AtollWeb.Router do
     get "/com.atproto.server.getServiceAuth", SessionController, :service_auth
     post "/com.atproto.server.refreshSession", SessionController, :refresh
     post "/com.atproto.server.deleteSession", SessionController, :delete
+    get "/com.atproto.temp.checkSignupQueue", SessionController, :signup_queue
     post "/com.atproto.server.activateAccount", SessionController, :activate
     post "/com.atproto.server.deactivateAccount", SessionController, :deactivate
 

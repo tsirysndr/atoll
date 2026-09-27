@@ -46,7 +46,7 @@ Phoenix for server-side reporting. Non-XRPC routes retain their existing error
 format. Failures rejected by the HTTP adapter before reaching Phoenix and errors
 after a response or WebSocket upgrade has begun are outside this JSON renderer.
 
-Routed GET query parameters are checked against 27 unmodified upstream Lexicons
+Routed GET query parameters are checked against 28 unmodified upstream Lexicons
 vendored in `priv/lexicons`, pinned to the revision recorded there with its MIT
 license. Validation covers required parameters, string identifier formats and
 lengths, integer bounds, booleans, and repeated-key arrays. Controller-specific
@@ -403,6 +403,7 @@ mutation. Deletes and empty batches need no record schema, even with `validate: 
 - [x] Opt-in automatic signup retries with database leases, durable delay and activation fencing.
 - [x] Operator signup activation from verified directory advancement that preserves local identity and authority.
 - [x] Opt-in self-service custom-domain DID reservation during OAuth signup, with bounded pending state, password-bound retries, DNS/HTTPS setup instructions and transactional audit attribution.
+- [x] Authenticated signup-queue status reporting live accounts as activated without a queue.
 - [ ] Phone verification and signup recovery requiring changed local identity or keys.
 - [x] Internal DID-scoped password credentials with salted Argon2id hashes, bounded input, redacted inspection, and duplicate protection.
 - [x] Shared configurable Cloudflare Worker email delivery client.
@@ -6892,3 +6893,12 @@ short-lived account-signed service tokens, the shared body/response bounds, and
 the protected account-management method refusals. An explicit `Atproto-Proxy`
 header still overrides the default destination, and unconfigured destinations
 keep returning `501 MethodNotImplemented`.
+
+### Signup queue status
+
+`GET com.atproto.temp.checkSignupQueue` reports `{"activated": true}` for any
+live password or app-password session, including deactivated accounts. Atoll
+has no signup queue, so the [temporary upstream route](https://github.com/bluesky-social/atproto/blob/7a857989751ae31518509d69ab7194a922064f3d/packages/pds/src/api/com/atproto/temp/checkSignupQueue.ts)
+is answered the same way the reference PDS answers without an entryway. As
+upstream, OAuth credentials are refused. The route shares the session rate
+budget and `no-store` responses.

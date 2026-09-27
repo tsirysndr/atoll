@@ -142,6 +142,14 @@ defmodule AtollWeb.SessionController do
     end
   end
 
+  def signup_queue(conn, _params) do
+    # Atoll has no signup queue; live sessions, including queued-style
+    # deactivated accounts, are reported as activated.
+    with {:ok, token} <- bearer(conn),
+         {:ok, _} <- Sessions.authenticate_session(token),
+         do: json(conn, %{activated: true})
+  end
+
   def status(conn, _params) do
     if AtollWeb.OAuthResource.attempt?(conn) do
       AtollWeb.OAuthResource.read_with_resolution(
