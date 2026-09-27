@@ -98,7 +98,9 @@ defmodule Atoll.ProxyTransportTest do
                "",
                [{"content-type", "application/octet-stream"}],
                body,
-               "jwt", request: req)
+               "jwt",
+               request: req
+             )
   end
 
   test "rejects redirects and compressed responses without following or decoding them" do

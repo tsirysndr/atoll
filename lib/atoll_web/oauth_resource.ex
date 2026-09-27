@@ -85,6 +85,20 @@ defmodule AtollWeb.OAuthResource do
            )
   end
 
+  def with_proxy(conn, audience, nsid, prepare) do
+    with {:ok, token} <- token(get_req_header(conn, "authorization")) do
+      Resource.with_proxy(
+        token,
+        get_req_header(conn, "dpop"),
+        conn.method,
+        AtollWeb.Endpoint.url() <> conn.request_path,
+        audience,
+        nsid,
+        prepare
+      )
+    end
+  end
+
   def error(conn, reason), do: failure(conn, reason)
 
   defp token([header]) when byte_size(header) <= 128 do

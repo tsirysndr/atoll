@@ -18,16 +18,31 @@ defmodule AtollWeb.XRPCRequestPlug do
     case Enum.map(conn.path_info, &URI.decode/1) do
       ["xrpc" | segments] ->
         conn = AtollWeb.XRPCCORS.headers(conn)
+
+        conn =
+          case segments do
+            [nsid] ->
+              put_private(
+                conn,
+                :atoll_proxy,
+                AtollWeb.ProxyPlug.candidate?(conn, nsid, not is_nil(expected_method(nsid)))
+              )
+
+            _ ->
+              conn
+          end
+
         limit = Application.get_env(:atoll, :xrpc_rate_limit, 3000)
 
-        # A zero write budget means no HTTP rate throttling for the four POST
-        # record procedures. Other methods/routes keep the aggregate budget.
+        # A zero write budget disables HTTP rate throttling for the four local
+        # record POSTs. Proxies and other methods/routes keep the aggregate budget.
         admission =
           case segments do
             [nsid] ->
-              if AtollWeb.RecordWritePlug.unlimited?(conn.method, nsid),
-                do: :ok,
-                else: Atoll.Accounts.SessionLimiter.check({:xrpc, conn.remote_ip}, limit)
+              if not conn.private[:atoll_proxy] and
+                   AtollWeb.RecordWritePlug.unlimited?(conn.method, nsid),
+                 do: :ok,
+                 else: Atoll.Accounts.SessionLimiter.check({:xrpc, conn.remote_ip}, limit)
 
             _ ->
               Atoll.Accounts.SessionLimiter.check({:xrpc, conn.remote_ip}, limit)
@@ -55,21 +70,25 @@ defmodule AtollWeb.XRPCRequestPlug do
 
   defp validate(conn, nsid) do
     if Atoll.Syntax.nsid?(nsid) do
-      case expected_method(nsid) do
-        nil ->
-          error(conn, 501, "MethodNotImplemented", "XRPC method is not implemented.")
+      if conn.private[:atoll_proxy] do
+        AtollWeb.ProxyPlug.validate_route(conn, nsid)
+      else
+        case expected_method(nsid) do
+          nil ->
+            error(conn, 501, "MethodNotImplemented", "XRPC method is not implemented.")
 
-        method when method == conn.method ->
-          conn
-
-        method ->
-          if AtollWeb.XRPCCORS.preflight?(conn) do
-            AtollWeb.XRPCCORS.preflight(conn, method)
-          else
+          method when method == conn.method ->
             conn
-            |> put_resp_header("allow", method)
-            |> error(405, "MethodNotAllowed", "Unsupported request method.")
-          end
+
+          method ->
+            if AtollWeb.XRPCCORS.preflight?(conn) do
+              AtollWeb.XRPCCORS.preflight(conn, method)
+            else
+              conn
+              |> put_resp_header("allow", method)
+              |> error(405, "MethodNotAllowed", "Unsupported request method.")
+            end
+        end
       end
     else
       error(conn, 400, "InvalidRequest", "Invalid XRPC method identifier.")

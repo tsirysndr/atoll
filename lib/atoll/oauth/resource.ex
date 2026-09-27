@@ -18,6 +18,57 @@ defmodule Atoll.OAuth.Resource do
   def read(token, headers, url, reader, opts \\ []) when is_function(reader, 1),
     do: admit(token, headers, "GET", url, fn _, _, principal -> reader.(principal) end, opts)
 
+  @doc """
+  Admit a method-bound proxy proof and RPC grant before body reads/resolution,
+  then recheck current authorization and sign a 60-second service JWT under locks.
+  The trusted prepare callback runs outside transactions and returns {:ok, data}.
+  The caller sends the prepared request only after this function returns successfully.
+  """
+  def with_proxy(token, headers, method, url, audience, nsid, prepare, opts \\ [])
+      when is_function(prepare, 0) do
+    issuer = Keyword.get(opts, :issuer, AtollWeb.Endpoint.url())
+    params = %{"aud" => audience, "lxm" => nsid}
+
+    with true <- method in ["GET", "POST"] and Atoll.Syntax.nsid?(nsid),
+         true <- url == issuer <> "/xrpc/" <> nsid,
+         {:ok, _} <- Atoll.Proxy.Target.parse(audience),
+         {:ok, {access, candidate}} <-
+           admit(
+             token,
+             headers,
+             method,
+             url,
+             fn access, candidate, principal ->
+               case Atoll.Accounts.ServiceAuth.authorize_oauth(principal, params) do
+                 :ok -> {access, candidate}
+                 {:error, reason} -> Repo.rollback(reason)
+               end
+             end,
+             opts
+           ),
+         {:ok, prepared} <- prepare.(),
+         {:ok, jwt} <-
+           locked_read(
+             access,
+             candidate,
+             fn principal ->
+               case Atoll.Accounts.ServiceAuth.issue_oauth(principal, params) do
+                 {:ok, %{token: jwt}} -> jwt
+                 {:error, reason} -> Repo.rollback(reason)
+               end
+             end,
+             opts
+           ) do
+      {:ok, {prepared, jwt}}
+    else
+      false -> {:error, :invalid_request}
+      {:error, _} = error -> error
+    end
+  rescue
+    _ in [Postgrex.Error, DBConnection.ConnectionError] ->
+      {:error, :oauth_resource_store_unavailable}
+  end
+
   @doc "Admit a read, resolve external data without locks, then recheck authorization for the final read."
   def read_with_resolution(token, headers, url, resolver, reader, opts \\ [])
       when is_function(resolver, 1) and is_function(reader, 2) do

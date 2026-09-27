@@ -23,14 +23,35 @@ defmodule Atoll.Accounts.ServiceAuth do
     com.atproto.server.updateEmail
   ) |> Enum.map(&String.downcase/1)
 
-  def issue(token, params) when is_map(params) do
+  def issue(token, params) when is_map(params), do: issue(token, params, :delegation)
+
+  @doc "Admit a proxy caller, prepare outside locks, and recheck the active session before signing."
+  def with_proxy(token, audience, nsid, prepare) when is_function(prepare, 0) do
+    params = %{"aud" => audience, "lxm" => nsid}
+
+    cond do
+      Repo.in_transaction?() ->
+        {:error, :proxy_inside_transaction}
+
+      not (audience?(audience) and String.contains?(audience, "#") and Syntax.nsid?(nsid)) ->
+        {:error, :invalid_request}
+
+      true ->
+        with :ok <- method(nsid),
+             {:ok, _} <- authorize_session(token, params, :proxy),
+             {:ok, prepared} <- prepare.(),
+             {:ok, %{token: jwt}} <- issue(token, params, :proxy) do
+          {:ok, {prepared, jwt}}
+        end
+    end
+  end
+
+  defp issue(token, params, policy) do
     with true <- audience?(params["aud"]),
          :ok <- method(params["lxm"]),
          {:ok, expiry} <- expiration(params["exp"]) do
       Repo.transaction(fn ->
-        with {:ok, %{did: did} = head} <- Sessions.authenticate_session(token),
-             :ok <- account_scope(head, params["lxm"]),
-             :ok <- app_scope(head.scope, params["lxm"]),
+        with {:ok, %{did: did}} <- authorize_session(token, params, policy),
              now = System.system_time(:second),
              {:ok, exp} <- bounded_expiry(expiry, params["lxm"], now),
              {:ok, key} <- KeyVault.fetch(did),
@@ -50,13 +71,11 @@ defmodule Atoll.Accounts.ServiceAuth do
   Internal signing callback for OAuth.Resource.read; the caller must hold its
   authorization locks. This function is not an authentication boundary.
   """
-  def issue_oauth(%{did: did, status: :active, scope: scope}, params) when is_map(params) do
+  def issue_oauth(%{did: did, status: :active} = principal, params) when is_map(params) do
     unless Repo.in_transaction?(),
       do: raise(ArgumentError, "OAuth service signing requires an authorized transaction")
 
-    with true <- audience?(params["aud"]),
-         :ok <- method(params["lxm"]),
-         :ok <- oauth_scope(scope, params["aud"], params["lxm"]),
+    with :ok <- authorize_oauth(principal, params),
          {:ok, expiry} <- expiration(params["exp"]),
          now = System.system_time(:second),
          {:ok, exp} <- bounded_expiry(expiry, params["lxm"], now),
@@ -65,6 +84,31 @@ defmodule Atoll.Accounts.ServiceAuth do
       {:ok, %{token: jwt}}
     else
       false -> {:error, :invalid_request}
+      error -> error
+    end
+  end
+
+  @doc "Pure permission check for an already authenticated OAuth principal; not an authentication boundary."
+  def authorize_oauth(%{status: :active, scope: scope}, params) when is_map(params) do
+    with true <- audience?(params["aud"]),
+         :ok <- method(params["lxm"]),
+         do: oauth_scope(scope, params["aud"], params["lxm"]),
+         else: (
+           false -> {:error, :invalid_request}
+           error -> error
+         )
+  end
+
+  def authorize_oauth(_, _), do: {:error, :invalid_token}
+
+  defp authorize_session(token, params, policy) do
+    with {:ok, head} <- Sessions.authenticate_session(token),
+         :ok <- account_scope(head, params["lxm"]),
+         true <- policy != :proxy or head.status == :active,
+         :ok <- app_scope(head.scope, params["lxm"]) do
+      {:ok, head}
+    else
+      false -> {:error, :forbidden}
       error -> error
     end
   end

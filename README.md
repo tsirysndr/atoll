@@ -81,8 +81,9 @@ are not enabled. Valid OPTIONS preflights for implemented routes return 204 befo
 body parsing and authentication, permit only the route's declared method, and
 advertise a 600-second browser preflight cache lifetime. Actual requests retain
 all endpoint authentication and rate limits. Allowed request headers are `Accept`,
-`Accept-Language`, `Authorization`, `Content-Type`, `Atproto-Proxy`, and
-`Atproto-Accept-Labelers` (the latter two do not imply proxy implementation).
+`Accept-Language`, `Authorization`, `DPoP`, `Content-Type`, `Atproto-Proxy`, and
+`Atproto-Accept-Labelers`. Proxy preflights allow GET or POST without resolving
+the destination; actual proxy requests require an active authenticated account.
 Clients can read repository revision, content labeler, retry/rate-limit, and
 WWW-Authenticate response headers. Unsupported methods or request headers fail
 preflight; ordinary OPTIONS requests without preflight headers remain 405.
@@ -307,10 +308,11 @@ this setting only when explicitly supplied. With a positive write budget, the
 general XRPC budget also applies independently.
 
 Set `ATOLL_RECORD_WRITE_RATE_LIMIT=0` (or `config :atoll, :record_write_rate_limit, 0`)
-to disable HTTP rate throttling entirely for POST `createRecord`, `putRecord`,
+to disable HTTP rate throttling entirely for local POST `createRecord`, `putRecord`,
 `deleteRecord` and `applyWrites`. These requests bypass both the write bucket and
 the aggregate XRPC bucket, without contacting a rate-limit backend. Other routes,
-methods and CORS preflights retain their existing budgets. Authentication, DPoP
+methods and CORS preflights retain their existing budgets. Proxied requests retain
+the aggregate XRPC budget, including requests to those record methods. Authentication, DPoP
 proof checks, request/record size bounds, schemas, quotas and transaction checks
 still apply. Invalid environment values fail startup; invalid application values
 reject writes with HTTP 503. This changes policy only when configured; the default
@@ -432,7 +434,7 @@ mutation. Deletes and empty batches need no record schema, even with `validate: 
 - [x] Granular OAuth identity permissions for handle changes, PLC signature requests, signing and submission.
 - [x] Internal namespace-restricted permission-set expansion and authenticated PostgreSQL resolution cache.
 - [x] Permission-set consent, localized descriptions, fixed per-token permission snapshots and refresh recomputation.
-- [ ] RPC proxy integration.
+- [x] RPC proxy integration with DPoP admission, granular scopes and frozen permission-set grants.
 - [x] DPoP blob uploads with transitional generic scope, pre-body proof admission, and transactional authorization rechecks.
 - [x] DPoP service-token issuance with current generic/chat scope checks and authorization locks held through signing.
 - [x] DPoP authentication on public repository/blob export routes without granting inactive-account export privileges.
@@ -736,7 +738,7 @@ locking protects shared objects when collectors overlap.
 - [x] Internal incoming account service-JWT verification with exact audience/method checks and persistent replay protection.
 - [x] Service-authenticated migration account creation.
 - [x] Internal proxy service resolution and bounded, public-IP-pinned HTTPS transport.
-- [ ] Request proxying to AppViews and other services.
+- [x] Authenticated request proxying to AppViews and other services, with an optional default AppView.
 
 The internal `Atoll.Proxy.Target` resolver requires a concrete DID with a service
 fragment and exactly one matching service entry in the resolved DID document.
@@ -750,9 +752,51 @@ accepts a separately minted service JWT, and filters request/response headers.
 Caller access tokens, DPoP proofs and cookies are not forwarded. Redirects,
 compressed responses and oversized responses are rejected. Request bodies are
 bounded to 2 MiB, query strings to 8 KiB and streamed responses to 8 MiB, with
-connection and request deadlines. These modules do not authorize users or expose
-proxy routes: active-account admission, OAuth RPC permission checks, final grant
-rechecks, rate limits and default AppView routing still need integration.
+connection and request deadlines.
+
+Clients can send GET or POST requests to a canonical `/xrpc/<NSID>` path with
+`Atproto-Proxy: did:web:service.example.com#service_name`. This explicitly selects
+proxying even when the method also exists locally. Duplicate/malformed target
+headers, encoded path aliases and other HTTP methods are rejected. No default
+AppView is selected unless configured:
+
+```elixir
+config :atoll, :appview_proxy, "did:web:appview.example.com#bsky_appview"
+```
+
+`ATOLL_APPVIEW_PROXY` overrides this setting when supplied; an empty value disables
+the default. Malformed environment values fail startup. The default applies only
+to unknown `app.bsky.*` methods without an explicit proxy header. Existing local
+routes remain local. All targets resolve through their DID service entry; the
+default is a service identity, not an arbitrary endpoint URL.
+
+Both legacy access sessions and DPoP OAuth require an active account. App-password
+restrictions and protected service-auth methods still apply. OAuth accepts an
+RPC permission matching the full service audience and exact NSID, including
+permissions expanded from the access token's frozen permission-set snapshot,
+or an applicable transitional generic/chat grant with its existing restrictions. Repository
+permissions alone never authorize remote calls. Proof admission and the initial
+scope check precede body reads and service resolution; a failed preparation still
+consumes an admitted proof. The current account, source session, OAuth grant and
+access token are rechecked under locks before signing. Resolution and outbound
+HTTP run outside database transactions.
+
+Every forwarded request receives a fresh account-signed JWT with the full
+`DID#service` audience, exact `lxm`, random `jti` and a 60-second lifetime. Local
+session credentials are never forwarded. Revocation detected before signing
+prevents the request; a JWT already sent cannot be recalled and may remain valid
+until expiry. Receivers must enforce its audience, method and validity themselves.
+The aggregate XRPC rate limit also applies to proxied record writes when local
+record throttling is disabled. Upstream 2xx/4xx/5xx status and body are preserved
+within the transport bounds; resolution/invalid-response failures return 502 and
+upstream timeouts return 504. Replies use `no-store`, `nosniff` and a sandbox CSP;
+remote cookies, redirects and CORS/authentication headers are not relayed.
+
+Tests exercise signed claims, legacy/app/OAuth authorization, grant revocation and
+narrowing during resolution, permission-set cache eviction, raw request bodies,
+proof replay, rate limits, preflights, response filtering and transport bounds.
+External AppView/client interoperability remains a separate pending test suite.
+The protocol behavior follows the [service proxy specification](https://atproto.com/specs/xrpc#service-proxying).
 
 Historical `getBlocks` reads are limited to active repositories and return only
 requested blocks in a rootless CAR. Deleted record bytes remain publicly retrievable
@@ -776,7 +820,8 @@ Issued JWTs use ES256K or ES256 according to the account key and include `iss`,
 occur in one transaction. Tokens already issued remain cryptographically valid
 until expiration even if the originating session is revoked; receiving services
 must enforce audience, method, expiration, and their own authorization policy.
-Atoll does not yet accept service JWTs as local access tokens or proxy requests.
+Atoll does not accept incoming service JWTs as local access tokens. Outbound proxy
+requests use account-signed service JWTs as described above.
 With a legacy full-account session, deactivated accounts can request only the `com.atproto.server.createAccount`
 method for migration. Taken-down scopes cannot request service tokens. App-password delegation requires an explicit method; standard app passwords cannot delegate chat methods.
 
@@ -2140,8 +2185,9 @@ out-of-range environment values fail startup. Application configuration uses
 The budget applies before routing validation, query/body parsing, authentication,
 and WebSocket upgrade. All XRPC paths and methods share it, including unknown
 methods, malformed paths, encoded route spellings, errors, and CORS preflights.
-The explicit exception is POST record procedures when `ATOLL_RECORD_WRITE_RATE_LIMIT=0`;
-those writes bypass this budget as well as their specialized bucket.
+The explicit exception is local POST record procedures when `ATOLL_RECORD_WRITE_RATE_LIMIT=0`;
+those writes bypass this budget as well as their specialized bucket. Requests
+using `Atproto-Proxy` retain this aggregate budget even for record-write methods.
 Existing login, write, blob, identity-resolution, and administrator limits still
 apply independently and may reject requests sooner. An admitted subscription
 handshake consumes one request; individual WebSocket frames do not consume this
@@ -5432,8 +5478,8 @@ permission failures. Browser consent tests exercise RPC selection alongside
 repository and MIME permissions. The policy follows the
 [RPC permission specification](https://atproto.com/specs/permission#rpc) and the
 [reference RPC matcher](https://github.com/bluesky-social/atproto/blob/main/packages/oauth/oauth-scopes/src/scopes/rpc-permission.ts).
-Request proxying remains unfinished; permission-set expansion is implemented
-through the frozen authorization snapshots described above.
+Request proxying enforces the same RPC policy and expands permission sets through
+the frozen authorization snapshots described above.
 
 ### DPoP public exports
 
