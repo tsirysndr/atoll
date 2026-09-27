@@ -30,6 +30,7 @@ Prometheus documents [alert rules and delivery](https://prometheus.io/docs/prome
 | `AtollReadinessFailures` | At least half of recorded readiness probes fail over five minutes, sustained for two minutes. | Check PostgreSQL reachability and pool contention. Schedule regular `/health/ready` probes: scraping `/metrics` does not run readiness probes. |
 | `AtollWorkerFailures` | At least one failed/timed-out worker run or failed item appears in the ten-minute counter increase. | Use the `worker` label to inspect the corresponding worker settings and dependencies. Check retry state and relevant external services before intervening. A successful retry does not immediately clear the historical failure window. |
 | `AtollWorkerProgressOverdue` | An observed worker's scheduled progress deadline stays overdue for two minutes while `up=1`. | Inspect worker/supervisor state, mailbox congestion, VM pressure and database/dependency contention. Compare PDS and Prometheus clocks and account for intentional maintenance. |
+| `AtollWorkerMissing` | A worker enabled in application configuration has no registered local process for two minutes while `up=1`. | Check supervisor failures, startup logs, enable flags and planned maintenance. The exporter does not start or restart workers. |
 
 The delays above are pending periods after the expression first becomes true;
 rolling windows add recovery lag. Counters are processed with `rate()`/`increase()`
@@ -43,7 +44,7 @@ Missing readiness/worker series or an idle worker do not trigger a failure alert
 Disabled workers emit no completion events. A removed scrape target disappears
 instead of setting `up=0`; use an independent inventory or absent-series rule for
 your expected deployment. These rules do not detect Prometheus itself stopping,
-never-observed workers, missing probes, disk exhaustion, stale backups, or failures in
+registered workers stuck without a progress observation, missing probes, disk exhaustion, stale backups, or failures in
 dependencies not represented by these counters. Test your notification path and
 cover those gaps separately.
 
@@ -56,10 +57,21 @@ clears it without a historical failure window. Progress timestamps use wall time
 clock skew or clock jumps can affect this rule. Keep clocks synchronized.
 
 The collector initializes each deadline to zero and forgets observations on its
-own restart. A worker that never starts, or stays stuck across a collector restart,
-cannot be detected until it emits another scheduling event. Monitor your expected
-worker inventory separately. Stopping an observed worker without resetting the
+own restart. Worker expectation and presence are read independently at scrape
+time, so an enabled but absent worker remains detectable across collector restarts
+and needs no previous progress event. Missing expectation/presence series do not
+trigger this rule; monitor exporter/version coverage separately. A registered
+process is not proof of health: a process stuck across collector restart cannot
+be diagnosed from zero progress deadlines alone. Stopping an observed worker without resetting the
 collector leaves its last deadline; use planned-maintenance silences as needed.
+
+Expectations follow the current application enable flags and nested signup/OAuth
+worker configuration, using the same defaults as supervision. Editing those values
+does not itself reconcile child processes. Presence checks inspect fixed local
+registered names and never send worker messages or query PostgreSQL. They can
+report a blocked or suspended process as present; use the progress alert alongside
+this inventory check. Both gauges keep the eight fixed worker labels and expose
+no process IDs, account identifiers or configuration secrets.
 
 ## Validation
 
@@ -77,7 +89,7 @@ database or credentials are used. GitHub Actions runs the same check on pushes.
 `alerts.test.yml` exercises firing delays, recovery, instance isolation, unrelated
 jobs, low volume, idle and missing series, failed items, failed/timed-out runs,
 duplicate suppression, counter resets, stalled progress, idle scheduling and
-deadline resets. These are synthetic rule tests, not a
+deadline resets, absent enabled workers and process-registration recovery. These are synthetic rule tests, not a
 live scrape or notification delivery test. With a compatible local `promtool`,
 you can also run `promtool check rules alerts.yml` and
 `promtool test rules alerts.test.yml` from this directory.

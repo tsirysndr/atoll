@@ -2,6 +2,19 @@ groups:
   - name: atoll
     interval: 1m
     rules:
+      - alert: AtollWorkerMissing
+        expr: |
+          (atoll_worker_expected{job="atoll"} == 1)
+          and
+          (atoll_worker_present{job="atoll"} == 0)
+          and on (job, instance)
+          (up{job="atoll"} == 1)
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: A configured Atoll worker process is missing
+
       - alert: AtollWorkerProgressOverdue
         expr: |
           (atoll_worker_progress_deadline_seconds{job="atoll"} > 0)

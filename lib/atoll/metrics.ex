@@ -126,7 +126,19 @@ defmodule Atoll.Metrics do
          :atomics.get(state.deadlines, index)}
       end)
 
-    output = [exposition(counters, "counter"), exposition(gauges ++ deadlines, "gauge")]
+    inventory =
+      Enum.flat_map(Atoll.WorkerProgress.inventory(), fn row ->
+        [
+          {~s(atoll_worker_expected{worker="#{row.worker}"}), row.expected},
+          {~s(atoll_worker_present{worker="#{row.worker}"}), row.present}
+        ]
+      end)
+
+    output = [
+      exposition(counters, "counter"),
+      exposition(gauges ++ deadlines ++ inventory, "gauge")
+    ]
+
     {:reply, IO.iodata_to_binary(output), state}
   end
 

@@ -241,3 +241,60 @@ tests:
       - eval_time: "7m"
         alertname: "AtollWorkerProgressOverdue"
         exp_alerts: []
+  - name: "Configured missing worker fires without a prior heartbeat and clears on registration"
+    interval: "1m"
+    input_series:
+      - series: 'atoll_worker_expected{job="atoll",instance="pds:443",worker="blob_cleanup"}'
+        values: "1x5"
+      - series: 'atoll_worker_present{job="atoll",instance="pds:443",worker="blob_cleanup"}'
+        values: "0x2 1x2"
+      - series: 'up{job="atoll",instance="pds:443"}'
+        values: "1x5"
+    alert_rule_test:
+      - eval_time: "1m"
+        alertname: "AtollWorkerMissing"
+        exp_alerts: []
+      - eval_time: "2m"
+        alertname: "AtollWorkerMissing"
+        exp_alerts:
+          - exp_labels:
+              job: "atoll"
+              instance: "pds:443"
+              worker: "blob_cleanup"
+              severity: "warning"
+            exp_annotations:
+              summary: "A configured Atoll worker process is missing"
+      - eval_time: "3m"
+        alertname: "AtollWorkerMissing"
+        exp_alerts: []
+  - name: "Disabled, present, unscrapeable, unknown and unrelated workers do not trigger missing alerts"
+    interval: "1m"
+    input_series:
+      - series: 'atoll_worker_expected{job="atoll",instance="pds:443",worker="blob_cleanup"}'
+        values: "0x5"
+      - series: 'atoll_worker_present{job="atoll",instance="pds:443",worker="blob_cleanup"}'
+        values: "0x5"
+      - series: 'atoll_worker_expected{job="atoll",instance="pds:443",worker="identity_refresh"}'
+        values: "1x5"
+      - series: 'atoll_worker_present{job="atoll",instance="pds:443",worker="identity_refresh"}'
+        values: "1x5"
+      - series: 'atoll_worker_expected{job="atoll",instance="pds:443",worker="signup_cleanup"}'
+        values: "1x5"
+      - series: 'up{job="atoll",instance="pds:443"}'
+        values: "1x5"
+      - series: 'atoll_worker_expected{job="atoll",instance="down:443",worker="blob_cleanup"}'
+        values: "1x5"
+      - series: 'atoll_worker_present{job="atoll",instance="down:443",worker="blob_cleanup"}'
+        values: "0x5"
+      - series: 'up{job="atoll",instance="down:443"}'
+        values: "0x5"
+      - series: 'atoll_worker_expected{job="other",instance="other:443",worker="blob_cleanup"}'
+        values: "1x5"
+      - series: 'atoll_worker_present{job="other",instance="other:443",worker="blob_cleanup"}'
+        values: "0x5"
+      - series: 'up{job="other",instance="other:443"}'
+        values: "1x5"
+    alert_rule_test:
+      - eval_time: "5m"
+        alertname: "AtollWorkerMissing"
+        exp_alerts: []
