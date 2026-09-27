@@ -9,18 +9,55 @@ defmodule Atoll.Repositories.Snapshot do
   """
   alias Atoll.{CAR, CBOR, CID, Commit, DataModel, MST, TID}
 
-  def decode(archive, did, curve, public) do
+  @doc """
+  Buffered snapshot validation with a retained-output accounting limit of 64 MiB.
+  :max_buffer_bytes overrides this limit for trusted callers. The separate CAR
+  input and traversal limits still apply. Use from_stage/4 for streamed imports.
+  """
+  def decode(archive, did, curve, public, opts \\ []) do
+    limit = Keyword.get(opts, :max_buffer_bytes, 64 * 1024 * 1024)
+
+    unless is_integer(limit) and limit > 0,
+      do: raise(ArgumentError, "Snapshot buffer limit must be a positive integer")
+
     with {:ok, %{roots: roots, blocks: blocks}} <- CAR.decode(archive),
-         {:ok, snapshot} <- validate(roots, &Map.fetch(blocks, &1), did, curve, public) do
+         {:ok, snapshot} <- validate(roots, &Map.fetch(blocks, &1), did, curve, public),
+         {:ok, records, used} <-
+           buffer_entries(
+             Stream.map(snapshot.records, fn {path, cid} ->
+               {path, cid, byte_size(path) + byte_size(cid) + 128}
+             end),
+             limit,
+             0
+           ),
+         {:ok, reachable, _used} <-
+           buffer_entries(
+             Stream.map(snapshot.block_cids, fn cid ->
+               bytes = Map.fetch!(blocks, cid)
+               {cid, bytes, byte_size(bytes) + byte_size(cid) + 96}
+             end),
+             limit,
+             used
+           ) do
       {:ok,
        snapshot
        |> Map.delete(:block_cids)
-       |> Map.put(:records, Map.new(snapshot.records))
-       |> Map.put(:blocks, Map.take(blocks, Enum.to_list(snapshot.block_cids)))}
+       |> Map.put(:records, records)
+       |> Map.put(:blocks, reachable)}
     else
       {:error, :car_too_large} = error -> error
       _ -> {:error, :invalid_snapshot}
     end
+  end
+
+  defp buffer_entries(entries, limit, used) do
+    Enum.reduce_while(entries, {:ok, %{}, used}, fn {key, value, charge}, {:ok, map, size} ->
+      cond do
+        Map.has_key?(map, key) -> {:cont, {:ok, map, size}}
+        size + charge > limit -> {:halt, {:error, :car_too_large}}
+        true -> {:cont, {:ok, Map.put(map, key, value), size + charge}}
+      end
+    end)
   end
 
   @doc """

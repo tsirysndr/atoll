@@ -190,6 +190,7 @@ record Lexicons or grant access to account data.
 - [x] Bounded metadata verification and revision-membership staging for signing-key rotation/recovery.
 - [x] Bounded search-path loading for individual signed record proof exports.
 - [x] Buffered MST loading through canonical traversal with an explicit retained-metadata budget.
+- [x] Buffered snapshot output budgets covering expanded record paths and deduplicated reachable blocks.
 - [x] Incremental CARv1 decoding with bounded framing buffers and verified block callbacks.
 - [x] Request-scoped private disk staging for incrementally validated CAR blocks.
 - [x] Disk-backed staging CID index with bounded lookup memory and collision work.
@@ -3568,7 +3569,18 @@ previous references and ownership without leaving cleanup jobs.
 
 Staged HTTP imports now keep the archive, CID/offset index and revision membership
 on disk or in PostgreSQL, with bounded application traversal and publication batches.
-The legacy buffered snapshot API deliberately collects its archive, records and blocks.
+The buffered `Snapshot.decode/5` API collects its archive, records and blocks, with
+a default 64 MiB retained-output accounting budget. Trusted callers may override
+it with `max_buffer_bytes:`. Each expanded record path is charged for its bytes,
+CID and a 128-byte map-entry allowance; each unique reachable block is charged for
+its bytes, CID and a 96-byte allowance. Shared record blocks count once, while
+every referencing record path counts separately. Unreferenced input blocks are
+discarded, and reachable CIDs are consumed incrementally without building a list.
+Exceeding the output budget returns `{:error, :car_too_large}` without a partial
+snapshot. The buffered input still has its independent 64 MiB CAR/100,000-section
+limits; input buffers and traversal state can coexist with output maps, so this
+accounting budget is not an exact heap-size limit. `Snapshot.from_stage/4` keeps
+its streamed interface and does not collect these output maps.
 Ordinary record mutations now load previous values only for their at most 200
 changed paths, persist their changes transactionally, and feed a 128-row sorted
 record cursor to `MST.Builder.build/3`. Completed canonical nodes are emitted to
@@ -3595,9 +3607,10 @@ node/depth/count limits also apply. Exhausting the retained budget returns
 `{:error, :mst_too_large}` without a partial tree or further block reads. Invalid
 or noncanonical trees return `{:error, :invalid_mst}`. The loader accepts either a
 block map or a reader callback and never reads record bodies or unrelated blocks.
-Callers needing a stream should use `MST.Traversal.stream/3` directly. Buffered
-constructor/mutation and snapshot helper APIs still retain complete metadata;
-the broad metadata-memory checklist remains open for those paths.
+Callers needing a stream should use `MST.Traversal.stream/3` directly. The buffered
+MST constructor/mutation helpers still retain complete metadata without a
+retained-output budget; the broad metadata-memory checklist remains open for
+those paths.
 
 `Atoll.MST.Editor.apply/4` edits a caller-authenticated partial tree using up to
 200 `{:put, path, cid}` / `{:delete, path}` operations. It lazily reads search paths
