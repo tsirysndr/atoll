@@ -2411,6 +2411,7 @@ Supply the access JWT as `Authorization: Bearer ...` to these owner-export route
 - `com.atproto.sync.getRepo` (including the existing optional `since` revision).
 - `com.atproto.sync.listBlobs` (including pagination and `since`).
 - `com.atproto.sync.getBlob`.
+- `app.bsky.actor.getPreferences` (personal details stay full-session only).
 
 Exporting an inactive repository requires a token belonging to the requested DID.
 Existing ordinary owner access tokens also permit these exports for active,
@@ -6853,8 +6854,11 @@ serve the account's private client preferences from PostgreSQL, following the
 Preferences never enter the signed repository, the firehose, or public reads.
 Both endpoints accept password, app-password, and DPoP OAuth credentials, and
 work for deactivated accounts under password sessions so migration tooling can
-copy preferences before activation. Requests carry `no-store` responses, the
-shared session rate budget, and a 256 KiB JSON body limit.
+copy preferences before activation. Reads also accept full and takendown-scope
+sessions of taken-down accounts, so owners can export preferences during a
+takedown; writes stay blocked until the account is restored, and takendown
+scopes never gain writes. Requests carry `no-store` responses, the shared
+session rate budget, and a 256 KiB JSON body limit.
 
 Bodies are validated against the pinned `app.bsky.actor.defs` preferences
 union; the union is open, so unknown preference types are preserved as long as

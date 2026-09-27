@@ -209,6 +209,17 @@ defmodule Atoll.Accounts.Sessions do
     end
   end
 
+  @doc "Read-only owner data export inspection; accepts takendown-scope sessions without wider access."
+  def authenticate_owner_export(token, opts \\ []) do
+    with {:ok, claims} <- Tokens.verify(token, :access, opts) do
+      Repo.transaction(fn ->
+        head = active_head!(claims["sub"], false, true, true)
+        session!(claims, opts, false)
+        %{did: head.did, status: head.status, scope: claims["scope"]}
+      end)
+    end
+  end
+
   @doc "Authorize live owner exports or revalidated operator credentials; non-owner user targets must be active."
   def authenticate_export(token, did, opts \\ [])
 

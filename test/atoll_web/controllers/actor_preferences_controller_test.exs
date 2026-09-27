@@ -141,6 +141,30 @@ defmodule AtollWeb.ActorPreferencesControllerTest do
     assert read(c, c.pair.access_jwt) |> json_response(401)
   end
 
+  test "takedown keeps preference exports readable without personal details or writes", c do
+    assert write(c, c.pair.access_jwt, [@personal, @adult]) |> response(200) == ""
+    {:ok, _} = Repositories.set_status(@did, :takendown)
+    {:ok, restricted} = Sessions.create(@did, @password, allow_takendown: true)
+
+    assert %{"preferences" => exported} = read(c, restricted.access_jwt) |> json_response(200)
+    types = Enum.map(exported, & &1["$type"])
+    refute "app.bsky.actor.defs#personalDetailsPref" in types
+    assert @adult in exported
+
+    assert %{"preferences" => full} = read(c, c.pair.access_jwt) |> json_response(200)
+    assert @personal in full
+
+    assert write(c, restricted.access_jwt, [@adult]) |> json_response(403)
+
+    assert write(c, c.pair.access_jwt, [@adult]) |> json_response(400) == %{
+             "error" => "RepoTakendown",
+             "message" => "Repository is not active."
+           }
+
+    {:ok, _} = Repositories.set_status(@did, :active)
+    assert write(c, restricted.access_jwt, [@adult]) |> json_response(403)
+  end
+
   test "OAuth grants use transitional or RPC permissions without personal details", c do
     assert write(c, c.pair.access_jwt, [@personal]) |> response(200) == ""
     client = Atoll.OAuthFixture.grant(c.pair, "atproto transition:generic")

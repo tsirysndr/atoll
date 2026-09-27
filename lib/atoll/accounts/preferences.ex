@@ -18,7 +18,8 @@ defmodule Atoll.Accounts.Preferences do
 
   def get(token) do
     Repo.transaction(fn ->
-      case Sessions.authenticate_session(token) do
+      # Reads stay available during takedown so owners can export preferences.
+      case Sessions.authenticate_owner_export(token) do
         {:ok, session} ->
           %{preferences: read(session.did, session.scope == "com.atproto.access")}
 
