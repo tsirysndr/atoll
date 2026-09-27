@@ -301,6 +301,27 @@ defmodule Atoll.OAuth.PARTest do
     assert Repo.aggregate(PKCEUse, :count) == 6
   end
 
+  test "unresolvable permission sets fail after proof admission and never persist a request", c do
+    scope = "atproto include:com.example.auth"
+    metadata = Map.put(c.metadata, "scope", scope)
+
+    opts =
+      Keyword.merge(c.opts, transport(metadata))
+      |> Keyword.put(:permission_set_options,
+        fetch: fn _, _ ->
+          refute Repo.in_transaction?()
+          {:error, :invalid_record_proof}
+        end
+      )
+
+    c = %{c | params: Map.put(c.params, "scope", scope), opts: opts}
+    signed = proof(c)
+    assert {:error, :permission_set_unavailable} = PAR.push(c.params, [signed], opts)
+    assert Repo.aggregate(PushedRequest, :count) == 0
+    assert Repo.aggregate(PKCEUse, :count) == 0
+    assert {:error, :dpop_replayed} = PAR.push(c.params, [signed], opts)
+  end
+
   defp transport(doc),
     do: [
       request: Req.new(plug: fn conn -> Req.Test.json(conn, doc) end),

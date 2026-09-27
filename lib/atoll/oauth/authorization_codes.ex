@@ -106,6 +106,8 @@ defmodule Atoll.OAuth.AuthorizationCodes do
 
             code = Base.url_encode64(:crypto.strong_rand_bytes(32), padding: false)
 
+            sets = unwrap!(Atoll.OAuth.PermissionSnapshots.select(scope, request.permission_sets))
+
             Repo.insert!(
               %AuthorizationCode{
                 digest: :crypto.hash(:sha256, code),
@@ -115,6 +117,7 @@ defmodule Atoll.OAuth.AuthorizationCodes do
                 client_id: request.client_id,
                 redirect_uri: request.parameters["redirect_uri"],
                 scope: scope,
+                permission_sets: sets,
                 code_challenge: request.parameters["code_challenge"],
                 dpop_jkt: request.dpop_jkt,
                 client_binding: request.client_binding,

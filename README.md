@@ -431,7 +431,8 @@ mutation. Deletes and empty batches need no record schema, even with `validate: 
 - [x] Granular account permissions for email read/manage and signed repository import.
 - [x] Granular OAuth identity permissions for handle changes, PLC signature requests, signing and submission.
 - [x] Internal namespace-restricted permission-set expansion and authenticated PostgreSQL resolution cache.
-- [ ] Permission-set consent, per-token permission snapshots, refresh integration, and RPC proxy integration.
+- [x] Permission-set consent, localized descriptions, fixed per-token permission snapshots and refresh recomputation.
+- [ ] RPC proxy integration.
 - [x] DPoP blob uploads with transitional generic scope, pre-body proof admission, and transactional authorization rechecks.
 - [x] DPoP service-token issuance with current generic/chat scope checks and authorization locks held through signing.
 - [x] DPoP authentication on public repository/blob export routes without granting inactive-account export privileges.
@@ -4676,7 +4677,7 @@ client assertions, public/confidential clients, refresh grants, transitional
 scopes and `prompt=create`. Explicit `response_mode=query` is accepted by PAR;
 other response modes are rejected. The static scope list includes `repo:*` and
 `blob:*/*`; parameterized RPC permissions are also supported for service-token
-issuance. The scope list is not exhaustive. Identity and account scopes are also advertised. Permission sets remain pending.
+issuance. The scope list is not exhaustive. Identity and account scopes are also advertised. Parameterized `include:` permission sets are supported.
 
 Both documents derive their URLs from Phoenix Endpoint's configured public URL,
 never request or forwarding headers. Configure a canonical HTTPS origin without a
@@ -5155,9 +5156,9 @@ wildcards, multiple collections, combined grants and rejected encodings. The syn
 follows the [repository permission specification](https://atproto.com/specs/permission#repo);
 `putRecord` follows the reference PDS requirement for both create and update.
 Granular blob, RPC, account and identity permissions are described below.
-`include:` permission sets remain pending and are rejected at PAR admission.
+`include:` permission sets are resolved and snapshotted as described below.
 
-### Permission-set resolution foundation
+### OAuth permission sets
 
 `Atoll.OAuth.PermissionSets.resolve/2` resolves an `include:<nsid>` invocation through
 the existing authenticated Lexicon fetcher: DNS namespace delegation, fresh DID/PDS
@@ -5184,12 +5185,47 @@ age. New-session lookup expires at 90 days; callers resolving an existing sessio
 may use older cached data. Expired entries can be reclaimed when adding a new
 entry. Cache writes serialize briefly and do not overwrite a concurrent update.
 
-This is an internal foundation, not live OAuth permission-set authorization.
-`include:` remains rejected by PAR until consent and fixed per-access-token
-snapshots are connected. Those snapshots must survive cache expiry/eviction;
-refresh may recompute them within the original include grant. Reading the mutable
-cache directly during resource authorization would violate the
+`include:<nsid>` and `include?nsid=<nsid>` scopes are accepted at PAR, with an
+optional concrete DID service `aud` parameter. Client metadata must declare the
+include. Alternate string encodings are equivalent; narrowing may remove an
+inherited audience but cannot replace it, add one to an audience-free grant, or
+switch namespaces. Direct repository/RPC scopes cannot be manufactured from an
+include by changing the refresh request's scope string.
+
+Migration `20260927010301` adds persistent permission-set snapshots to pushed
+requests, authorization codes, OAuth sessions and access tokens. PAR verifies and
+admits DPoP before resolving any sets. Resolution failures do not persist a pushed
+request or consume PKCE, but the admitted proof remains consumed. Unavailable sets
+or cache/storage failures return a retryable HTTP 503. Requests are bounded to
+16 include invocations, 1 MiB of snapshot JSON, and 256 KiB of expanded permission
+strings. A 30-second total resolution budget is checked between fetches and after
+resolution; individual network calls retain the existing transport timeouts.
+
+Consent uses the PAR snapshot, with a checkbox for each include and expandable
+permission details. Titles and details support bounded `Accept-Language`
+preferences with regional fallback; all schema-provided text is HTML-escaped.
+The screen explains that sets may change over time within their namespace. Only
+selected includes are copied into the authorization code. Code exchange copies
+those same documents into the session and initial token, even if the shared cache
+changes between display, approval and exchange.
+
+Resource authorization expands only the access token's own stored snapshot,
+under the existing authorization locks, and performs no set resolution or shared
+cache reads. Current raw token scope must remain covered by the session's original
+grant. All repository, blob, RPC, account and identity checks continue to apply to
+the resulting permissions; a set may grant only its validated repository/RPC
+permissions. Changing or evicting the cache cannot change an issued token.
+
+Refresh resolves selected includes outside database locks, falling back to the
+session's last verified snapshot during outages or cache eviction. It rechecks
+account, source-session, grant, client and refresh-token state before atomically
+rotating and storing the new snapshot. Existing access tokens retain their prior
+permissions. Narrowed refreshes retain fallback documents for the original grant
+without including deselected sets in the new access token. Reuse of an old refresh
+token still revokes the session after snapshot changes. This implements the
 [permission-set token semantics](https://atproto.com/specs/permission#permission-sets).
+Resolution uses the existing `:lexicon_resolution_options`; the network-record
+validation opt-in does not disable explicit OAuth permission-set resolution.
 
 ### OAuth identity permissions
 

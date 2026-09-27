@@ -15,7 +15,8 @@ defmodule AtollWeb.OAuthResourceTest do
           :key_encryption_key,
           :identity_resolution_options,
           :email_worker,
-          :email_delivery_options
+          :email_delivery_options,
+          :lexicon_resolution_options
         ] do
       prior = Application.fetch_env(:atoll, name)
 
@@ -51,6 +52,35 @@ defmodule AtollWeb.OAuthResourceTest do
       "redirect_uris" => ["https://app.example.com/callback"],
       "dpop_bound_access_tokens" => true
     }
+
+    if context[:permission_set] do
+      Application.put_env(:atoll, :lexicon_resolution_options,
+        fetch: fn nsid, _ ->
+          {:ok,
+           %{
+             nsid: nsid,
+             document: %{
+               "$type" => "com.atproto.lexicon.schema",
+               "lexicon" => 1,
+               "id" => nsid,
+               "defs" => %{
+                 "main" => %{
+                   "type" => "permission-set",
+                   "permissions" => [
+                     %{
+                       "type" => "permission",
+                       "resource" => "rpc",
+                       "lxm" => ["com.example.getFeed"],
+                       "inheritAud" => true
+                     }
+                   ]
+                 }
+               }
+             }
+           }}
+        end
+      )
+    end
 
     transport(metadata)
     {:ok, nonce} = Nonce.issue(:authorization)
@@ -986,6 +1016,29 @@ defmodule AtollWeb.OAuthResourceTest do
     assert inventory_request(c, "identity.getRecommendedDidCredentials").status == 503
     {:ok, _} = Repositories.set_status(c.did, :deactivated)
     assert inventory_request(c, "identity.getRecommendedDidCredentials").status == 401
+  end
+
+  @tag scope: "atproto include:com.example.auth?aud=did:web:api.example.com%23app",
+       permission_set: true
+  test "included RPC permissions bind the inherited audience and cannot regain it after narrowing",
+       c do
+    params = %{"aud" => "did:web:api.example.com#app", "lxm" => "com.example.getFeed"}
+    assert service_auth(c, params).status == 200
+    assert service_auth(c, %{params | "aud" => "did:web:other.example.com#app"}).status == 403
+    assert service_auth(c, %{params | "lxm" => "com.example.other"}).status == 403
+
+    form = %{
+      grant_type: "refresh_token",
+      client_id: @id,
+      refresh_token: c.tokens["refresh_token"],
+      scope: "atproto include:com.example.auth"
+    }
+
+    tokens = send_form(c, URI.encode_query(form)) |> json_response(200)
+    assert service_auth(%{c | tokens: tokens}, params).status == 403
+    assert service_auth(c, params).status == 200
+    Repo.update_all(Session, set: [scope: "atproto"])
+    assert service_auth(c, params).status == 403
   end
 
   defp missing_reference(did, path, bytes) do

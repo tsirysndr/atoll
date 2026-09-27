@@ -56,7 +56,7 @@ defmodule Atoll.OAuth.PermissionsTest do
       refute Permissions.supported?(scope)
     end
 
-    for scope <- ~w(rpc:* include:com.example.permissions),
+    for scope <- ~w(rpc:* include:*),
         do: refute(Permissions.supported?(scope))
   end
 

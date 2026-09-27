@@ -45,8 +45,9 @@ defmodule Atoll.OAuth.Refresh do
                ),
              true <- proof.jkt == candidate.dpop_jkt,
              {:ok, policy} <- client(candidate, params, opts),
-             {:ok, scope} <- requested_scope(candidate, params) do
-          commit(candidate, digest, policy, scope)
+             {:ok, scope} <- requested_scope(candidate, params),
+             {:ok, sets} <- resolve_sets(candidate, digest, policy, scope, opts) do
+          commit(candidate, digest, policy, scope, sets)
         else
           {:error, _} = error -> error
           _ -> {:error, :invalid_grant}
@@ -139,7 +140,13 @@ defmodule Atoll.OAuth.Refresh do
        else: {:error, :invalid_scope}
   end
 
-  defp commit(candidate, digest, policy, scope) do
+  defp resolve_sets(candidate, digest, policy, scope, opts) do
+    if policy == :revoke or candidate.refresh_digest != digest,
+      do: {:ok, %{}},
+      else: Atoll.OAuth.PermissionSnapshots.resolve(scope, candidate.permission_sets, opts)
+  end
+
+  defp commit(candidate, digest, policy, scope, sets) do
     Repo.transaction(fn ->
       Repo.query!("SET LOCAL lock_timeout = '1s'")
       Repo.query!("SET LOCAL statement_timeout = '5s'")
@@ -181,7 +188,7 @@ defmodule Atoll.OAuth.Refresh do
           Repo.rollback(:invalid_grant)
 
         true ->
-          {:ok, rotate!(session, scope, min(session.expires_at, source.expires_at), now)}
+          {:ok, rotate!(session, scope, min(session.expires_at, source.expires_at), now, sets)}
       end
     end)
     |> case do
@@ -190,9 +197,17 @@ defmodule Atoll.OAuth.Refresh do
     end
   end
 
-  defp immutable(session), do: Map.drop(Map.from_struct(session), [:__meta__, :refresh_digest])
+  defp immutable(session),
+    do: Map.drop(Map.from_struct(session), [:__meta__, :refresh_digest, :permission_sets])
 
-  defp rotate!(session, scope, expires, now) do
+  defp rotate!(session, scope, expires, now, sets) do
+    merged_sets = Map.merge(session.permission_sets, sets)
+
+    case Atoll.OAuth.PermissionSnapshots.select(session.scope, merged_sets) do
+      {:ok, _} -> :ok
+      {:error, reason} -> Repo.rollback(reason)
+    end
+
     ids =
       Repo.all(
         from(u in RefreshUse,
@@ -229,7 +244,10 @@ defmodule Atoll.OAuth.Refresh do
     )
 
     session
-    |> Ecto.Changeset.change(refresh_digest: :crypto.hash(:sha256, refresh))
+    |> Ecto.Changeset.change(
+      refresh_digest: :crypto.hash(:sha256, refresh),
+      permission_sets: merged_sets
+    )
     |> Repo.update!(log: false)
 
     Repo.insert!(
@@ -237,6 +255,7 @@ defmodule Atoll.OAuth.Refresh do
         digest: :crypto.hash(:sha256, access),
         session_id: session.id,
         scope: scope,
+        permission_sets: sets,
         expires_at: access_expires
       },
       log: false

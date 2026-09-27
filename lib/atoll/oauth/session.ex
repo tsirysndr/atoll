@@ -3,6 +3,7 @@ defmodule Atoll.OAuth.Session do
   use Ecto.Schema
   @primary_key {:id, :string, autogenerate: false, redact: true}
   schema "oauth_sessions" do
+    field :permission_sets, :map, default: %{}
     field :did, :string
     field :source_session_id, :string, redact: true
     field :issuer, :string

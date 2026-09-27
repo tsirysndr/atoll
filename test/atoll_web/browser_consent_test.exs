@@ -230,6 +230,134 @@ defmodule AtollWeb.BrowserConsentTest do
     refute tokens["scope"] =~ "blob:text/plain"
   end
 
+  test "permission-set consent uses a fixed localized escaped snapshot and copies only selected sets",
+       c do
+    nsid = "com.example.auth"
+    scope = "atproto include:" <> nsid <> " blob:text/plain"
+    client = "http://localhost?" <> URI.encode_query(%{scope: scope, redirect_uri: @redirect_uri})
+
+    doc = %{
+      "$type" => "com.atproto.lexicon.schema",
+      "lexicon" => 1,
+      "id" => nsid,
+      "defs" => %{
+        "main" => %{
+          "type" => "permission-set",
+          "title" => "Original title",
+          "title:lang" => %{"fr" => "Accès <script>"},
+          "detail" => "Original detail",
+          "detail:lang" => %{"fr" => "Publier & lire"},
+          "permissions" => [
+            %{"type" => "permission", "resource" => "repo", "collection" => ["com.example.post"]}
+          ]
+        }
+      }
+    }
+
+    opts = [
+      permission_set_options: [fetch: fn ^nsid, _ -> {:ok, %{nsid: nsid, document: doc}} end]
+    ]
+
+    verifier = random()
+
+    params =
+      c.params
+      |> Map.put("client_id", client)
+      |> Map.put("scope", scope)
+      |> Map.put(
+        "code_challenge",
+        :crypto.hash(:sha256, verifier) |> Base.url_encode64(padding: false)
+      )
+
+    {:ok, %{request_uri: uri}} = PAR.push(params, [proof(c, "/oauth/par")], opts)
+
+    start =
+      get(c.conn, "/oauth/authorize?" <> URI.encode_query(%{client_id: client, request_uri: uri}))
+
+    login = start |> browser() |> get("/account/login")
+
+    signed =
+      post_form(login, "/account/login", %{
+        "identifier" => c.did,
+        "password" => "browser password"
+      })
+
+    page =
+      signed
+      |> browser()
+      |> put_req_header("accept-language", "fr-CA, en;q=0.5")
+      |> get("/oauth/authorize")
+
+    assert html_response(page, 200) =~ "Accès &lt;script&gt;"
+    assert page.resp_body =~ "Publier &amp; lire"
+    assert page.resp_body =~ "com.example.post"
+    assert page.resp_body =~ "View included permissions"
+    refute page.resp_body =~ "<script>"
+
+    changed =
+      put_in(doc, ["defs", "main", "permissions"], [])
+      |> put_in(["defs", "main", "title"], "Changed title")
+
+    Repo.update_all(Atoll.OAuth.PermissionSetCache, set: [document: changed])
+    approved = submit(page, %{"decision" => "approve", "permission_1" => "yes"})
+
+    query =
+      redirected_to(approved, 303) |> URI.parse() |> Map.fetch!(:query) |> URI.decode_query()
+
+    code = Repo.get!(AuthorizationCode, :crypto.hash(:sha256, query["code"]))
+    assert code.permission_sets[nsid]["document"] == doc
+
+    tokens =
+      c.conn
+      |> put_req_header("content-type", "application/x-www-form-urlencoded")
+      |> put_req_header("dpop", proof(c, "/oauth/token"))
+      |> post(
+        "/oauth/token",
+        URI.encode_query(%{
+          grant_type: "authorization_code",
+          client_id: client,
+          code: query["code"],
+          redirect_uri: @redirect_uri,
+          code_verifier: verifier
+        })
+      )
+      |> json_response(200)
+
+    assert tokens["scope"] == "atproto include:" <> nsid
+    access = Repo.get!(Atoll.OAuth.AccessToken, :crypto.hash(:sha256, tokens["access_token"]))
+    assert access.permission_sets[nsid]["document"] == doc
+
+    assert Atoll.OAuth.PermissionSnapshots.effective(access.scope, access.permission_sets)
+           |> elem(1) =~ "com.example.post"
+
+    params =
+      Map.put(
+        params,
+        "code_challenge",
+        :crypto.hash(:sha256, random()) |> Base.url_encode64(padding: false)
+      )
+
+    {:ok, %{request_uri: next_uri}} = PAR.push(params, [proof(c, "/oauth/par")], opts)
+
+    next =
+      approved
+      |> browser()
+      |> get("/oauth/authorize?" <> URI.encode_query(%{client_id: client, request_uri: next_uri}))
+
+    denied_set = submit(next, %{"decision" => "approve"})
+
+    next_code =
+      redirected_to(denied_set, 303)
+      |> URI.parse()
+      |> Map.fetch!(:query)
+      |> URI.decode_query()
+      |> Map.fetch!("code")
+
+    narrowed = Repo.get!(AuthorizationCode, :crypto.hash(:sha256, next_code))
+    assert narrowed.scope == "atproto"
+    assert narrowed.permission_sets == %{}
+  end
+
   test "denial returns only the stored callback, state and issuer and consumes the request", c do
     page = consent_page(c)
     denied = submit(page, %{"decision" => "deny"})

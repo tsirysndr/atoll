@@ -3,6 +3,7 @@ defmodule Atoll.OAuth.AuthorizationCode do
   use Ecto.Schema
   @primary_key {:digest, :binary, autogenerate: false, redact: true}
   schema "oauth_authorization_codes" do
+    field :permission_sets, :map, default: %{}
     field :did, :string
     field :source_session_id, :string, redact: true
     field :issuer, :string

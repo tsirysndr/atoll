@@ -38,6 +38,14 @@ defmodule AtollWeb.OAuthRecordWriteTest do
       "dpop_bound_access_tokens" => true
     }
 
+    if context[:permission_set] do
+      Application.put_env(:atoll, :lexicon_resolution_options,
+        fetch: fn nsid, _ ->
+          {:ok, %{nsid: nsid, document: permission_document("com.example.record")}}
+        end
+      )
+    end
+
     transport(metadata)
     {:ok, nonce} = Nonce.issue(:authorization)
     id = rem(System.unique_integer([:positive]), 65_536)
@@ -683,6 +691,123 @@ defmodule AtollWeb.OAuthRecordWriteTest do
   test "generic grants cannot import and denial precedes CAR parsing", c do
     assert import_request(c, "invalid CAR").status == 403
   end
+
+  @tag scope: "atproto include:com.example.auth", permission_set: true
+  test "permission-set tokens freeze their grants while refresh recomputes within the original include",
+       c do
+    assert write(c, "createRecord", body(c, "initial")).status == 200
+    assert write(c, "putRecord", body(c, "initial")).status == 403
+
+    Repo.update_all(Atoll.OAuth.PermissionSetCache,
+      set: [document: permission_document("com.example.next")]
+    )
+
+    assert write(c, "createRecord", body(c, "old-token")).status == 200
+
+    next =
+      body(c, "next")
+      |> Map.put("collection", "com.example.next")
+      |> Map.put("record", %{"$type" => "com.example.next"})
+
+    assert write(c, "createRecord", next).status == 403
+    tokens = refresh_sets(c, c.tokens["refresh_token"])
+    assert tokens["scope"] == c.tokens["scope"]
+    fresh = %{c | tokens: tokens}
+    assert write(fresh, "createRecord", next).status == 200
+    assert write(fresh, "createRecord", body(c, "new-token-denied")).status == 403
+    assert write(c, "createRecord", body(c, "old-still-valid")).status == 200
+    Repo.delete_all(Atoll.OAuth.PermissionSetCache)
+
+    Application.put_env(:atoll, :lexicon_resolution_options,
+      fetch: fn _, _ -> {:error, :resolution_failed} end
+    )
+
+    narrow = refresh_sets(fresh, tokens["refresh_token"], "atproto")
+
+    assert write(%{c | tokens: narrow}, "createRecord", Map.put(next, "rkey", "narrow")).status ==
+             403
+
+    assert Repo.get!(AccessToken, :crypto.hash(:sha256, narrow["access_token"])).permission_sets ==
+             %{}
+
+    restored = refresh_sets(%{c | tokens: narrow}, narrow["refresh_token"])
+
+    assert write(%{c | tokens: restored}, "createRecord", Map.put(next, "rkey", "fallback")).status ==
+             200
+
+    assert write(%{c | tokens: restored}, "createRecord", body(c, "obsolete")).status == 403
+  end
+
+  @tag scope: "atproto include:com.example.auth", permission_set: true
+  test "refresh reuse revokes the session even after its permission snapshot changed", c do
+    Repo.update_all(Atoll.OAuth.PermissionSetCache,
+      set: [document: permission_document("com.example.next")]
+    )
+
+    _ = refresh_sets(c, c.tokens["refresh_token"])
+
+    body =
+      URI.encode_query(%{
+        grant_type: "refresh_token",
+        client_id: @id,
+        refresh_token: c.tokens["refresh_token"]
+      })
+
+    assert send_form(c, body).status == 400
+    assert Repo.aggregate(Session, :count) == 0
+    assert write(c, "createRecord", body(c, "revoked-set")).status == 401
+  end
+
+  @tag scope: "atproto include:com.example.auth", permission_set: true
+  test "permission-set refresh cannot issue a token after revocation during resolution", c do
+    Repo.delete_all(Atoll.OAuth.PermissionSetCache)
+
+    Application.put_env(:atoll, :lexicon_resolution_options,
+      fetch: fn nsid, _ ->
+        refute Repo.in_transaction?()
+        Repo.delete_all(Session)
+        {:ok, %{nsid: nsid, document: permission_document("com.example.next")}}
+      end
+    )
+
+    params =
+      URI.encode_query(%{
+        grant_type: "refresh_token",
+        client_id: @id,
+        refresh_token: c.tokens["refresh_token"]
+      })
+
+    assert send_form(c, params) |> json_response(400) == %{"error" => "invalid_grant"}
+    assert Repo.aggregate(AccessToken, :count) == 0
+    assert Repo.aggregate(Session, :count) == 0
+  end
+
+  defp refresh_sets(c, token, scope \\ nil) do
+    params = %{grant_type: "refresh_token", client_id: @id, refresh_token: token}
+    params = if scope, do: Map.put(params, :scope, scope), else: params
+    send_form(c, URI.encode_query(params)) |> json_response(200)
+  end
+
+  defp permission_document(collection),
+    do: %{
+      "$type" => "com.atproto.lexicon.schema",
+      "lexicon" => 1,
+      "id" => "com.example.auth",
+      "defs" => %{
+        "main" => %{
+          "type" => "permission-set",
+          "title" => "Example application",
+          "permissions" => [
+            %{
+              "type" => "permission",
+              "resource" => "repo",
+              "collection" => [collection],
+              "action" => ["create"]
+            }
+          ]
+        }
+      }
+    }
 
   defp import_request(c, bytes) do
     c.conn

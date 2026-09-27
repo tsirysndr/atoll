@@ -207,6 +207,7 @@ defmodule Atoll.OAuth.CodeExchange do
           issuer: code.issuer,
           client_id: code.client_id,
           scope: code.scope,
+          permission_sets: code.permission_sets,
           dpop_jkt: code.dpop_jkt,
           client_binding: code.client_binding,
           refresh_digest: if(refresh, do: :crypto.hash(:sha256, refresh)),
@@ -222,6 +223,7 @@ defmodule Atoll.OAuth.CodeExchange do
         digest: :crypto.hash(:sha256, access),
         session_id: session.id,
         scope: session.scope,
+        permission_sets: code.permission_sets,
         expires_at: access_expires
       },
       log: false

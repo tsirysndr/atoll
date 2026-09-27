@@ -23,9 +23,7 @@ defmodule Atoll.OAuth.PermissionSetsTest do
       assert {:error, :invalid_scope} = Permissions.include(invalid)
     end
 
-    # Until admission snapshots and token enforcement are integrated, this parser
-    # must not accidentally let include requests pass the existing PAR allowlist.
-    refute Permissions.supported?(@scope)
+    assert Permissions.supported?(@scope)
   end
 
   test "only understood declarations wholly inside the set namespace can grant access" do

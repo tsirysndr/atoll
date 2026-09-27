@@ -7,7 +7,7 @@ defmodule Atoll.OAuth.Permissions do
     do:
       scope in @legacy or match?({:ok, _}, repo(scope)) or match?({:ok, _}, blob(scope)) or
         match?({:ok, _}, rpc(scope)) or match?({:ok, _}, account(scope)) or
-        match?({:ok, _}, identity(scope))
+        match?({:ok, _}, identity(scope)) or match?({:ok, _}, include(scope))
 
   def repo(value) do
     with {:ok, positional, params} <- syntax(value, "repo", ~w(collection action)),
@@ -64,7 +64,7 @@ defmodule Atoll.OAuth.Permissions do
     end
   end
 
-  @doc "Parse an include invocation; admission remains disabled until set snapshots are integrated."
+  @doc "Parse a permission-set invocation with a scalar NSID and optional service audience."
   def include(value) do
     with {:ok, positional, params} <- syntax(value, "include", ~w(nsid aud)),
          true <- is_nil(positional) or not Map.has_key?(params, "nsid"),
@@ -130,12 +130,29 @@ defmodule Atoll.OAuth.Permissions do
                     _ ->
                       case identity(requested) do
                         {:ok, permission} -> identity_allowed?(granted, permission.attr)
-                        _ -> false
+                        _ -> include_covered?(granted, requested)
                       end
                   end
               end
           end
       end
+    end
+  end
+
+  defp include_covered?(granted, requested) do
+    with {:ok, target} <- include(requested) do
+      Enum.any?(granted, fn value ->
+        case include(value) do
+          {:ok, permission} ->
+            permission.nsid == target.nsid and
+              (permission.audience == target.audience or is_nil(target.audience))
+
+          _ ->
+            false
+        end
+      end)
+    else
+      _ -> false
     end
   end
 

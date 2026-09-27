@@ -242,10 +242,16 @@ defmodule Atoll.OAuth.Resource do
       if not allowed?(current.scope, session.scope, Keyword.get(opts, :required_scopes, [])),
         do: Repo.rollback(:insufficient_scope)
 
+      effective_scope =
+        case Atoll.OAuth.PermissionSnapshots.effective(current.scope, current.permission_sets) do
+          {:ok, effective} -> effective
+          _ -> Repo.rollback(:insufficient_scope)
+        end
+
       reader.(%{
         did: head.did,
         status: head.status,
-        scope: current.scope,
+        scope: effective_scope,
         client_id: session.client_id
       })
     end)

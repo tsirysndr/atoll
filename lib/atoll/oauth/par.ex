@@ -43,8 +43,10 @@ defmodule Atoll.OAuth.PAR do
                  :authorization,
                  Keyword.take(opts, [:secret]) ++ [issuer: issuer]
                ),
-             true <- not Map.has_key?(params, "dpop_jkt") or params["dpop_jkt"] == proof.jkt do
-          persist(params, client.binding, proof.jkt, issuer)
+             true <- not Map.has_key?(params, "dpop_jkt") or params["dpop_jkt"] == proof.jkt,
+             {:ok, permission_sets} <-
+               Atoll.OAuth.PermissionSnapshots.resolve(params["scope"], %{}, opts) do
+          persist(params, client.binding, proof.jkt, issuer, permission_sets)
         else
           false -> {:error, :invalid_dpop_proof}
           {:error, _} = error -> error
@@ -139,7 +141,7 @@ defmodule Atoll.OAuth.PAR do
     end
   end
 
-  defp persist(params, binding, jkt, issuer) do
+  defp persist(params, binding, jkt, issuer, permission_sets) do
     Repo.transaction(fn ->
       Repo.query!("SET LOCAL lock_timeout = '1s'")
       Repo.query!("SET LOCAL statement_timeout = '5s'")
@@ -179,6 +181,7 @@ defmodule Atoll.OAuth.PAR do
           issuer: issuer,
           client_id: params["client_id"],
           parameters: Map.take(params, @stored),
+          permission_sets: permission_sets,
           client_binding: binding,
           dpop_jkt: jkt,
           expires_at: now + lifetime

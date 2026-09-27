@@ -3,6 +3,7 @@ defmodule Atoll.OAuth.PushedRequest do
   use Ecto.Schema
   @primary_key {:digest, :binary, autogenerate: false, redact: true}
   schema "oauth_pushed_requests" do
+    field :permission_sets, :map, default: %{}
     field :issuer, :string
     field :client_id, :string
     field :parameters, :map, redact: true

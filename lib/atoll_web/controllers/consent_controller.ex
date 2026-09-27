@@ -106,10 +106,13 @@ defmodule AtollWeb.ConsentController do
          true <- BrowserConsent.creation_matches?(context, request, did),
          :ok <- BrowserConsent.account_matches(request, did) do
       choices =
-        Enum.map_join(permissions(request), "", fn {_, field, label} ->
+        Enum.map_join(permissions(request), "", fn {scope, field, label} ->
+          label = set_title(scope, request, conn) || label
+
           "<label><input type=\"checkbox\" name=\"" <>
             field <>
-            "\" value=\"yes\" checked>" <> e(label) <> "</label>"
+            "\" value=\"yes\" checked>" <>
+            e(label) <> "</label>" <> set_details(scope, request, conn)
         end)
 
       # A form-action restriction on the initiating page can block the OAuth callback redirect.
@@ -175,7 +178,7 @@ defmodule AtollWeb.ConsentController do
       scopes
       |> Enum.with_index()
       |> Enum.flat_map(fn {scope, index} ->
-        case Atoll.OAuth.Permissions.describe(scope) do
+        case permission_label(scope, request) do
           label when is_binary(label) ->
             [
               {scope, "permission_" <> Integer.to_string(index), label}
@@ -187,6 +190,82 @@ defmodule AtollWeb.ConsentController do
       end)
 
     legacy ++ granular
+  end
+
+  defp permission_label(scope, request) do
+    case Atoll.OAuth.PermissionSnapshots.entry(scope, request.permission_sets) do
+      {:ok, entry} -> entry["title"] || scope
+      _ -> Atoll.OAuth.Permissions.describe(scope)
+    end
+  end
+
+  defp set_title(scope, request, conn) do
+    case Atoll.OAuth.PermissionSnapshots.entry(scope, request.permission_sets) do
+      {:ok, entry} -> translated(entry, "title", conn)
+      _ -> nil
+    end
+  end
+
+  defp set_details(scope, request, conn) do
+    case Atoll.OAuth.PermissionSnapshots.entry(scope, request.permission_sets) do
+      {:ok, entry} ->
+        detail = translated(entry, "detail", conn) || ""
+
+        permissions =
+          Enum.map_join(entry["scopes"], "", fn value ->
+            "<li>" <> e(Atoll.OAuth.Permissions.describe(value)) <> "</li>"
+          end)
+
+        "<details><summary>View included permissions</summary><p>" <>
+          e(detail) <>
+          "</p><p>" <>
+          e(scope) <>
+          "</p><ul>" <>
+          permissions <>
+          "</ul><p>This set can change over time within its namespace. You can revoke this application from your account.</p></details>"
+
+      _ ->
+        ""
+    end
+  end
+
+  defp translated(entry, field, conn) do
+    translations = entry[field <> ":lang"] || %{}
+    languages = get_req_header(conn, "accept-language") |> List.first() || ""
+
+    preferences =
+      if byte_size(languages) <= 1024 do
+        languages
+        |> String.split(",")
+        |> Enum.take(16)
+        |> Enum.flat_map(fn part ->
+          case String.split(String.trim(part), ";q=", parts: 2) do
+            [language] ->
+              [{String.downcase(language), 1.0}]
+
+            [language, quality] ->
+              case Float.parse(quality) do
+                {q, ""} when q > 0 and q <= 1 -> [{String.downcase(language), q}]
+                _ -> []
+              end
+          end
+        end)
+        |> Enum.sort_by(fn {_, q} -> -q end)
+      else
+        []
+      end
+
+    Enum.find_value(preferences, fn {language, _} ->
+      parts = String.split(language, "-")
+
+      Enum.find_value(length(parts)..1//-1, fn n ->
+        wanted = Enum.take(parts, n) |> Enum.join("-")
+
+        Enum.find_value(translations, fn {tag, text} ->
+          if String.downcase(tag) == wanted, do: text
+        end)
+      end)
+    end) || entry[field]
   end
 
   defp transport,
