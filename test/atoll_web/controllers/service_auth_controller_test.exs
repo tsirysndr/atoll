@@ -92,7 +92,9 @@ defmodule AtollWeb.ServiceAuthControllerTest do
              query(c, %{
                aud: @aud,
                lxm: "app.bsky.feed.getTimeline",
-               exp: System.system_time(:second) + 3601
+               # Leave a margin so crossing a second during the request cannot
+               # turn an invalid expiration into a valid one-hour lifetime.
+               exp: System.system_time(:second) + 7200
              })
              |> json_response(400)
   end

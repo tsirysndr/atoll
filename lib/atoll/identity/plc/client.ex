@@ -234,7 +234,7 @@ defmodule Atoll.Identity.PLC.Client do
       raw: true,
       compressed: false,
       connect_options: [timeout: 3_000],
-      pool_timeout: 3_000,
+      finch: [pool_timeout: 3_000],
       receive_timeout: 5_000,
       into: &collect(&1, &2, max_bytes)
     ]
