@@ -113,6 +113,70 @@ defmodule Atoll.RepositoriesTest do
     assert Repo.get!(Head, @did).rev == next.rev
   end
 
+  test "mixed mutations retain canonical membership and exact prior event values", c do
+    paths = for n <- 1..300, do: "com.example.record/r#{n}"
+    [first_path, second_path | _] = paths
+
+    for batch <- Enum.chunk_every(paths, 200) do
+      assert {:ok, _} =
+               Repositories.apply_writes(@did, Enum.map(batch, &{:put, &1, @value}), c.key)
+    end
+
+    {:ok, old} = Repositories.get_record(@did, first_path)
+    seq = Atoll.Repositories.Events.latest_seq()
+    changed = Map.put(@value, "text", "updated")
+
+    operations = [
+      {:delete, first_path},
+      {:put, second_path, changed},
+      {:create, "com.example.record/new", @value},
+      {:delete, "com.example.record/absent"}
+    ]
+
+    assert {:ok, head} = Repositories.apply_writes(@did, operations, c.key)
+    {:ok, new} = Repositories.get_record(@did, second_path)
+
+    expected =
+      Map.new(paths, &{&1, old.cid})
+      |> Map.delete(first_path)
+      |> Map.put(second_path, new.cid)
+      |> Map.put("com.example.record/new", old.cid)
+
+    {:ok, tree} = MST.new(expected)
+    {:ok, commit} = Storage.get_node(head.head)
+    assert commit["data"].cid == tree.root
+    revision = Repo.get_by!(Atoll.Repositories.Revision, did: @did, rev: head.rev)
+    cids = MapSet.new([head.head | Map.keys(tree.blocks) ++ Map.values(expected)])
+    assert MapSet.new(revision.blocks) == cids
+    assert length(revision.blocks) == MapSet.size(cids)
+    assert {:ok, [event]} = Atoll.Repositories.Events.list_after(seq)
+
+    assert Enum.map(event.payload["ops"], &{&1["action"], &1["prev"]}) == [
+             {"delete", %Atoll.CBOR.Link{cid: old.cid}},
+             {"update", %Atoll.CBOR.Link{cid: old.cid}},
+             {"create", nil}
+           ]
+  end
+
+  test "damaged persisted nodes abort rebuilt writes without publishing partial state", c do
+    {:ok, prior} = Repositories.apply_writes(@did, [{:put, @path, @value}], c.key)
+    {:ok, commit} = Storage.get_node(prior.head)
+
+    Repo.get!(Block, commit["data"].cid)
+    |> Ecto.Changeset.change(data: "corrupt")
+    |> Repo.update!()
+
+    seq = Atoll.Repositories.Events.latest_seq()
+    count = Repo.aggregate(Block, :count)
+
+    assert Repositories.apply_writes(@did, [{:put, @path, @value}], c.key) ==
+             {:error, :invalid_repository}
+
+    assert Repositories.get_head(@did) == {:ok, prior}
+    assert Repo.aggregate(Block, :count) == count
+    assert Atoll.Repositories.Events.latest_seq() == seq
+  end
+
   test "rejects duplicate paths, mismatched types, invalid values and oversized records", %{
     key: key
   } do

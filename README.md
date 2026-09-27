@@ -131,7 +131,8 @@ record Lexicons or grant access to account data.
 
 ### Repositories and records
 
-- [x] Merkle Search Tree construction, lookup, insertion, and deletion (rebuilds on mutation).
+- [x] Merkle Search Tree construction, lookup, insertion, and deletion (streamed rebuilds on mutation).
+- [x] Bounded canonical MST builder over sorted entries, integrated with transactional record writes.
 - [x] Deterministic MST serialization and reference root CID compatibility tests.
 - [x] P-256 and secp256k1 in-memory key generation, compact low-S signing, and signature verification.
 - [x] Version-3 commit signing and verification with expected-DID and schema checks.
@@ -3427,8 +3428,23 @@ previous references and ownership without leaving cleanup jobs.
 Staged HTTP imports now keep the archive, CID/offset index and revision membership
 on disk or in PostgreSQL, with bounded application traversal and publication batches.
 The legacy buffered snapshot API deliberately collects its archive, records and blocks.
-Ordinary record mutations also retain whole-tree metadata. Compact commit-event
-inversion proofs remain pending.
+Ordinary record mutations now load previous values only for their at most 200
+changed paths, persist their changes transactionally, and feed a 128-row sorted
+record cursor to `MST.Builder.build/3`. Completed canonical nodes are emitted to
+block storage immediately. The builder keeps pending ancestor entries under a
+16 MiB accounting budget, with 10,000 entries/1 MiB per node, 100,000 emitted nodes
+and one million input records. It preserves exact prefix compression and empty
+intermediate levels. Invalid/unsorted input, exhausted budgets or failed writes
+abort construction; partial emissions require a transaction or staging. Final
+revision membership is built through bounded traversal and PostgreSQL staging.
+Quota, blob-reference, head and event failures roll the entire mutation back.
+
+Writes still rebuild the whole tree and perform work proportional to record count;
+this is not incremental path mutation. Pending-byte accounting is not a precise
+BEAM heap measurement. Public batch/body limits still bound prepared records, and
+the database materializes revision arrays. Buffered MST helper APIs and commit-event
+encoding retain whole-tree metadata; compact commit-event inversion proofs remain
+pending. The broad metadata-memory checklist remains open for those paths.
 
 `Atoll.Repositories.RecordProof.verify/5` accepts a CAR of at most 2 MiB, an
 expected DID/path, and a trusted signing curve/public key. It checks the first CAR
@@ -3506,7 +3522,7 @@ collecting chunks. It retains the encoded output but does not reconstruct a whol
 MST, record map or revision membership set. Its CAR now uses the stream's block
 order (commit first), and corrupt stored nodes fail rather than being rebuilt from
 the record index. Lazy corruption becomes an error result without returning partial
-bytes. Ordinary record mutations and legacy buffered snapshot decoding retain
+bytes. Legacy buffered snapshot/MST APIs and commit-event encoding retain
 the metadata costs described above. The streaming callback must finish
 consuming the enumerable before returning. The legacy `CAR.decode/1` and `import_archive/3` APIs remain buffered;
 HTTP imports use incremental decoding and staging. Tests compare full and incremental block sets with the buffered codec,

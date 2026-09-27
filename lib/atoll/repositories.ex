@@ -4,7 +4,8 @@ defmodule Atoll.Repositories do
 
   Callers provide a signing key or use the encrypted key vault. Mutations
   lock the head, enforce optional compare-and-swap, and atomically persist
-  records, MST blocks, commit, and revision. Trees rebuild on each mutation.
+  records, MST blocks, commit, and revision. Trees rebuild from sorted database
+  streams on each mutation, without collecting a whole-tree record map.
   Retained revisions own their blocks; unowned blocks can be garbage-collected.
 
   Records use ATProto JSON values and must match their collection's `$type`.
@@ -327,15 +328,48 @@ defmodule Atoll.Repositories do
         expected = Keyword.get(opts, :swap_commit, :any)
         if expected != :any and expected != head.head, do: Repo.rollback(:invalid_swap)
         unless matching_key?(key, head), do: Repo.rollback(:invalid_key)
-        previous_records = record_map(did)
-        updated = Enum.reduce(prepared, previous_records, &apply_operation!/2)
-        {:ok, tree} = MST.new(updated)
+        paths = Enum.map(prepared, &elem(&1, 1))
+
+        previous_records =
+          Repo.all(
+            from r in Record, where: r.did == ^did and r.path in ^paths, select: {r.path, r.cid}
+          )
+          |> Map.new()
+
+        for {:create, path, _, _} <- prepared do
+          if Map.has_key?(previous_records, path), do: Repo.rollback(:record_exists)
+        end
+
         {:ok, rev} = TID.next(head.rev)
         Atoll.Blobs.References.apply_writes!(did, prepared, rev)
-        commit = persist_commit!(did, tree, rev, key)
         Enum.each(prepared, &persist_record!(did, &1))
+
+        records =
+          from(r in Record,
+            where: r.did == ^did,
+            order_by: fragment("? COLLATE \"C\"", r.path),
+            select: {r.path, r.cid}
+          )
+          |> Repo.stream(max_rows: 128)
+
+        root =
+          case MST.Builder.build(records, &Storage.put_block/2) do
+            {:ok, root} -> root
+            {:error, _} -> Repo.rollback(:invalid_repository)
+          end
+
+        {:ok, commit} = Commit.create(did, root, rev, key)
+        :ok = Storage.put_block(commit.cid, commit.bytes)
         updated_head = head |> Ecto.Changeset.change(head: commit.cid, rev: rev) |> Repo.update!()
-        remember_revision!(updated_head, Map.keys(tree.blocks) ++ Map.values(tree.records))
+
+        cids =
+          MST.Traversal.stream(root, &Storage.get_block/1)
+          |> Stream.map(fn
+            {:node, cid, _} -> cid
+            {:record, _, cid} -> cid
+          end)
+
+        Atoll.Repositories.RevisionMembership.insert!(updated_head, cids)
 
         payload =
           Map.put(event_head(updated_head, head), "ops", event_ops(prepared, previous_records))
@@ -344,6 +378,8 @@ defmodule Atoll.Repositories do
         updated_head
       end)
     end
+  rescue
+    Atoll.MST.TraversalError -> {:error, :invalid_repository}
   end
 
   def get_head(did) when is_binary(did) do
@@ -917,9 +953,6 @@ defmodule Atoll.Repositories do
     head
   end
 
-  defp record_map(did),
-    do: Repo.all(from r in Record, where: r.did == ^did, select: {r.path, r.cid}) |> Map.new()
-
   defp matching_key?(%SigningKey{curve: curve, public: public, private: private}, head) do
     curve == head.curve and public == head.public_key and
       case SigningKey.from_private(curve, private) do
@@ -970,14 +1003,6 @@ defmodule Atoll.Repositories do
   end
 
   defp prepare_operation(_), do: {:error, :invalid_record}
-
-  defp apply_operation!({:create, path, cid, _}, records) do
-    if Map.has_key?(records, path), do: Repo.rollback(:record_exists)
-    Map.put(records, path, cid)
-  end
-
-  defp apply_operation!({:put, path, cid, _}, records), do: Map.put(records, path, cid)
-  defp apply_operation!({:delete, path, _, _}, records), do: Map.delete(records, path)
 
   defp persist_record!(did, {:delete, path, _, _}),
     do: Repo.delete_all(from r in Record, where: r.did == ^did and r.path == ^path)
