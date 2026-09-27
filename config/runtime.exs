@@ -1,5 +1,46 @@
 import Config
 
+# All three signals use the same resource and collector.
+if config_env() != :test do
+  otel = Atoll.Telemetry.Config.from_env!(System.get_env())
+  config :atoll, :opentelemetry_enabled, otel.enabled
+  config :atoll, :otlp_logs, otel.enabled
+
+  if otel.enabled do
+    config :opentelemetry,
+      span_processor: :batch,
+      traces_exporter: :otlp,
+      sampler: {:parent_based, %{root: :always_on}},
+      resource: %{
+        "service.name" => "atoll",
+        "service.version" => to_string(Application.spec(:atoll, :vsn) || "0.1.0"),
+        "service.namespace" => "rocksky",
+        "service.instance.id" => "#{System.pid()}-#{System.system_time(:nanosecond)}",
+        "deployment.environment.name" => otel.environment
+      }
+
+    # Headers and sampler overrides are parsed by the SDK from standard OTEL_* env vars.
+    config :opentelemetry_exporter,
+      otlp_protocol: :http_protobuf,
+      otlp_endpoint: otel.endpoint
+
+    config :opentelemetry_experimental,
+      otlp_protocol: :http_protobuf,
+      otlp_endpoint: otel.endpoint,
+      exemplars_enabled: true,
+      exemplar_filter: :trace_based,
+      readers: [
+        %{
+          module: :otel_metric_reader,
+          config: %{
+            exporter: {:otel_exporter_metrics_otlp, %{}},
+            export_interval_ms: otel.interval
+          }
+        }
+      ]
+  end
+end
+
 if value = System.get_env("ATOLL_DATABASE") do
   if Atoll.Database.adapter_from_env!(value) != Atoll.Database.adapter(),
     do: raise("ATOLL_DATABASE differs from the compiled adapter; rebuild the application")

@@ -282,6 +282,9 @@ the variable — that is the boot guard working, not a packaging problem.
 
 ## 8. Smoke-test locally (no federation yet)
 
+To export traces, logs and metrics to an OTLP collector, configure the service
+environment as described in [OpenTelemetry](opentelemetry.md) before restarting.
+
 All of these must pass before touching the live network:
 
 ```sh

@@ -1,5 +1,16 @@
 import Config
 
+config :atoll, :opentelemetry_enabled, true
+config :opentelemetry, span_processor: :simple, traces_exporter: :none, sampler: :always_on
+
+config :opentelemetry_experimental,
+  readers: [
+    %{
+      module: :otel_metric_reader,
+      config: %{exporter: {Atoll.TestTelemetryExporter, :metrics}, export_interval_ms: 3_600_000}
+    }
+  ]
+
 config :atoll, :development_identity, true
 config :atoll, :metrics_database_polling_enabled, false
 

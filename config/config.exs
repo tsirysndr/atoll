@@ -17,6 +17,12 @@ database =
 
 config :atoll, :database, database
 
+# Export is opt-in through OTEL_EXPORTER_OTLP_ENDPOINT at runtime.
+config :atoll, :opentelemetry_enabled, false
+config :atoll, :otlp_logs, false
+config :opentelemetry, traces_exporter: :none, sampler: :always_off
+config :opentelemetry_experimental, readers: []
+
 if database == :sqlite do
   config :atoll, Atoll.Repo,
     priv: "priv/sqlite_repo",
