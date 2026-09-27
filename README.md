@@ -934,6 +934,7 @@ observations do not produce duplicate events. The
 - [x] Baseline Prometheus alert rules and operator runbook, with firing/recovery/counter-reset tests in CI.
 - [ ] Comprehensive operational monitoring and alerting.
 - [x] Offline MST and compact-proof interoperability against pinned `@atproto/repo` 0.8.10 fixtures.
+- [x] Opt-in live HTTP integration with the official ATProto client, including signed repository and record-proof verification.
 - [ ] End-to-end compatibility tests with existing ATProto clients and servers.
 
 ## Local development
@@ -1171,6 +1172,45 @@ mix precommit
 ```
 
 The test alias creates the test database and applies pending migrations. Database tests use Ecto's SQL sandbox to roll back their changes.
+
+### Official ATProto client integration
+
+An optional `interop` test starts Atoll on a random loopback HTTP port and drives
+it with `@atproto/api` **0.13.35**. It independently verifies served CAR commits,
+MST contents, record inclusion and deletion-absence proofs with `@atproto/repo`
+**0.8.10**, using the test account's signing public key for both secp256k1 and P-256
+repositories. These are pinned test
+versions, not a claim of compatibility with all client releases.
+
+With Node.js and existing installations of those two packages, supply their
+absolute package-directory paths:
+
+```sh
+ATOLL_ATPROTO_API_PATH=/absolute/path/node_modules/@atproto/api \
+ATOLL_ATPROTO_REPO_PATH=/absolute/path/node_modules/@atproto/repo \
+  mix test --include interop test/atoll_web/atproto_client_e2e_test.exs
+```
+
+The harness checks package names and exact versions and does not install or
+modify them. It creates a synthetic account and encrypted signing-key custody in
+the test database's rollback sandbox. The Node client's requests are restricted
+to the temporary server's origin, redirects are rejected, and requests have a
+five-second deadline with a 45-second overall client deadline. The supervised
+server stops after the test; no real accounts or credentials are used.
+
+Coverage includes password login, session inspection/refresh/revocation,
+schema-validated Bluesky posts with server-generated keys, create/put/delete and
+batch writes, rejected stale record swaps, anonymous record reads, pagination,
+blob upload/publication/download, full repository exports and signed record
+proofs. The pinned client decodes `text/plain` blob responses as strings; the
+test compares their encoded bytes with the upload. It explicitly supplies the
+current refresh token for session deletion.
+
+This test is excluded from `mix precommit` and CI because it requires separately
+installed upstream packages. OAuth, handle/DID discovery, account creation,
+migration, firehose consumption, relay federation and newer client versions are
+outside this test's coverage. Full external-client/server interoperability remains
+on the checklist.
 
 ### MinIO integration tests
 
