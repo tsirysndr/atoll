@@ -1,5 +1,7 @@
 defmodule Atoll.Repositories.EventEncoderTest do
-  use Atoll.DataCase, async: true
+  # The 2,000-record fixture holds the global write lock for its whole sandbox
+  # transaction. Run it alone so concurrent tests do not time out waiting for it.
+  use Atoll.DataCase, async: false
   alias Atoll.{CAR, CBOR, Commit, MST, Repositories, SigningKey, Storage}
   alias Atoll.CBOR.{Bytes, Link}
   alias Atoll.Repositories.{EventEncoder, Events}
