@@ -31,6 +31,28 @@ defmodule Atoll.BlobsMinioTest do
     }
   end
 
+  @tag :tmp_dir
+  test "offline archive restores verified objects into a new bucket", c do
+    bytes = ["", <<0, 255, 1>>, :crypto.strong_rand_bytes(5 * 1024 * 1024)]
+
+    for content <- bytes do
+      assert :ok = Atoll.Blobs.S3.put(CID.create(content, :raw), content, c.config)
+    end
+
+    directory = Path.join(c.tmp_dir, "archive")
+    assert %{count: 3} = Atoll.Blobs.S3Archive.backup!(directory, c.config, 1)
+    target = Keyword.update!(c.config, :bucket, &(&1 <> "-restore"))
+    target_url = target[:endpoint] <> "/" <> target[:bucket]
+    assert {:ok, %{status: 200}} = s3_request(:put, target_url, "", target)
+    assert %{count: 3} = Atoll.Blobs.S3Archive.restore!(directory, target)
+
+    for content <- bytes do
+      assert {:ok, ^content} = Atoll.Blobs.S3.get(CID.create(content, :raw), target)
+    end
+
+    assert_raise MatchError, fn -> Atoll.Blobs.S3Archive.restore!(directory, target) end
+  end
+
   test "inventory paginates real objects and reports ownership without deleting anything", c do
     {:ok, _} = Blobs.stage(@did, "tracked inventory", "text/plain", c.opts)
     tracked = CID.create("tracked inventory", :raw)

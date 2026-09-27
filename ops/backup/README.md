@@ -92,9 +92,64 @@ Restore object bytes to an isolated target bucket before enabling serving or
 cleanup. Preserve object keys and account for provider versioning, retention,
 encryption/KMS keys and permissions. Atoll's S3 inventory can describe current
 ownership but is not proof of a complete backup or permission to delete objects.
-Automated bucket snapshot/copy, object integrity verification, and cross-store
-restore drills remain unimplemented; the main backup/restore checklist remains
-open. The PostgreSQL Atoll-schema drill below covers selected application state.
+The offline S3 helper below copies and verifies current Atoll blob objects.
+Coordinated database/S3 snapshots and cross-store application restore drills remain
+unimplemented; the main backup/restore checklist remains open. The PostgreSQL
+Atoll-schema drill below covers selected application state.
+
+### Archive and restore S3 blob bytes
+
+With all writers and cleanup stopped as described above, configure the source
+through `ATOLL_BLOB_STORAGE=s3` and the existing `ATOLL_S3_ENDPOINT`,
+`ATOLL_S3_BUCKET`, `ATOLL_S3_REGION`, `ATOLL_S3_ACCESS_KEY_ID`,
+`ATOLL_S3_SECRET_ACCESS_KEY` and optional `ATOLL_S3_SESSION_TOKEN` settings:
+
+```sh
+mix run --no-start scripts/s3_backup.exs backup /secure/backups/atoll-blobs
+mix run --no-start scripts/s3_backup.exs verify /secure/backups/atoll-blobs
+# Switch S3 settings to a newly created, isolated target bucket before restoring.
+mix run --no-start scripts/s3_backup.exs restore /secure/backups/atoll-blobs
+```
+
+Use the same application revision and Mix environment as the recovery set. The
+script starts the HTTP client's dependencies, without starting Atoll, its database
+repository, endpoint or workers. Verification is local and requires no S3 requests.
+Failures report only a generic error to avoid leaking request credentials or blob
+contents. The internal `Atoll.Blobs.S3Archive` API raises on failure.
+
+Backup refuses an existing destination. It writes a private directory (0700),
+files (0600), a sorted CID index, and a count/checksum manifest. It enumerates every
+current object under `blobs/`, including staged and untracked blobs. Every key
+must be a canonical raw CID; every downloaded body must match its listed size and
+CID digest. Unknown keys, corrupt data, repeated/unordered pages and objects over
+Atoll's 5 MiB limit fail the backup rather than being skipped. An ordinary failure
+removes the new incomplete directory; a killed process may leave partial files.
+Listing requires the [lexicographic ordering of S3 general-purpose buckets](https://docs.aws.amazon.com/AmazonS3/latest/API/API_ListObjectsV2.html);
+directory buckets and unordered compatible implementations are unsupported.
+
+Verification checks the manifest, complete index and every indexed blob with
+bounded reads. Manifest/index/blob files must be regular files, and the archive
+root and blobs directory must be directories, not symlinks. Keep the directory
+and its ancestors private and unchanged throughout verification/restoration;
+these checks do not defend against an operator concurrently replacing paths.
+Unindexed extra files are ignored and are never uploaded.
+
+Restore verifies the whole archive before contacting the target, requires an empty
+`blobs/` prefix, then uploads and reads back each object to verify its CID. The
+emptiness check is not a lock: keep the target exclusively reserved and offline.
+A failure can leave a partially restored prefix; no remote objects are deleted
+automatically, and rerunning into that nonempty prefix is refused. Investigate the
+failure and retry with another empty target. Other prefixes are not inspected or
+modified. Real MinIO integration covers paginated backup and restoration of empty,
+binary and maximum-sized objects, and refusal of a populated target.
+
+Only current object bytes and keys are retained: no historical versions, delete
+markers, tags, ACLs, bucket policies, lifecycle rules, timestamps, encryption/KMS
+settings or multipart uploads. Retain required provider configuration separately.
+Checksums detect accidental corruption, not malicious archive replacement. These
+files are not encrypted or fsynced; arrange durable encrypted copies and retention
+externally. Pair the archive with the offline database/keyring recovery set and
+verify application-level ownership and publication before reopening the PDS.
 
 ## Test the primitive
 

@@ -941,6 +941,7 @@ observations do not produce duplicate events. The
 - [ ] Production configuration, HTTPS deployment, and signing-key protection.
 - [x] Logical PostgreSQL archive/restore helper with checksums, empty-target protection, and disposable-database integration checks.
 - [x] Disposable full-schema PostgreSQL restore drill covering signed repositories, encrypted custody, sessions, blobs, audit history and replay boundaries.
+- [x] Offline S3 blob archives with CID verification, empty-prefix restoration, and a real MinIO round trip.
 - [ ] Complete database/S3 recovery sets, broader restore drills, and backup / restore workflow.
 - [x] `GET /health/ready` database connectivity readiness with bounded queries and outcome telemetry.
 - [x] Opt-in supervised cleanup of expired sessions and service-token replay markers, with bounded batches and outcome telemetry.
@@ -1200,6 +1201,12 @@ key decryption, authentication, PostgreSQL blobs and replay state after restorin
 all migrations. Push CI runs both restore drills against its disposable PostgreSQL
 18 service with matching archive clients. No development or production data was
 backed up or restored.
+
+For S3 bytes, `mix run --no-start scripts/s3_backup.exs backup|verify|restore DIRECTORY`
+provides an offline, bounded-memory archive helper. It verifies every blob's CID,
+refuses a populated target `blobs/` prefix, and checks upload readback. Follow the
+runbook's stop-writers requirements; the helper does not synchronize a database
+snapshot with a live bucket or preserve provider versions/metadata.
 
 ### Official OAuth client integration
 
