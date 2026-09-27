@@ -3,9 +3,8 @@ defmodule Atoll.Repositories.EventEncoder do
   Encodes internal outbox events as subscribeRepos messages and CBOR frames.
 
   Reads immutable historical blocks, never the current repository head. Commit
-  CARs include the complete MST plus created/updated records, allowing operation
-  inversion even for deletions and empty commits. Compact inductive proofs remain
-  future work. Oversized commits become commit-only sync messages. This is an
+  CARs include compact search/split/merge boundaries plus created/updated records.
+  Every operation is checked against the new tree and inverted to the previous root. Oversized commits become commit-only sync messages. This is an
   internal encoder; public delivery must enforce repository availability.
   """
   alias Atoll.{CAR, CBOR, CID, Storage}
@@ -58,8 +57,16 @@ defmodule Atoll.Repositories.EventEncoder do
   end
 
   defp commit_message(event, cid, bytes, commit) do
-    with {:ok, previous} <- previous_root(event.payload["previousCommit"]),
-         {:ok, blocks, size} <- tree_blocks(commit["data"].cid, %{cid => bytes}, byte_size(bytes)),
+    with {:ok, previous} <-
+           previous_root(event.payload["previousCommit"], event.did, event.payload["since"]),
+         {:ok, proof} <-
+           Atoll.Repositories.CommitProof.build(
+             commit["data"].cid,
+             previous,
+             event.payload["ops"],
+             &Storage.get_block/1
+           ),
+         {:ok, blocks, size} <- proof_blocks(proof, %{cid => bytes}, byte_size(bytes)),
          {:ok, blocks, _} <- record_blocks(event.payload["ops"], blocks, size),
          {:ok, car} <- CAR.encode([cid], blocks),
          true <- byte_size(car) <= @max_car do
@@ -106,40 +113,25 @@ defmodule Atoll.Repositories.EventEncoder do
 
   defp base(event), do: %{"seq" => event.seq, "time" => DateTime.to_iso8601(event.time)}
 
-  defp previous_root(nil), do: {:ok, nil}
+  defp previous_root(nil, _did, nil), do: {:ok, nil}
 
-  defp previous_root(%Link{cid: cid}) do
-    with {:ok, %{"data" => %Link{} = root}} <- Storage.get_node(cid) do
+  defp previous_root(%Link{cid: cid}, did, rev) do
+    with {:ok, %{"did" => ^did, "rev" => ^rev, "data" => %Link{} = root}} <- Storage.get_node(cid) do
       {:ok, root}
     else
       _ -> {:error, :invalid_event_blocks}
     end
   end
 
-  defp tree_blocks(cid, blocks, size) do
-    if Map.has_key?(blocks, cid) do
-      {:ok, blocks, size}
-    else
-      with {:ok, bytes} <- block(cid),
-           {:ok, blocks, size} <- add_block(cid, bytes, blocks, size),
-           {:ok, %{"l" => left, "e" => entries}} <- CBOR.decode(bytes) do
-        children = [left | Enum.map(entries, & &1["t"])]
+  defp previous_root(_, _, _), do: {:error, :invalid_event_blocks}
 
-        Enum.reduce_while(children, {:ok, blocks, size}, fn
-          nil, acc ->
-            {:cont, acc}
-
-          %Link{cid: child}, {:ok, acc, total} ->
-            case tree_blocks(child, acc, total) do
-              {:ok, _, _} = result -> {:cont, result}
-              error -> {:halt, error}
-            end
-        end)
-      else
-        {:error, :car_too_large} = error -> error
-        _ -> {:error, :invalid_event_blocks}
+  defp proof_blocks(proof, blocks, size) do
+    Enum.reduce_while(proof, {:ok, blocks, size}, fn {cid, bytes}, {:ok, acc, total} ->
+      case add_block(cid, bytes, acc, total) do
+        {:ok, _, _} = result -> {:cont, result}
+        error -> {:halt, error}
       end
-    end
+    end)
   end
 
   defp record_blocks(ops, blocks, size) do
@@ -149,11 +141,12 @@ defmodule Atoll.Repositories.EventEncoder do
           {:cont, {:ok, acc, total}}
 
         %Link{cid: cid} ->
-          with {:ok, bytes} <- block(cid),
+          with {:ok, bytes} when byte_size(bytes) <= 1_000_000 <- block(cid),
                {:ok, _, _} = result <- add_block(cid, bytes, acc, total) do
             {:cont, result}
           else
-            error -> {:halt, error}
+            {:error, _} = error -> {:halt, error}
+            _ -> {:halt, {:error, :invalid_event_blocks}}
           end
       end
     end)

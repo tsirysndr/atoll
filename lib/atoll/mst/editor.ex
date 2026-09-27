@@ -225,8 +225,12 @@ defmodule Atoll.MST.Editor do
 
             :error ->
               case state.reader.(cid) do
-                {:ok, bytes} when is_binary(bytes) -> {bytes, retain(state, :fetched, cid, bytes)}
-                _ -> fail!(:invalid_mst_edit)
+                {:ok, bytes} when is_binary(bytes) ->
+                  unless CID.verify(cid, bytes) == :ok, do: fail!(:invalid_mst_edit)
+                  {bytes, retain(state, :fetched, cid, bytes)}
+
+                _ ->
+                  fail!(:invalid_mst_edit)
               end
           end
       end

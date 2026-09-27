@@ -42,31 +42,35 @@ defmodule Atoll.Repositories.EventEncoderTest do
       assert %Link{cid: ^cid} = body["commit"]
       assert {:ok, commit} = Commit.verify(blocks[cid], @did, key.curve, key.public)
       assert commit["rev"] == body["rev"]
-      assert {:ok, tree} = MST.load(commit["data"].cid, blocks)
 
-      old_records =
-        Enum.reduce(body["ops"], tree.records, fn op, acc ->
+      inverse =
+        Enum.reverse(body["ops"])
+        |> Enum.map(fn op ->
           case op["action"] do
             "create" ->
               refute Map.has_key?(op, "prev")
               assert Map.has_key?(blocks, op["cid"].cid)
-              Map.delete(acc, op["path"])
+              {:delete, op["path"]}
 
             "update" ->
               assert Map.has_key?(blocks, op["cid"].cid)
-              Map.put(acc, op["path"], op["prev"].cid)
+              {:put, op["path"], op["prev"].cid}
 
             "delete" ->
               assert op["cid"] == nil
-              Map.put(acc, op["path"], op["prev"].cid)
+              {:put, op["path"], op["prev"].cid}
           end
         end)
 
+      assert {:ok, inverted} =
+               MST.Editor.apply(commit["data"].cid, inverse, &Map.fetch(blocks, &1))
+
       if previous_root do
         assert body["prevData"] == %Link{cid: previous_root}
-        assert {:ok, inverted} = MST.new(old_records)
         assert inverted.root == previous_root
       else
+        {:ok, empty} = MST.new()
+        assert inverted.root == empty.root
         refute Map.has_key?(body, "prevData")
         assert body["since"] == nil
       end
@@ -75,6 +79,71 @@ defmodule Atoll.Repositories.EventEncoderTest do
     end)
 
     assert {:ok, "#commit", %{"ops" => []}} = EventEncoder.message(List.last(events))
+  end
+
+  test "small changes in large repositories emit a compact independently replayable slice", %{
+    key: key
+  } do
+    for batch <- Enum.chunk_every(1..2000, 200) do
+      {:ok, _} =
+        Repositories.apply_writes(
+          @did,
+          Enum.map(batch, &{:put, "#{@collection}/#{&1}", value("#{&1}")}),
+          key
+        )
+    end
+
+    {:ok, old_head} = Repositories.get_head(@did)
+    {:ok, previous} = Storage.get_node(old_head.head)
+    cursor = Events.latest_seq()
+
+    {:ok, _} =
+      Repositories.apply_writes(
+        @did,
+        [
+          {:put, "#{@collection}/1", value("changed")},
+          {:delete, "#{@collection}/2"},
+          {:put, "#{@collection}/new", value("new")}
+        ],
+        key
+      )
+
+    {:ok, [event]} = Events.list_after(cursor)
+    assert {:ok, "#commit", body} = EventEncoder.message(event)
+    {:ok, %{blocks: proof}} = CAR.decode(body["blocks"].data)
+    {:ok, commit} = Storage.get_node(event.payload["commit"].cid)
+    {:ok, full} = Repositories.export(@did)
+    {:ok, %{blocks: all}} = CAR.decode(full)
+    assert map_size(proof) < div(map_size(all), 10)
+    assert byte_size(body["blocks"].data) < div(byte_size(full), 10)
+
+    assert {:ok, verified} =
+             Atoll.Repositories.CommitProof.build(
+               commit["data"].cid,
+               previous["data"],
+               body["ops"],
+               &Map.fetch(proof, &1)
+             )
+
+    assert MapSet.subset?(MapSet.new(Map.keys(verified)), MapSet.new(Map.keys(proof)))
+
+    [update, delete, create] = event.payload["ops"]
+    wrong = %Link{cid: Atoll.CID.create("wrong", :dag_cbor)}
+
+    for ops <- [
+          [delete, create],
+          [update, update, delete, create],
+          [Map.put(update, "cid", wrong), delete, create],
+          [Map.put(update, "prev", wrong), delete, create],
+          [update, Map.put(delete, "cid", wrong), create],
+          [update, delete, Map.put(create, "prev", wrong)]
+        ] do
+      corrupted = put_in(event, [:payload, "ops"], ops)
+      assert EventEncoder.message(corrupted) == {:error, :invalid_event_blocks}
+    end
+
+    corrupted = put_in(event, [:payload, "since"], event.payload["rev"])
+    assert EventEncoder.message(corrupted) == {:error, :invalid_event_blocks}
   end
 
   test "encodes exactly two CBOR objects with the protocol header" do

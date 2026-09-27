@@ -738,8 +738,8 @@ locking protects shared objects when collectors overlap.
 - [x] `com.atproto.sync.subscribeRepos` binary WebSocket stream with exclusive resume cursors, live delivery, and account status events.
 - [x] Invalid/future cursor errors, bounded replay backlog, idle pings, and current-availability filtering for repository data.
 - [x] Wire-format commit, sync, account, and identity event encoding, plus CBOR stream/error framing.
-- [x] Commit CARs with full MSTs, changed records, prior roots, and operation metadata; oversized commits fall back to commit-only sync messages.
-- [ ] Compact inductive commit proofs (event encoding currently includes the complete MST).
+- [x] Commit CARs with compact MST boundaries, changed records, prior roots, and operation metadata; oversized commits fall back to commit-only sync messages.
+- [x] Compact inductive commit proofs with operation-state checks and reverse reconstruction of the previous root.
 - [x] Internal `Atoll.Identity.Updates.refresh/2`: resolves hosted identities, verifies claimed handles, and atomically records changed observations with durable identity events.
 - [x] Opt-in supervised identity refresh scheduling, with one task at a time, timeouts, sweep retries, and outcome telemetry.
 - [x] Owner-authenticated identity refresh with fresh DID resolution and atomic observation events.
@@ -3443,9 +3443,9 @@ Quota, blob-reference, head and event failures roll the entire mutation back.
 Writes still rebuild the whole tree and perform work proportional to record count;
 this is not incremental path mutation. Pending-byte accounting is not a precise
 BEAM heap measurement. Public batch/body limits still bound prepared records, and
-the database materializes revision arrays. Buffered MST helper APIs and commit-event
-encoding retain whole-tree metadata; compact commit-event inversion proofs remain
-pending. The broad metadata-memory checklist remains open for those paths.
+the database materializes revision arrays. Legacy buffered MST and snapshot helper
+APIs still retain complete metadata; the broad metadata-memory checklist remains
+open for those paths.
 
 `Atoll.MST.Editor.apply/4` edits a caller-authenticated partial tree using up to
 200 `{:put, path, cid}` / `{:delete, path}` operations. It lazily reads search paths
@@ -3462,8 +3462,27 @@ Tests compare hundreds of edits with independent full canonical reconstruction,
 exercise root-height changes, and replay a mixed batch's inverse using only its
 fetched boundary proof. Missing required nodes, bad CIDs, malformed operations,
 and exhausted budgets fail closed. This editor is the foundation for compact
-inductive commit proofs; firehose encoding still sends full-tree proofs until
-integration and event-level verification are complete.
+inductive commit proofs and is now used by firehose encoding.
+
+`Repositories.CommitProof.build/4` reverses up to 200 unique-path operations over
+the new tree and requires the resulting root to match `prevData` (or the canonical
+empty root for the initial commit). It separately proves each operation's new CID
+or deletion absence against the original new tree, preventing false operation CIDs
+from passing merely because reversal restores the old root. It returns only the
+original nodes fetched for search and split/merge boundaries; generated inverse
+nodes are not emitted. The retained-node editor budget is 16 MiB, and unchanged
+subtrees are neither read nor audited.
+
+Commit-event encoding also checks the previous commit's DID and revision against
+the event's `since`, adds hash-verified created/updated records of at most one
+million bytes, and emits a CAR capped at two million bytes. Oversized proofs or
+editor-budget exhaustion retain the existing commit-only `#sync` fallback. Invalid
+operations, mismatched roots or missing/corrupt required nodes fail closed. Empty
+commits need only the root proof; deletion proofs include required merge/split
+boundaries. Historical replay uses immutable retained blocks, not the current head.
+Tests reverse emitted partial slices, reject tampered operation metadata, and show
+that a mixed edit in a 2,000-record repository uses less than one tenth of its full
+export. External relay/client interoperability remains a separate pending suite.
 
 `Atoll.Repositories.RecordProof.verify/5` accepts a CAR of at most 2 MiB, an
 expected DID/path, and a trusted signing curve/public key. It checks the first CAR
@@ -3541,8 +3560,7 @@ collecting chunks. It retains the encoded output but does not reconstruct a whol
 MST, record map or revision membership set. Its CAR now uses the stream's block
 order (commit first), and corrupt stored nodes fail rather than being rebuilt from
 the record index. Lazy corruption becomes an error result without returning partial
-bytes. Legacy buffered snapshot/MST APIs and commit-event encoding retain
-the metadata costs described above. The streaming callback must finish
+bytes. Legacy buffered snapshot/MST APIs retain the metadata costs described above. The streaming callback must finish
 consuming the enumerable before returning. The legacy `CAR.decode/1` and `import_archive/3` APIs remain buffered;
 HTTP imports use incremental decoding and staging. Tests compare full and incremental block sets with the buffered codec,
 exercise cancellation/corruption, and stream a repository larger than 64 MiB.
