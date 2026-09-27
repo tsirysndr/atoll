@@ -7,7 +7,17 @@ alias Atoll.Repositories.{Events, Snapshot}
 [phase, evidence_path] = System.argv()
 database = System.fetch_env!("PGDATABASE")
 
-unless phase in ["seed", "verify", "missing_s3", "remove_source_blob", "repair_source_blob"] and
+unless phase in [
+         "seed",
+         "verify",
+         "missing_s3",
+         "remove_source_blob",
+         "repair_source_blob",
+         "corrupt_postgres_blob",
+         "wrong_postgres_size",
+         "remove_postgres_blob",
+         "repair_postgres_blob"
+       ] and
          Regex.match?(~r/\Aatoll_backup_test_[a-f0-9]{32}\z/, database),
        do: raise("This fixture requires a disposable backup-test database")
 
@@ -60,7 +70,16 @@ storage =
 
     [backend: :s3, s3: config]
   else
-    true = phase in ["seed", "verify"]
+    true =
+      phase in [
+        "seed",
+        "verify",
+        "corrupt_postgres_blob",
+        "wrong_postgres_size",
+        "remove_postgres_blob",
+        "repair_postgres_blob"
+      ]
+
     [backend: :postgres]
   end
 
@@ -73,8 +92,34 @@ try do
   password = "disposable backup drill password"
   bytes = "backup drill blob\x00\xFF"
   path = "com.example.backup/record"
+  pg_bytes = "database backup blob"
+  pg_cid = CID.create(pg_bytes, :raw)
 
   cond do
+    phase == "corrupt_postgres_blob" ->
+      {1, _} =
+        Repo.update_all(from(b in Atoll.Storage.Block, where: b.cid == ^pg_cid),
+          set: [data: :binary.copy(<<0>>, byte_size(pg_bytes))]
+        )
+
+    phase == "wrong_postgres_size" ->
+      {1, _} =
+        Repo.update_all(from(b in Atoll.Blobs.Blob, where: b.did == ^did and b.cid == ^pg_cid),
+          set: [size: byte_size(pg_bytes) + 1]
+        )
+
+    phase == "remove_postgres_blob" ->
+      {1, _} = Repo.delete_all(from(b in Atoll.Storage.Block, where: b.cid == ^pg_cid))
+
+    phase == "repair_postgres_blob" ->
+      Repo.delete_all(from(b in Atoll.Storage.Block, where: b.cid == ^pg_cid))
+      :ok = Atoll.Storage.put_block(pg_cid, pg_bytes)
+
+      {1, _} =
+        Repo.update_all(from(b in Atoll.Blobs.Blob, where: b.did == ^did and b.cid == ^pg_cid),
+          set: [size: byte_size(pg_bytes)]
+        )
+
     phase == "remove_source_blob" ->
       :ok = Atoll.Blobs.S3.delete(CID.create(bytes, :raw), storage[:s3])
 
@@ -93,6 +138,7 @@ try do
       {:ok, _} = Credentials.create(did, password)
       {:ok, pair} = Sessions.create(did, password)
       {:ok, blob} = Blobs.stage(did, bytes, "application/octet-stream")
+      {:ok, _} = Blobs.stage(did, pg_bytes, "text/plain", storage: [backend: :postgres])
 
       if s3? do
         {:ok, _} = Blobs.stage(did, "unpublished backup blob", "text/plain")
@@ -155,6 +201,9 @@ try do
       {:ok, snapshot} = Snapshot.decode(archive, did, key.curve, key.public)
       true = Map.has_key?(snapshot.records, path)
       {:ok, %{bytes: ^bytes}} = Blobs.get_public(did, CID.create(bytes, :raw))
+      {:ok, %{bytes: ^pg_bytes}} = Blobs.get_staged(did, pg_cid)
+      {:error, :blob_not_found} = Blobs.get_public(did, pg_cid)
+      %{backend: :postgres} = Repo.get_by!(Atoll.Blobs.Blob, did: did, cid: pg_cid)
 
       if s3? do
         cid = CID.create("unpublished backup blob", :raw)

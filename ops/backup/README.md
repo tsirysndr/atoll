@@ -65,6 +65,14 @@ default backend has been switched to PostgreSQL. Mixed PostgreSQL/S3 ownership
 requires an S3 recovery set. The wrapper therefore requires the Atoll schema;
 use the database primitive for generic PostgreSQL databases.
 
+The same source/target check validates every PostgreSQL-owned blob, including
+staged blobs in a deployment that also uses S3. Each ownership row must have a
+stored block, matching byte size, canonical raw CID and matching SHA-256 digest.
+Hashing uses PostgreSQL's built-in [binary-string SHA-256 function](https://www.postgresql.org/docs/18/functions-binarystring.html)
+without an extension or exporting blob contents to the client. This scans owned
+blob data in the database and adds I/O/CPU cost proportional to that data; plan
+the offline interval accordingly. Missing or corrupt bytes fail the operation.
+
 Local `verify` still needs no live database and checks archive integrity only;
 it does not inspect ownership inside the dump. Restore's ownership check happens
 after the database transaction commits. If it fails, both targets may be populated
@@ -78,7 +86,7 @@ has yet to import are outside this ownership check.
 The directory, its ancestors and targets must remain private and unchanged by
 other processes. Retain durable encrypted copies, keys and configuration outside
 this helper; it does not fsync, encrypt, replicate, enforce retention or prove that
-writers were actually stopped. Ownership coverage is limited to stored S3 blob
+writers were actually stopped. Ownership coverage is limited to stored blob
 rows; broader repository/media/application validity still needs restore drills.
 Both Atoll restore drills below exercise this wrapper. Unit checks for component
 pairing, failure ordering and existing-directory protection run with
@@ -277,6 +285,9 @@ The drill verifies:
 - Password verification, an existing access token, and refresh-token rotation.
 - Published PostgreSQL blob bytes and CID verification, retained quota accounting,
   and operator audit rows.
+- A PostgreSQL-staged blob retained privately, with failed backup attempts for
+  missing bytes, same-length digest corruption and a metadata-size mismatch,
+  followed by repair of the synthetic data and successful recovery.
 - A nonzero replay floor, rejection of an older cursor, and encoding of retained
   event frames.
 - A new signed write after restore, exercising restored indexes/triggers and
@@ -304,8 +315,10 @@ test credentials. It creates separate source/target buckets named from its uniqu
 disposable database names. Buckets are removed with the temporary MinIO container;
 the Python runner removes its databases and local archives.
 
-The fixture seeds an S3-backed published blob, an unpublished staged blob, and an
-untracked object. It first proves that a PostgreSQL-only set is refused while S3
+The fixture seeds an S3-backed published blob, an unpublished S3-staged blob, an
+untracked S3 object, and a PostgreSQL-staged blob. It exercises the PostgreSQL
+corruption cases above in this mixed-storage database and then proves that a
+PostgreSQL-only set is refused while S3
 ownership exists. It then deletes one known test object, checks that an S3 set
 fails specifically for missing ownership coverage, and repairs that test object.
 Both failed attempts must remove their incomplete local set. With the source

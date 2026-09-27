@@ -134,6 +134,9 @@ class BlobCoverageTest(unittest.TestCase):
         self.addCleanup(self.temporary.cleanup)
         self.directory = Path(self.temporary.name)
         self.rows = b''
+        pg_patcher = patch.object(recovery, 'verify_postgres_blobs')
+        pg_patcher.start()
+        self.addCleanup(pg_patcher.stop)
         patcher = patch.object(recovery, 'ownership_rows', self.write_rows)
         patcher.start()
         self.addCleanup(patcher.stop)
@@ -175,6 +178,17 @@ class BlobCoverageTest(unittest.TestCase):
         self.rows = self.cids[0].hex().encode() + b'\t0\n'
         with self.assertRaisesRegex(recovery.database.BackupError, 'owns S3'):
             recovery.verify_blob_coverage(self.directory, 'postgres')
+
+
+class PostgresBlobIntegrityTest(unittest.TestCase):
+    def test_only_explicit_no_corruption_result_is_accepted(self):
+        with patch.dict(os.environ, {'PGDATABASE': 'atoll_backup_test'}):
+            for value in [b't\n', b'', b'NULL\n', b'unexpected']:
+                with patch.object(recovery.database, 'run', return_value=value):
+                    with self.assertRaisesRegex(recovery.database.BackupError, 'corrupt'):
+                        recovery.verify_postgres_blobs()
+            with patch.object(recovery.database, 'run', return_value=b'f\n'):
+                recovery.verify_postgres_blobs()
 
 
 if __name__ == '__main__':

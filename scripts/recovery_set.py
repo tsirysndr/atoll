@@ -102,9 +102,31 @@ def indexed(index, count, text):
     return False
 
 
+def verify_postgres_blobs():
+    # PostgreSQL's built-in bytea SHA-256 avoids exporting blob contents to the
+    # client and needs no extension. Check both staged and published ownership.
+    sql = """
+    SELECT EXISTS (
+      SELECT 1 FROM repository_blobs o LEFT JOIN blocks b ON b.cid = o.cid
+      WHERE o.backend = 'postgres' AND CASE
+        WHEN b.cid IS NULL OR b.data IS NULL THEN true
+        WHEN octet_length(o.cid) <> 36
+          OR substring(o.cid from 1 for 4) <> decode('01551220', 'hex') THEN true
+        WHEN octet_length(b.data) <> o.size OR o.size NOT BETWEEN 0 AND 5242880 THEN true
+        ELSE sha256(b.data) <> substring(o.cid from 5)
+      END
+    )
+    """
+    result = database.run('psql', '--no-password', '--dbname', database.database(),
+                          '-XAt', '--set=ON_ERROR_STOP=1', '-c', sql, capture=True)
+    if result.strip() != b'f':
+        raise database.BackupError('Database contains missing or corrupt owned PostgreSQL blobs')
+
+
 def verify_blob_coverage(directory, storage):
     # Requires prior archive verification and an offline, unchanged database.
     # Cleanup jobs are not ownership: their object may already have been deleted.
+    verify_postgres_blobs()
     with tempfile.TemporaryFile() as rows:
         ownership_rows(rows)
         if storage == 'postgres':

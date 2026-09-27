@@ -55,6 +55,14 @@ try:
         recovery = [sys.executable, 'scripts/recovery_set.py']
         revision = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip()
         metadata = ['--revision', revision, '--keyring-reference', 'ephemeral-drill-keys']
+        for damage in ['corrupt_postgres_blob', 'wrong_postgres_size', 'remove_postgres_blob']:
+            command(fixture + [damage, evidence], source, 'damage disposable PostgreSQL blob')
+            command(recovery + ['backup', archive, '--offline', '--storage',
+                                's3' if s3 else 'postgres'] + metadata,
+                    source, 'refuse corrupt PostgreSQL blob ownership', ok=False,
+                    expected_error='missing or corrupt owned PostgreSQL blobs')
+            assert not Path(archive).exists()
+            command(fixture + ['repair_postgres_blob', evidence], source, 'repair disposable PostgreSQL blob')
         if s3:
             command(recovery + ['backup', archive, '--offline', '--storage', 'postgres'] + metadata,
                     source, 'refuse a PostgreSQL-only set with S3 ownership', ok=False,
