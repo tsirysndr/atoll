@@ -1506,7 +1506,10 @@ because the SDK must be installed separately.
 ### Official ATProto client integration
 
 An optional `interop` test starts Atoll on a random loopback HTTP port and drives
-it with `@atproto/api` **0.13.35**. It independently verifies served CAR commits,
+it with `@atproto/api` **0.13.35**, covering session login, record writes and
+swaps, blob upload/publication, private preference round trips (including the
+derived declared-age preference and anonymous rejection), and firehose
+consumption. It independently verifies served CAR commits,
 MST contents, record inclusion and deletion-absence proofs with `@atproto/repo`
 **0.8.10**, using the test account's signing public key for both secp256k1 and P-256
 repositories. `@atproto/xrpc-server` **0.7.19** supplies the upstream WebSocket

@@ -118,6 +118,22 @@ try {
   assert.equal(read.data.cid, updated.data.cid)
   assert.deepEqual(read.data.value, changed)
 
+  stage = 'putPreferences'
+  const preferences = [
+    { $type: 'app.bsky.actor.defs#adultContentPref', enabled: true },
+    { $type: 'app.bsky.actor.defs#personalDetailsPref', birthDate: '1990-01-01T00:00:00.000Z' },
+  ]
+  await agent.app.bsky.actor.putPreferences({ preferences })
+  stage = 'getPreferences'
+  const prefs = (await agent.app.bsky.actor.getPreferences()).data.preferences
+  assert.deepEqual(prefs.filter(p => p.$type !== 'app.bsky.actor.defs#declaredAgePref'), preferences)
+  assert.deepEqual(prefs.find(p => p.$type === 'app.bsky.actor.defs#declaredAgePref'), {
+    $type: 'app.bsky.actor.defs#declaredAgePref',
+    isOverAge13: true, isOverAge16: true, isOverAge18: true,
+  })
+  stage = 'anonymous getPreferences'
+  await assert.rejects(anon.app.bsky.actor.getPreferences(), error => error.status === 401)
+
   stage = 'blob upload and publication'
   const bytes = new TextEncoder().encode('upstream blob round trip')
   const upload = await agent.com.atproto.repo.uploadBlob(bytes, { encoding: 'text/plain' })
