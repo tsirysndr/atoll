@@ -117,6 +117,77 @@ defmodule AtollWeb.RepoControllerTest do
              conn |> get(@get, Map.put(params, :cid, original["cid"])) |> json_response(500)
   end
 
+  test "version reads authenticate only the selected path and record body", %{
+    conn: conn,
+    key: key
+  } do
+    writes =
+      for i <- 1..100,
+          do: {:put, @collection <> "/r#{i}", %{"$type" => @collection, "text" => "r#{i}"}}
+
+    {:ok, old_head} = Repositories.apply_writes(@did, writes, key)
+    {:ok, archive} = Repositories.export(@did)
+    {:ok, %{blocks: blocks}} = CAR.decode(archive)
+    {:ok, commit} = Atoll.CBOR.decode(blocks[old_head.head])
+
+    {:ok, proof} =
+      MST.Proof.fetch(commit["data"].cid, @collection <> "/r1", &Map.fetch(blocks, &1))
+
+    {:ok, tree} = MST.load(commit["data"].cid, blocks)
+    sibling = Enum.find(Map.keys(tree.blocks), &(not Map.has_key?(proof.blocks, &1)))
+    assert sibling
+    params = %{repo: @did, collection: @collection, rkey: "r1", cid: CID.to_base32(proof.cid)}
+    original = conn |> get(@get, params) |> json_response(200)
+    {:ok, _} = Repositories.apply_writes(@did, [{:delete, @collection <> "/r1"}], key)
+
+    for cid <- [sibling, tree.records[@collection <> "/r2"]] do
+      Atoll.Repo.get!(Atoll.Storage.Block, cid)
+      |> Ecto.Changeset.change(data: "corrupt")
+      |> Atoll.Repo.update!()
+    end
+
+    assert conn |> get(@get, params) |> json_response(200) == original
+
+    Atoll.Repo.get!(Atoll.Storage.Block, proof.cid)
+    |> Ecto.Changeset.change(data: "corrupt")
+    |> Atoll.Repo.update!()
+
+    assert conn |> get(@get, params) |> json_response(500)
+  end
+
+  test "version reads reject corrupt or missing selected tree nodes", %{
+    conn: conn,
+    key: key,
+    head: head
+  } do
+    params = %{repo: @did, collection: @collection, rkey: "a"}
+    original = conn |> get(@get, params) |> json_response(200)
+    params = Map.put(params, :cid, original["cid"])
+    {:ok, bytes} = Atoll.Storage.get_block(head.head)
+    {:ok, commit} = Atoll.CBOR.decode(bytes)
+    {:ok, _} = Repositories.apply_writes(@did, [{:delete, @collection <> "/a"}], key)
+
+    damaged =
+      Atoll.Repo.get!(Atoll.Storage.Block, commit["data"].cid)
+      |> Ecto.Changeset.change(data: "corrupt")
+      |> Atoll.Repo.update!()
+
+    assert conn |> get(@get, params) |> json_response(500)
+    Atoll.Repo.delete!(damaged)
+    assert conn |> get(@get, params) |> json_response(500)
+  end
+
+  test "injected revision membership cannot authorize a record at another path", %{
+    conn: conn,
+    head: head
+  } do
+    {:ok, unused} = Atoll.Storage.put_node(%{"$type" => @collection, "text" => "unused"})
+    revision = Atoll.Repo.get_by!(Atoll.Repositories.Revision, did: @did, rev: head.rev)
+    revision |> Ecto.Changeset.change(blocks: [unused | revision.blocks]) |> Atoll.Repo.update!()
+    params = %{repo: @did, collection: @collection, rkey: "a", cid: CID.to_base32(unused)}
+    assert %{"error" => "RecordNotFound"} = conn |> get(@get, params) |> json_response(400)
+  end
+
   test "scopes lists to repository and collection", %{conn: conn} do
     assert %{"records" => []} =
              conn

@@ -165,6 +165,7 @@ record Lexicons or grant access to account data.
 - [x] Internal record create, put, delete, and read operations with collection/type checks (not Lexicon validation).
 - [x] Public `getRecord` and paginated `listRecords` for repository DIDs or bidirectionally verified handles and current record versions.
 - [x] Historical CID versions for record reads, verified against retained signed revisions and the exact record path.
+- [x] Bounded search-path verification for historical record-version reads.
 - [x] Authenticated `createRecord`, `putRecord`, and `deleteRecord`, with atomic commit/record compare-and-swap.
 - [x] Authenticated atomic `applyWrites` batches with ordered results and commit compare-and-swap.
 - [x] DID or bidirectionally verified handle addressing for single and batch record writes.
@@ -194,11 +195,15 @@ record Lexicons or grant access to account data.
 
 `com.atproto.repo.getRecord` returns the current record unless `cid` selects a
 retained version, including versions of subsequently deleted records. Historical
-reads require an active repository and verify the signed commit and canonical MST;
-an arbitrary stored block is not sufficient. This initial implementation scans
-candidate retained revisions and loads one snapshot at a time, so histories with
-many revisions or large repositories can be expensive. A dedicated version index
-and history retention policy remain pending.
+reads require an active repository and verify the signed commit and the canonical
+MST search path to the exact requested record; an arbitrary stored block or revision
+index entry is not sufficient. Candidate revisions stream one at a time without
+loading their block arrays. Each search retains at most 2 MiB of encoded path nodes,
+with the shared node/depth limits, and reads only the selected record body. Missing
+or corrupt selected nodes fail closed; unrelated sibling trees and record bodies
+are not audited. The requested record bytes are hash-checked before decoding.
+Histories with many candidate revisions can still be expensive. A dedicated version
+index and history retention policy remain pending.
 
 Single-record writes use POST with JSON and an access JWT in the Authorization
 header. `repo` must be the token owner's DID or a bidirectionally verified handle
@@ -3385,7 +3390,7 @@ Tests compare fetched paths with constructed canonical trees, enforce exact byte
 budgets, and distinguish unrelated damage from selected-path corruption.
 
 Whole-tree traversal is available for streamed HTTP exports as described below.
-Imports, buffered exports, historical record-version reads, operator workflows and
+Imports, buffered exports, operator workflows and
 repository mutations still hold metadata in memory. Compact commit-event inversion proofs remain pending.
 
 `Atoll.Repositories.RecordProof.verify/5` accepts a CAR of at most 2 MiB, an
@@ -3458,7 +3463,7 @@ traversal remain possible optimizations. Full exports still inspect all metadata
 before sending, and large repositories can reach the transaction deadline.
 
 The complete archive, record/CID map and whole MST are not accumulated by this
-HTTP export path. Buffered exports, imports, historical record-version reads, key-recovery
+HTTP export path. Buffered exports, imports, key-recovery
 workflows and mutations retain their existing metadata costs. The streaming callback must finish
 consuming the enumerable before returning. The legacy `CAR.decode/1` and `import_archive/3` APIs remain buffered;
 HTTP imports use incremental decoding and staging. Tests compare full and incremental block sets with the buffered codec,

@@ -449,7 +449,8 @@ defmodule Atoll.Repositories do
         revisions =
           from r in Revision,
             where: r.did == ^did and ^cid in r.blocks,
-            order_by: [desc: r.rev]
+            order_by: [desc: r.rev],
+            select: map(r, [:head, :rev, :signing_curve, :signing_public_key])
 
         found? =
           revisions
@@ -463,9 +464,8 @@ defmodule Atoll.Repositories do
                      revision.signing_public_key
                    ),
                  true <- commit["rev"] == revision.rev,
-                 blocks = Map.new(revision.blocks, &{&1, block!(&1)}),
-                 {:ok, tree} <- MST.load(commit["data"].cid, blocks) do
-              Map.get(tree.records, path) == cid
+                 {:ok, proof} <- MST.Proof.fetch(commit["data"].cid, path, &Storage.get_block/1) do
+              proof.cid == cid
             else
               _ -> Repo.rollback(:invalid_repository)
             end
