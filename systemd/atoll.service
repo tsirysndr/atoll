@@ -1,0 +1,17 @@
+[Unit]
+Description=Atoll PDS
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=root
+EnvironmentFile=/etc/atoll/atoll.env
+WorkingDirectory=/root/github/atoll
+ExecStartPre=/root/github/atoll/_build/prod/rel/atoll/bin/atoll eval "Atoll.Release.migrate()"
+ExecStart=/root/github/atoll/_build/prod/rel/atoll/bin/atoll start
+Restart=on-failure
+RestartSec=5
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target
