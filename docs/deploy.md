@@ -140,6 +140,15 @@ passkeys (`ATOLL_PASSKEYS_ENABLED=true`), verified PLC resolution
 
 ## 6. Reverse proxy
 
+For Rocksky handles, set `ATOLL_AVAILABLE_USER_DOMAINS=.rocksky.social` and
+point wildcard DNS for `*.rocksky.social` at the proxy with HTTPS configured
+for those hosts. Preserve the original `Host` header when proxying to Atoll.
+The homepage redirects completed local accounts such as
+`https://canary.rocksky.social/` to
+`https://rocksky.app/profile/canary.rocksky.social` with a non-cached HTTP 302.
+Only `/` redirects; `/.well-known/atproto-did` and the PDS API routes continue
+to work. Unknown handles and the configured PDS host keep the PDS landing page.
+
 TLS terminates at the proxy; Atoll listens on plain HTTP behind it, and
 production releases enforce HTTPS themselves through the compile-time
 `force_ssl` in `config/prod.exs` (HSTS on, localhost excluded). The proxy
