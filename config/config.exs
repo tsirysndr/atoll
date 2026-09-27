@@ -20,6 +20,8 @@ config :atoll,
   metrics_enabled: false,
   metrics_database_polling_enabled: true,
   passkeys_enabled: true,
+  custom_domain_signup_self_service_enabled: false,
+  custom_signup_reservation_limit: 1000,
   generators: [timestamp_type: :utc_datetime]
 
 # Configure the endpoint

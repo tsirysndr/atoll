@@ -455,6 +455,165 @@ defmodule AtollWeb.BrowserConsentTest do
     assert signup(page).status == 400
   end
 
+  test "self-service custom signup reserves a DID before DNS and still requires creation and consent",
+       c do
+    c = create_request(c)
+    Application.put_env(:atoll, :custom_domain_signup_enabled, true)
+    Application.put_env(:atoll, :custom_domain_signup_self_service_enabled, true)
+    Application.put_env(:atoll, :custom_signup_reservation_limit, 1)
+
+    Application.put_env(:atoll, :identity_resolution_options,
+      txt_lookup: fn _ -> flunk("reservation must not resolve DNS") end
+    )
+
+    page = signup_page(c)
+    assert html_response(page, 200) =~ "Reserve a custom-domain DID"
+    params = %{"handle" => "alice.example.com", "action" => "reserve_custom"}
+    reserved = signup(page, params)
+    assert html_response(reserved, 200) =~ "Connect your domain"
+    account = Repo.one!(Atoll.Accounts.Profile)
+    assert reserved.resp_body =~ "_atproto.alice.example.com"
+    assert reserved.resp_body =~ "did=" <> account.did
+    refute reserved.resp_body =~ "signup account password"
+    refute reserved.resp_body =~ "alice@example.com"
+    assert is_nil(get_session(reserved, :account_access))
+    assert is_nil(get_session(reserved, :oauth_pending)["created_did"])
+    assert Repo.aggregate(Atoll.Accounts.Session, :count) == 0
+    assert Repo.aggregate(AuthorizationCode, :count) == 0
+    assert Repo.get!(Atoll.Repositories.Head, account.did).status == :deactivated
+    registration = Repo.get!(Atoll.Identity.PLC.Registration, account.did)
+    assert is_nil(registration.confirmed_at)
+    [audit] = Repo.all(Atoll.Moderation.AuditEntry)
+    assert audit.actor == "signup"
+    assert audit.operation == "atoll.accounts.reserveCustomSignup"
+    refute Jason.encode!(audit.requested) =~ "password"
+    assert signup(reserved, params).status == 200
+    assert Repo.aggregate(Atoll.Moderation.AuditEntry, :count) == 1
+    assert Repo.aggregate(Atoll.Identity.PLC.Registration, :count) == 1
+    assert signup(reserved, Map.put(params, "password", "incorrect password")).status == 400
+
+    assert signup(
+             reserved,
+             Map.merge(params, %{"handle" => "other.example.com", "email" => "other@example.com"})
+           ).status == 503
+
+    Application.put_env(:atoll, :identity_resolution_options,
+      txt_lookup: fn _ -> [["did=" <> account.did]] end
+    )
+
+    accept_registration()
+    signed = signup(reserved, Map.put(params, "action", "create"))
+    assert redirected_to(signed, 303) == "/oauth/authorize"
+    assert Repo.aggregate(AuthorizationCode, :count) == 0
+    assert Repo.get!(Atoll.Repositories.Head, account.did).status == :active
+    consent = signed |> browser() |> get("/oauth/authorize")
+    assert html_response(consent, 200) =~ account.did
+    assert submit(consent, %{"decision" => "approve"}).status == 303
+    assert Repo.aggregate(AuthorizationCode, :count) == 1
+  end
+
+  test "custom reservation is separately opt-in, honors hints/invites, and bounds new pending state",
+       c do
+    c = create_request(c, %{"login_hint" => "alice.example.com"})
+    page = signup_page(c)
+    params = %{"handle" => "alice.example.com", "action" => "reserve_custom"}
+    refute page.resp_body =~ "Reserve a custom-domain DID"
+    assert signup(page, params).status == 400
+    Application.put_env(:atoll, :custom_domain_signup_enabled, true)
+    assert signup(page, params).status == 400
+    Application.put_env(:atoll, :custom_domain_signup_self_service_enabled, true)
+    assert signup(page, Map.put(params, "handle", "other.example.com")).status == 400
+    Application.put_env(:atoll, :invite_code_required, true)
+    assert signup(page, params).status == 400
+    assert Repo.aggregate(Atoll.Accounts.Profile, :count) == 0
+    Application.put_env(:atoll, :invite_code_required, false)
+    Application.put_env(:atoll, :custom_signup_reservation_limit, 1)
+    assert signup(page, params).status == 200
+    input = %{"handle" => "other.example.com", "password" => "other reservation password"}
+
+    assert {:error, :signup_reservation_unavailable} =
+             Atoll.Accounts.Signup.reserve_custom_self_service(input)
+
+    assert Repo.aggregate(Atoll.Accounts.Profile, :count) == 1
+    assert Repo.aggregate(Atoll.Identity.PLC.Registration, :count) == 1
+    assert Repo.aggregate(Atoll.Moderation.AuditEntry, :count) == 1
+    Application.put_env(:atoll, :custom_signup_reservation_limit, "bad")
+
+    assert {:error, :signup_reservation_unavailable} =
+             Atoll.Accounts.Signup.reserve_custom_self_service(input)
+  end
+
+  test "custom reservation requires CSRF and a live creation context and rolls back with its audit",
+       c do
+    c = create_request(c)
+    Application.put_env(:atoll, :custom_domain_signup_enabled, true)
+    Application.put_env(:atoll, :custom_domain_signup_self_service_enabled, true)
+    page = signup_page(c)
+
+    params =
+      Map.merge(signup_params(page), %{
+        "handle" => "alice.example.com",
+        "action" => "reserve_custom"
+      })
+
+    assert page
+           |> browser()
+           |> put_req_header("content-type", "application/x-www-form-urlencoded")
+           |> post("/account/signup", URI.encode_query(params))
+           |> response(403)
+
+    assert signup(page, %{
+             "handle" => "alice.example.com",
+             "action" => "reserve_custom",
+             "view" => "wrong"
+           }).status == 400
+
+    assert Repo.aggregate(Atoll.Accounts.Profile, :count) == 0
+
+    Repo.query!(
+      "ALTER TABLE moderation_audit_entries ADD CONSTRAINT reject_self_service_reservation CHECK (actor <> 'signup')"
+    )
+
+    assert_raise Ecto.ConstraintError, fn ->
+      Atoll.Accounts.Signup.reserve_custom_self_service(%{
+        "handle" => "alice.example.com",
+        "password" => "signup account password"
+      })
+    end
+
+    assert Repo.aggregate(Atoll.Accounts.Profile, :count) == 0
+    assert Repo.aggregate(Atoll.Identity.PLC.Registration, :count) == 0
+    Repo.update_all(PushedRequest, set: [expires_at: 1])
+
+    assert signup(page, %{"handle" => "alice.example.com", "action" => "reserve_custom"}).status ==
+             400
+  end
+
+  test "self-service reservation environment configuration is explicit and rejects invalid values" do
+    variable = "ATOLL_CUSTOM_DOMAIN_SIGNUP_SELF_SERVICE_ENABLED"
+    previous = System.get_env(variable)
+
+    on_exit(fn ->
+      if previous, do: System.put_env(variable, previous), else: System.delete_env(variable)
+    end)
+
+    System.delete_env(variable)
+    config = Config.Reader.read!("config/runtime.exs", env: :test, target: :host)
+    refute Keyword.has_key?(config[:atoll], :custom_domain_signup_self_service_enabled)
+
+    for {value, expected} <- [{"true", true}, {"false", false}] do
+      System.put_env(variable, value)
+      config = Config.Reader.read!("config/runtime.exs", env: :test, target: :host)
+      assert config[:atoll][:custom_domain_signup_self_service_enabled] == expected
+    end
+
+    System.put_env(variable, "yes")
+
+    assert_raise RuntimeError, fn ->
+      Config.Reader.read!("config/runtime.exs", env: :test, target: :host)
+    end
+  end
+
   test "an existing browser login cannot bypass create or authorize the old account", c do
     existing = consent_page(c)
     c = create_request(%{c | conn: browser(existing)})
@@ -649,7 +808,10 @@ defmodule AtollWeb.BrowserConsentTest do
       :signup_retry,
       :invite_code_required,
       :plc_submission_options,
-      :identity_resolution_options
+      :identity_resolution_options,
+      :custom_domain_signup_enabled,
+      :custom_domain_signup_self_service_enabled,
+      :custom_signup_reservation_limit
     ]
 
     previous = Map.new(keys, &{&1, Application.fetch_env(:atoll, &1)})

@@ -402,7 +402,8 @@ mutation. Deletes and empty batches need no record schema, even with `validate: 
 - [x] Operator resume of exact pending signup registrations without password input or session issuance.
 - [x] Opt-in automatic signup retries with database leases, durable delay and activation fencing.
 - [x] Operator signup activation from verified directory advancement that preserves local identity and authority.
-- [ ] Self-service custom-domain DID reservation, phone verification, and signup recovery requiring changed local identity or keys.
+- [x] Opt-in self-service custom-domain DID reservation during OAuth signup, with bounded pending state, password-bound retries, DNS/HTTPS setup instructions and transactional audit attribution.
+- [ ] Phone verification and signup recovery requiring changed local identity or keys.
 - [x] Internal DID-scoped password credentials with salted Argon2id hashes, bounded input, redacted inspection, and duplicate protection.
 - [x] Shared configurable Cloudflare Worker email delivery client.
 - [x] `requestPlcOperationSignature` email authorization with atomic single-use challenge consumption.
@@ -4928,14 +4929,15 @@ not resolve key/recovery supersession or operations absent from directory histor
 Local locks cannot prevent a later external directory update; a failed freshness or
 compatibility check leaves the pending state for further review.
 
-### Custom-domain signup with operator reservation
+### Custom-domain signup and DID reservation
 
 Enable both `ATOLL_SIGNUP_ENABLED=true` and
 `ATOLL_CUSTOM_DOMAIN_SIGNUP_ENABLED=true` to admit fresh PLC accounts with custom
 handles. Custom-domain signup defaults to disabled. It uses a two-step flow so
 the domain owner can publish a forward claim for the exact new DID before account
 activation. The public `createAccount` endpoint does not allocate new custom-domain
-reservations; the initial reservation is an operator action.
+reservations; use the operator command below or enable the browser reservation
+flow.
 
 Create a private JSON file (mode `0600`) with the same fields you will submit to
 `createAccount`: `handle`, `password`, and optional `email`, `inviteCode`, and
@@ -4967,9 +4969,49 @@ during PLC publication, directory confirmation may already exist, but the accoun
 stays deactivated with no session until a valid retry. Normalized profile details,
 password proof, invite and recovery key must still match; publication/session
 failures retain the exact journal for retry. No configuration is enabled on the
-running deployment by adding this feature. Self-service custom-domain reservation,
-phone verification, and signup recovery requiring changed local identity remain unfinished. Bounded
+running deployment by adding this feature. Phone verification and signup recovery
+requiring changed local identity remain unfinished. Bounded
 operator and scheduled cleanup of unsubmitted reservations are described below.
+
+
+#### Self-service browser reservation
+
+Also set `ATOLL_CUSTOM_DOMAIN_SIGNUP_SELF_SERVICE_ENABLED=true` (or
+`config :atoll, :custom_domain_signup_self_service_enabled, true`) to show
+**Reserve a custom-domain DID** on `/account/signup` during a live OAuth
+`prompt=create` flow. This separate setting defaults to false; both ordinary
+signup and custom-domain signup must also be enabled. An unset environment value
+preserves application configuration, while invalid values reject startup.
+
+Enter the custom handle, password and optional email/invitation, then choose the
+reservation button. The page displays the reserved DID and DNS TXT/HTTPS setup
+instructions. After publishing the claim, submit **Create account** with the
+same details. If DNS setup outlives the OAuth request, start a new signup request
+from the client application and reuse those details to retrieve the same DID.
+The page does not retain passwords, emails or invitations in form values or the
+browser session. Reservation does not issue a session, mark the OAuth creation
+complete, publish to PLC or grant application permissions. Existing browser
+sessions do not satisfy the new account's creation requirement. Opt-in signup
+retry workers can finish a reservation later once the forward claim verifies;
+if that happens, restart ordinary sign-in with the created account.
+
+The action shares the browser signup's CSRF/view checks, strict form parsing,
+login-hint constraint and ten-POST-per-IP/five-minute budget. Existing invitation,
+password, profile uniqueness, encrypted custody and exact-retry checks apply.
+A first reservation writes a credential-free audit entry with actor `signup`;
+the operator command retains actor `operator`. Audit failure rolls back all
+reservation changes. Repeated exact reservations do not duplicate audit rows or
+redeem another invite use.
+
+`config :atoll, :custom_signup_reservation_limit, 1000` caps admission of new
+self-service reservations. It counts all unfinished PLC signup journals, including
+hosted-handle signup attempts, under the same transaction lock as insertion.
+Values must be integers from 1 through 10000; a full queue or invalid setting
+returns HTTP 503 without inserting new state. Password-authenticated retries
+remain possible at capacity. The limit does not restrict operator reservations
+or ordinary hosted signup. Use the existing unsubmitted-reservation cleanup
+workflow to reclaim abandoned reservations; never delete a confirmed journal
+merely to make space.
 
 
 ### Cleaning up unsubmitted signup reservations

@@ -133,12 +133,28 @@ defmodule Atoll.Accounts.Signup do
   end
 
   @doc "Operator-only custom-domain reservation. Returns public setup details, never sessions or private keys."
-  def reserve_custom(params) do
+  def reserve_custom(params), do: reserve_custom_as(params, "operator")
+
+  @doc "Whether the browser may reserve custom-domain signups. Disabled by default."
+  def self_service_custom_enabled? do
+    Application.get_env(:atoll, :signup_enabled, false) == true and
+      Application.get_env(:atoll, :custom_domain_signup_enabled, false) == true and
+      Application.get_env(:atoll, :custom_domain_signup_self_service_enabled, false) == true
+  end
+
+  @doc "Password-bound browser reservation; callers must enforce CSRF and signup rate limits."
+  def reserve_custom_self_service(params) do
+    if self_service_custom_enabled?(),
+      do: reserve_custom_as(params, "signup"),
+      else: {:error, :signup_disabled}
+  end
+
+  defp reserve_custom_as(params, actor) do
     with true <- Application.get_env(:atoll, :signup_enabled, false),
          false <- Repo.in_transaction?(),
          {:ok, input} <- input(params),
          :ok <- custom_domain(input.handle),
-         {:ok, proof} <- prepare(input, true) do
+         {:ok, proof} <- prepare(input, true, actor) do
       {:ok,
        %{
          did: proof.did,
@@ -224,14 +240,14 @@ defmodule Atoll.Accounts.Signup do
     end
   end
 
-  defp prepare(input, allow_custom_reservation \\ false) do
+  defp prepare(input, allow_custom_reservation \\ false, actor \\ "operator") do
     # Password hashing/verification happens before taking the global mutation lock.
     case Repo.get_by(Profile, [handle: input.handle], log: false) do
       nil ->
         with true <- hosted_handle?(input.handle) or allow_custom_reservation,
              :ok <- Invites.validate_new(input.invite),
              {:ok, hash} <- Credentials.hash(input.password) do
-          create_reservation(input, hash)
+          create_reservation(input, hash, actor)
         else
           false -> {:error, :unsupported_domain}
           {:error, :invalid_credentials} -> {:error, :invalid_password}
@@ -254,7 +270,19 @@ defmodule Atoll.Accounts.Signup do
     end
   end
 
-  defp create_reservation(input, hash) do
+  defp reservation_capacity! do
+    limit = Application.get_env(:atoll, :custom_signup_reservation_limit, 1000)
+
+    unless is_integer(limit) and limit in 1..10_000,
+      do: Repo.rollback(:signup_reservation_unavailable)
+
+    pending = from r in Registration, where: is_nil(r.completed_at), limit: ^limit, select: r.did
+
+    if Repo.aggregate(subquery(pending), :count) >= limit,
+      do: Repo.rollback(:signup_reservation_unavailable)
+  end
+
+  defp create_reservation(input, hash, actor) do
     repository_key = SigningKey.generate()
     rotation_key = SigningKey.generate()
     {:ok, signing} = Multikey.to_did_key(repository_key.curve, repository_key.public)
@@ -272,6 +300,7 @@ defmodule Atoll.Accounts.Signup do
          :ok <- session_ready(genesis.did) do
       Repo.transaction(fn ->
         Events.lock!()
+        if actor == "signup", do: reservation_capacity!()
 
         if Atoll.Identity.HandleChanges.claimed?(input.handle),
           do: Repo.rollback(:handle_not_available)
@@ -307,7 +336,13 @@ defmodule Atoll.Accounts.Signup do
         Invites.consume!(genesis.did, input.invite)
 
         unless hosted_handle?(input.handle),
-          do: Atoll.Moderation.Audit.signup_reservation!(genesis.did, input.handle, genesis.cid)
+          do:
+            Atoll.Moderation.Audit.signup_reservation!(
+              genesis.did,
+              input.handle,
+              genesis.cid,
+              actor
+            )
 
         %{did: genesis.did, digest: :crypto.hash(:sha256, hash)}
       end)

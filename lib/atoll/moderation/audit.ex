@@ -286,8 +286,8 @@ defmodule Atoll.Moderation.Audit do
     )
   end
 
-  @doc "Records an operator custom-domain signup reservation without credentials or email."
-  def signup_reservation!(did, handle, genesis_cid) do
+  @doc "Records a custom-domain signup reservation without credentials or email."
+  def signup_reservation!(did, handle, genesis_cid, actor \\ "operator") do
     insert!(
       "atoll.accounts.reserveCustomSignup",
       did,
@@ -295,7 +295,7 @@ defmodule Atoll.Moderation.Audit do
       %{handle: handle, genesisCid: genesis_cid},
       %{reserved: false},
       %{reserved: true},
-      "operator"
+      actor
     )
   end
 
