@@ -119,7 +119,13 @@ try {
   await assertPage('Connected applications');
   await visit('/account/passkeys');
   await submit('/account/passkeys/revoke', {password});
-  await assertPage('Enter your account credentials');
+  const passwordRecoveryReady = await evaluate(`(() => {
+    const form = document.querySelector('form[action="/account/login"]');
+    return location.pathname === '/account/login' &&
+      form?.elements.namedItem('identifier') instanceof HTMLInputElement &&
+      form?.elements.namedItem('password')?.type === 'password';
+  })()`);
+  if (!passwordRecoveryReady) throw Error('Expected the password sign-in form after passkey removal');
   await submit('/account/login', {identifier: did, password});
   await assertPage('Connected applications');
   await visit('/account/passkeys');
