@@ -34,6 +34,7 @@ defmodule AtollWeb.Router do
     post "/com.atproto.admin.enableAccountInvites", AdminInviteController, :enable_account
     post "/com.atproto.admin.sendEmail", AdminAccountController, :send_email
     post "/com.atproto.admin.deleteAccount", AdminAccountController, :delete
+    post "/com.atproto.admin.updateAccountSigningKey", AdminAccountController, :update_signing_key
     post "/com.atproto.admin.updateAccountPassword", AdminAccountController, :update_password
     post "/com.atproto.admin.updateAccountEmail", AdminAccountController, :update_email
     post "/com.atproto.admin.updateAccountHandle", AdminAccountController, :update_handle

@@ -5,6 +5,7 @@ defmodule Atoll.Identity.PLC.Update do
   schema "plc_updates" do
     field :did, :string, primary_key: true
     field :cid, :string, primary_key: true
+    field :directory_key_update, :boolean, default: false
     field :previous, :map
     field :operation, :map
     field :signing_curve, Ecto.Enum, values: [:k256, :p256]

@@ -4,6 +4,13 @@ defmodule AtollWeb.AdminAccountController do
   plug AtollWeb.AdminAuth
   action_fallback AtollWeb.XRPCFallback
 
+  def update_signing_key(conn, _) do
+    opts = Application.get_env(:atoll, :plc_submission_options, []) |> Keyword.take([:plug])
+
+    with {:ok, _} <- Atoll.Accounts.AdminSigningKey.update(conn.body_params, opts),
+         do: send_resp(conn, 200, "")
+  end
+
   def update_handle(conn, _) do
     opts =
       Application.get_env(:atoll, :identity_resolution_options, [])

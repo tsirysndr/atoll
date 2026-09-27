@@ -161,7 +161,7 @@ defmodule AtollWeb.XRPCFallback do
         conn,
         409,
         "InvalidRequest",
-        "An identity update requires reconciliation; retry its original handle."
+        "An identity update requires reconciliation; retry the original request."
       )
 
   def call(conn, {:error, reason})

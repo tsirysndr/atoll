@@ -32,7 +32,7 @@ defmodule Atoll.Repositories.EventEncoder do
   @doc "Builds a protocol message from a decoded durable event."
   def message(%{kind: :identity, payload: payload} = event) do
     {:ok, "#identity",
-     Map.merge(base(event), %{"did" => event.did, "handle" => payload["handle"]})}
+     base(event) |> Map.put("did", event.did) |> Map.merge(Map.take(payload, ["handle"]))}
   end
 
   def message(%{kind: :account, payload: payload} = event) do

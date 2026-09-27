@@ -1024,6 +1024,7 @@ observations do not produce duplicate events. The
 - [x] Transactional history of successful account/record/blob subject-status decisions, with bounded operator export.
 - [x] Operator account inspection, singly and in bounded batches, with private metadata and invite histories.
 - [x] Operator account search with bounded DID pagination and exact email filtering.
+- [x] Audited operator PLC directory signing-key updates with durable exact retries and identity notifications, separate from local private custody.
 - [x] Audited operator handle updates using verified PLC publication or did:web reconciliation, including inactive accounts.
 - [x] Audited operator email correction with invalidation of old email challenges.
 - [x] Audited operator password replacement with session, app-password, and pending-code revocation.
@@ -2523,6 +2524,45 @@ audit history alongside the profile, observation, identity event, and PLC journa
 completion. Verified unchanged requests are also audited without a duplicate
 identity event. Failed or ambiguous publication has no success audit entry; its
 signed operation remains in the durable PLC journal for reconciliation.
+
+### Operator directory signing-key updates
+
+`POST /xrpc/com.atproto.admin.updateAccountSigningKey` accepts exactly `did` and
+`signingKey`, where the account is a local `did:plc` identity and the public key is
+a canonical secp256k1 or P-256 `did:key`. The separate operator Basic credential
+is required before JSON parsing. The route shares the admin 16 KiB body limit,
+request budget and `no-store` policy, and returns an empty HTTP 200 on success.
+The [upstream endpoint contract](https://github.com/bluesky-social/atproto/blob/7a857989751ae31518509d69ab7194a922064f3d/lexicons/com/atproto/admin/updateAccountSigningKey.json)
+updates the DID document's public signing key.
+
+Atoll verifies fresh PLC audit history and the latest directory head, changes only
+`verificationMethods.atproto`, and signs with its retained PLC authority key.
+Other verification methods, services, handles and rotation authorities are
+preserved. The exact signed successor and an audit intent are committed together
+before any directory POST. A failed intent audit prevents publication. Matching
+readback and a fresh verified audit are required before completion; the completion
+audit, durable journal completion and identity event are atomic. The identity
+event omits the optional handle, prompting consumers to resolve the DID afresh.
+
+Retry an ambiguous request with the same DID and public key. The stored operation
+is reused and an already accepted operation is not posted again. A different
+pending key or a pending owner/key-rotation workflow returns a conflict; generic
+submission and active-update reconciliation cannot take over this intent. If the
+directory advances away from the exact accepted head, the journal stays pending
+for operator review. Never delete or re-sign an unresolved journal. Requests for
+the key already present in a verified current directory document are audited as
+unchanged and do not emit another identity event.
+
+This action changes directory metadata. It does not install or generate a local
+repository private key, rotate repository commits, issue/revoke sessions, or
+change account availability. If the supplied public key differs from Atoll's
+local repository key, account status reports a DID-key mismatch and downstream
+verification of local signatures against the new DID key fails. Coordinate this
+operation with migration/key custody; use the existing staged repository-key
+rotation workflow when rotating a locally hosted repository. Inactive completed
+accounts are supported; pending signups are rejected. `did:web` documents remain
+externally managed and this PLC publication endpoint rejects them. Run the
+migration adding the dedicated directory-update journal marker before use.
 
 ### Operator email correction
 

@@ -38,6 +38,9 @@ defmodule Atoll.Identity.PLC.Updates do
           %Update{recovery_expected_head: head} when not is_nil(head) ->
             Repo.rollback(:plc_update_pending)
 
+          %Update{directory_key_update: true} ->
+            Repo.rollback(:plc_update_pending)
+
           %Update{} = row ->
             summary(row)
 

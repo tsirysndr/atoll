@@ -31,8 +31,9 @@ defmodule Atoll.Identity.PLC.ActiveUpdates do
         row = Repo.get_by(Update, did: did, cid: cid) || Repo.rollback(:plc_update_not_found)
         if row.nullified_at, do: Repo.rollback(:plc_update_nullified)
 
-        if row.signing_public_key || row.authority_public_key || row.recovery_expected_head,
-          do: Repo.rollback(:plc_update_pending)
+        if row.directory_key_update || row.signing_public_key || row.authority_public_key ||
+             row.recovery_expected_head,
+           do: Repo.rollback(:plc_update_pending)
 
         unless row.operation == entry["operation"] and Operation.cid(row.operation) == {:ok, cid},
           do: Repo.rollback(:plc_conflict)
