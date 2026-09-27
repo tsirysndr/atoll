@@ -22,7 +22,7 @@ defmodule Atoll.CARStageTest do
                chunks,
                fn stage ->
                  assert stage.roots == [cid]
-                 assert map_size(stage.index) == 2
+                 assert stage.blocks == 2
                  assert stage.size == 5
                  assert Stage.read(stage, cid) == {:ok, "hello"}
                  assert Stage.read(stage, empty) == {:ok, ""}
@@ -34,6 +34,72 @@ defmodule Atoll.CARStageTest do
                  {:ok, stat} = File.stat(Path.join(c.directory, name))
                  assert Bitwise.band(stat.mode, 0o777) == 0o700
                  :consumed
+               end,
+               directory: c.directory
+             )
+
+    assert File.ls!(c.directory) == []
+  end
+
+  test "large stages use the disk index for repeated and empty blocks", c do
+    blocks =
+      Stream.map(1..5000, fn n ->
+        bytes = Integer.to_string(n)
+        {CID.create(bytes, :raw), bytes}
+      end)
+
+    {:ok, chunks} = CAR.encode_stream([], Stream.concat(blocks, blocks))
+
+    assert :ok =
+             Stage.with_chunks(
+               chunks,
+               fn stage ->
+                 assert stage.blocks == 5000
+
+                 assert stage.size ==
+                          Enum.reduce(1..5000, 0, &(byte_size(Integer.to_string(&1)) + &2))
+
+                 for n <- [1, 2, 255, 256, 1000, 4999, 5000] do
+                   bytes = Integer.to_string(n)
+                   assert Stage.read(stage, CID.create(bytes, :raw)) == {:ok, bytes}
+                 end
+
+                 [directory] = File.ls!(c.directory)
+
+                 assert Enum.sort(File.ls!(Path.join(c.directory, directory))) == [
+                          "blocks",
+                          "index"
+                        ]
+
+                 :ok
+               end,
+               directory: c.directory,
+               max_blocks: 10_000
+             )
+
+    assert File.ls!(c.directory) == []
+  end
+
+  test "damaged index offsets, sizes and slots fail closed", c do
+    cid = CID.create("hello", :raw)
+    {:ok, chunks} = CAR.encode_stream([], [{cid, "hello"}])
+
+    assert :ok =
+             Stage.with_chunks(
+               chunks,
+               fn stage ->
+                 index = stage.index
+                 <<hash::unsigned-64, _::binary>> = :crypto.mac(:hmac, :sha256, index.key, cid)
+                 slot = rem(hash, index.slots)
+
+                 for {offset, size} <- [{stage.size + 1, 5}, {0, 4_294_967_295}, {0, 4}] do
+                   assert :ok = Atoll.CAR.StageIndex.put(index, slot, cid, offset, size)
+                   assert Stage.read(stage, cid) == {:error, :staged_block_not_found}
+                 end
+
+                 assert :ok = :file.pwrite(index.io, slot * 48, <<255>>)
+                 assert Stage.read(stage, cid) == {:error, :staged_block_not_found}
+                 :ok
                end,
                directory: c.directory
              )
@@ -113,7 +179,7 @@ defmodule Atoll.CARStageTest do
       start_supervised!(
         {Task,
          fn ->
-           {:ok, lease, io} = Atoll.CAR.StageLease.open(c.directory)
+           {:ok, lease, io, _index} = Atoll.CAR.StageLease.open(c.directory)
            :ok = :file.pwrite(io, 0, "partial upload")
            send(parent, {:staging, lease})
 

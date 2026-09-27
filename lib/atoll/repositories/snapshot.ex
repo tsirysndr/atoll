@@ -27,7 +27,7 @@ defmodule Atoll.Repositories.Snapshot do
   Validate staged blocks without retaining record bodies. The returned reader is
   valid only inside the Stage.with_chunks callback. No repository data is published.
   Records and reachable CIDs are replayable bounded traversal streams, not maps.
-  The stage itself still holds its CID/offset index in memory.
+  The stage stores block bodies and its CID/offset index in private files.
   """
   def from_stage(%Atoll.CAR.Stage{} = stage, did, curve, public) do
     reader = &Atoll.CAR.Stage.read(stage, &1)

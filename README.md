@@ -189,6 +189,7 @@ record Lexicons or grant access to account data.
 - [x] Bounded search-path loading for individual signed record proof exports.
 - [x] Incremental CARv1 decoding with bounded framing buffers and verified block callbacks.
 - [x] Request-scoped private disk staging for incrementally validated CAR blocks.
+- [x] Disk-backed staging CID index with bounded lookup memory and collision work.
 - [x] Supervised staging cleanup on request exit and configurable per-node concurrency admission.
 - [x] Signed repository snapshot validation over staged block readers without collecting record bodies.
 - [x] Bounded MST validation and lazy record/CID enumeration for staged import publication.
@@ -1032,9 +1033,9 @@ a five-second per-read timeout, and a 30-second overall read budget. The declare
 length must match the actual bytes. Imports allow ten attempts per peer IP per
 five minutes using the configured memory, PostgreSQL, or Redis request limiter.
 Blob bytes must be transferred separately. Record bodies are read individually
-from private staging during validation and atomic publication. Tree traversal and
-record publication and blob-reference reconciliation are bounded; the stage
-CID/offset index still scales with repository size. Normal
+from private staging during validation and atomic publication. Tree traversal,
+record publication and blob-reference reconciliation use bounded application
+metadata; block bodies and the staging CID/offset index reside on disk. Normal
 completion, malformed input, read errors, and publication failures close and remove
 the staging files. A VM/host crash may leave private files behind; monitor
 temporary-disk capacity and clean stale files operationally.
@@ -3423,9 +3424,9 @@ repository remain staged. Other accounts' ownership is preserved, and physical
 byte deletion remains the cleanup worker's responsibility. Rollback restores the
 previous references and ownership without leaving cleanup jobs.
 
-Import memory work remains: the private CAR staging file's CID/offset index still
-scales with repository size. The legacy
-buffered snapshot API deliberately collects its archive, records and blocks.
+Staged HTTP imports now keep the archive, CID/offset index and revision membership
+on disk or in PostgreSQL, with bounded application traversal and publication batches.
+The legacy buffered snapshot API deliberately collects its archive, records and blocks.
 Ordinary record mutations also retain whole-tree metadata. Compact commit-event
 inversion proofs remain pending.
 
@@ -3505,7 +3506,7 @@ collecting chunks. It retains the encoded output but does not reconstruct a whol
 MST, record map or revision membership set. Its CAR now uses the stream's block
 order (commit first), and corrupt stored nodes fail rather than being rebuilt from
 the record index. Lazy corruption becomes an error result without returning partial
-bytes. Import staging indexes and ordinary record mutations retain
+bytes. Ordinary record mutations and legacy buffered snapshot decoding retain
 the metadata costs described above. The streaming callback must finish
 consuming the enumerable before returning. The legacy `CAR.decode/1` and `import_archive/3` APIs remain buffered;
 HTTP imports use incremental decoding and staging. Tests compare full and incremental block sets with the buffered codec,
@@ -3579,13 +3580,24 @@ transactional publication.
 
 `Atoll.CAR.Stage.with_chunks/3` consumes an enumerable of binary chunks with the
 incremental decoder, writing each unique verified block to a request-private
-temporary file. The stage stores roots and a CID-to-offset/length index in memory;
-record bodies remain on disk. The consuming callback is invoked only after
+temporary file. A second private file stores its CID-to-offset/length index;
+only roots, decoder buffers and fixed index metadata remain in application memory. The consuming callback is invoked only after
 `Decoder.finish/1` succeeds. `Stage.read/2` reads and rechecks a staged block's hash
 while inside that callback. Duplicate sections still count against decoder limits
 but do not consume additional staging space.
 
-The random staging directory has mode 0700 and is removed, with the file closed,
+`StageIndex` uses 48-byte slots containing a CID, byte offset and length. The
+index reserves two slots per permitted block section (96,000,000 logical bytes at
+the default million-section limit). Sparse-file support can reduce physical disk
+allocation; capacity planning must allow the full logical size plus block bodies.
+Each upload gets a random HMAC-SHA256 key to prevent clients from preparing a
+chosen collision cluster. Linear probing wraps at the end of the file and stops
+after at most 128 slot reads. Probe exhaustion or index I/O failure rejects staging;
+it never falls back to an unbounded scan or in-memory map. Reads reject invalid
+slots, out-of-range offsets/lengths, and bytes that fail the requested CID hash.
+Duplicate blocks occupy one data/index entry but count toward the decoder limit.
+
+The random staging directory has mode 0700 and is removed, with both files closed,
 after normal return, invalid/truncated input, limit rejection, or exceptions.
 No data is inserted into public block storage. Disk/creation failures produce a
 staging error. Callers can choose a trusted `directory` and decoder byte/block
@@ -3607,8 +3619,8 @@ in the CID stream and are deduplicated during revision staging. Records are chec
 against the 1,000,000-byte limit and their collection's `$type`.
 
 The callback remains valid only inside `Stage.with_chunks/3`; publishing imports
-must finish all staged reads there. The stage file index remains proportional to
-the staged block count, but validation does not retain a reconstructed MST. This validator does not publish
+must finish all staged reads there. Validation does not retain a reconstructed
+MST, record map or in-memory staging index. This validator does not publish
 blocks or update accounts, blob references, quotas, or event streams. The HTTP importer uses this validator before staged publication.
 
 `Atoll.Repositories.import_staged/3` publishes a stage inside its owning callback.

@@ -11,7 +11,7 @@ defmodule Atoll.CAR.StageLease do
          ) do
       {:ok, pid} ->
         case GenServer.call(pid, :file) do
-          {:ok, io} -> {:ok, pid, io}
+          {:ok, io, index} -> {:ok, pid, io, index}
         end
 
       _ ->
@@ -52,7 +52,15 @@ defmodule Atoll.CAR.StageLease do
         with :ok <- File.chmod(directory, 0o700),
              {:ok, io} <-
                File.open(Path.join(directory, "blocks"), [:read, :write, :binary, :exclusive]) do
-          {:ok, %{owner: owner, monitor: monitor, directory: directory, io: io}}
+          case File.open(Path.join(directory, "index"), [:read, :write, :binary, :exclusive]) do
+            {:ok, index} ->
+              {:ok, %{owner: owner, monitor: monitor, directory: directory, io: io, index: index}}
+
+            _ ->
+              File.close(io)
+              File.rm_rf(directory)
+              {:stop, :car_staging_unavailable}
+          end
         else
           _ ->
             File.rm_rf(directory)
@@ -66,7 +74,7 @@ defmodule Atoll.CAR.StageLease do
 
   @impl true
   def handle_call(:file, {owner, _}, %{owner: owner} = state),
-    do: {:reply, {:ok, state.io}, state}
+    do: {:reply, {:ok, state.io, state.index}, state}
 
   def handle_call(:file, _, state), do: {:reply, {:error, :not_owner}, state}
 
@@ -77,6 +85,7 @@ defmodule Atoll.CAR.StageLease do
   @impl true
   def terminate(_, state) do
     File.close(state.io)
+    File.close(state.index)
     File.rm_rf(state.directory)
     :ok
   end

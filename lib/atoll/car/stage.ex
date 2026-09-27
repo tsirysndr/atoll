@@ -2,22 +2,29 @@ defmodule Atoll.CAR.Stage do
   @moduledoc """
   Request-scoped disk staging for validated CAR blocks. No public storage writes.
   The callback must finish using the stage before returning; its file is then
-  closed and removed even on exceptions. Roots and the CID/offset index remain
-  in memory, while record bodies stay on disk. VM/host crashes may leave
+  closed and removed even on exceptions. Block bodies and the CID/offset index
+  stay on disk; only bounded decoder and index metadata remain in memory. VM/host crashes may leave
   private temporary files for operational cleanup.
   """
   alias Atoll.{CID, CAR.Decoder}
-  defstruct [:io, roots: [], index: %{}, size: 0]
+  alias Atoll.CAR.StageIndex
+  defstruct [:io, :index, roots: [], size: 0, blocks: 0]
 
   def with_chunks(chunks, consume, opts \\ []) when is_function(consume, 1) do
     decoder = Decoder.new(Keyword.take(opts, [:max_bytes, :max_blocks]))
-    with_file(opts, fn io -> stage(chunks, decoder, %__MODULE__{io: io}, consume) end)
+
+    with_file(opts, decoder.max_blocks, fn io, index ->
+      stage(chunks, decoder, %__MODULE__{io: io, index: index}, consume)
+    end)
   end
 
   @doc "Stage a stateful reader returning {:more | :ok, bytes, state} or {:error, reason, state}."
   def with_reader(source, next, consume, opts \\ []) do
     decoder = Decoder.new(Keyword.take(opts, [:max_bytes, :max_blocks]))
-    with_file(opts, fn io -> read_source(source, next, decoder, %__MODULE__{io: io}, consume) end)
+
+    with_file(opts, decoder.max_blocks, fn io, index ->
+      read_source(source, next, decoder, %__MODULE__{io: io, index: index}, consume)
+    end)
   end
 
   defp read_source(source, next, decoder, staged, consume) do
@@ -44,13 +51,16 @@ defmodule Atoll.CAR.Stage do
     :car_staging_unavailable -> {:error, :car_staging_unavailable, source}
   end
 
-  defp with_file(opts, callback) do
+  defp with_file(opts, max_blocks, callback) do
     parent = Keyword.get(opts, :directory, System.tmp_dir!())
 
     case Atoll.CAR.StageLease.open(parent) do
-      {:ok, lease, io} ->
+      {:ok, lease, io, index_io} ->
         try do
-          callback.(io)
+          case StageIndex.new(index_io, max_blocks) do
+            {:ok, index} -> callback.(io, index)
+            _ -> {:error, :car_staging_unavailable}
+          end
         after
           Atoll.CAR.StageLease.close(lease)
         end
@@ -62,7 +72,8 @@ defmodule Atoll.CAR.Stage do
 
   @doc "Read a hash-verified staged block while inside the stage callback."
   def read(%__MODULE__{} = stage, cid) do
-    with {:ok, {offset, size}} <- Map.fetch(stage.index, cid),
+    with {:found, offset, size} <- StageIndex.locate(stage.index, cid),
+         true <- size <= 2_097_152 and offset + size <= stage.size,
          {:ok, bytes} <- pread(stage.io, offset, size),
          :ok <- CID.verify(cid, bytes) do
       {:ok, bytes}
@@ -96,21 +107,20 @@ defmodule Atoll.CAR.Stage do
   defp store({:header, roots}, stage), do: {:cont, %{stage | roots: roots}}
 
   defp store({:block, cid, bytes}, stage) do
-    if Map.has_key?(stage.index, cid) do
-      {:cont, stage}
-    else
-      case :file.pwrite(stage.io, stage.size, bytes) do
-        :ok ->
-          {:cont,
-           %{
-             stage
-             | index: Map.put(stage.index, cid, {stage.size, byte_size(bytes)}),
-               size: stage.size + byte_size(bytes)
-           }}
+    case StageIndex.locate(stage.index, cid) do
+      {:found, _, _} ->
+        {:cont, stage}
 
-        _ ->
-          throw(:car_staging_unavailable)
-      end
+      {:empty, slot} ->
+        with :ok <- :file.pwrite(stage.io, stage.size, bytes),
+             :ok <- StageIndex.put(stage.index, slot, cid, stage.size, byte_size(bytes)) do
+          {:cont, %{stage | size: stage.size + byte_size(bytes), blocks: stage.blocks + 1}}
+        else
+          _ -> throw(:car_staging_unavailable)
+        end
+
+      _ ->
+        throw(:car_staging_unavailable)
     end
   end
 end
