@@ -191,6 +191,7 @@ record Lexicons or grant access to account data.
 - [x] Bounded search-path loading for individual signed record proof exports.
 - [x] Buffered MST loading through canonical traversal with an explicit retained-metadata budget.
 - [x] Buffered snapshot output budgets covering expanded record paths and deduplicated reachable blocks.
+- [x] Buffered MST constructor and mutation budgets with preflight record accounting and bounded node emission.
 - [x] Incremental CARv1 decoding with bounded framing buffers and verified block callbacks.
 - [x] Request-scoped private disk staging for incrementally validated CAR blocks.
 - [x] Disk-backed staging CID index with bounded lookup memory and collision work.
@@ -3607,10 +3608,26 @@ node/depth/count limits also apply. Exhausting the retained budget returns
 `{:error, :mst_too_large}` without a partial tree or further block reads. Invalid
 or noncanonical trees return `{:error, :invalid_mst}`. The loader accepts either a
 block map or a reader callback and never reads record bodies or unrelated blocks.
-Callers needing a stream should use `MST.Traversal.stream/3` directly. The buffered
-MST constructor/mutation helpers still retain complete metadata without a
-retained-output budget; the broad metadata-memory checklist remains open for
-those paths.
+Callers needing a stream should use `MST.Traversal.stream/3` directly.
+
+`MST.new/2`, `put/4` and `delete/3` apply the same default 64 MiB retained-metadata
+accounting limit and `max_bytes:` option. Construction checks the record map's
+expanded paths and CIDs before allocating sorted construction entries, then
+charges encoded nodes as they are emitted. It also enforces one million records,
+100,000 unique nodes, 10,000 entries per node and a 1 MiB encoded-node limit.
+Exhaustion returns `{:error, :mst_too_large}` without a partial tree; invalid
+paths/CIDs return `{:error, :invalid_mst}`. Mutation failures leave the input tree
+unchanged. Options apply to each call, rather than being stored in the tree.
+These helpers remain fully buffered: caller-owned inputs, previous tree versions,
+sorting lists and encoding buffers can coexist with the output, so accounting is
+not a promise of a 64 MiB total process heap. The separate streaming builder remains
+the production write path and the buffered constructor remains an independent
+canonical reference implementation.
+
+The repository-memory audit also found the distinct collection inventory used by
+`describeRepo` still collects all names in one database result. That inventory
+needs a bounded response policy before the broad metadata-memory checklist can
+be marked complete.
 
 `Atoll.MST.Editor.apply/4` edits a caller-authenticated partial tree using up to
 200 `{:put, path, cid}` / `{:delete, path}` operations. It lazily reads search paths

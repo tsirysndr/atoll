@@ -11,28 +11,50 @@ defmodule Atoll.MST do
   alias Atoll.CBOR.{Bytes, Link}
   defstruct records: %{}, root: nil, blocks: %{}
 
-  def new(records \\ %{}) when is_map(records) do
-    if Enum.all?(records, fn {key, cid} ->
-         Syntax.repo_path?(key) and is_binary(cid) and
-           match?({:ok, %{codec: :dag_cbor}}, CID.decode(cid))
-       end) do
+  @doc "Builds a buffered canonical tree within :max_bytes (default 64 MiB) of retained metadata accounting."
+  def new(records \\ %{}, opts \\ [])
+
+  def new(records, opts) when is_map(records) do
+    max_bytes = buffer_limit!(opts)
+
+    try do
+      if map_size(records) > 1_000_000, do: throw(:mst_too_large)
+
+      used =
+        Enum.reduce(records, 0, fn {key, cid}, used ->
+          unless Syntax.repo_path?(key) and is_binary(cid) and
+                   match?({:ok, %{codec: :dag_cbor}}, CID.decode(cid)),
+                 do: throw(:invalid_mst)
+
+          size = used + byte_size(key) + byte_size(cid) + 128
+          if size > max_bytes, do: throw(:mst_too_large)
+          size
+        end)
+
+      state = %{blocks: %{}, used: used, limit: max_bytes}
       items = records |> Enum.map(fn {key, cid} -> {key, cid, height(key)} end) |> Enum.sort()
 
-      {root, blocks} =
+      {root, state} =
         case items do
-          [] -> store(%{"l" => nil, "e" => []}, %{})
-          _ -> build(items, Enum.max(Enum.map(items, &elem(&1, 2))), %{})
+          [] -> store(%{"l" => nil, "e" => []}, state)
+          _ -> build(items, Enum.reduce(items, 0, &max(elem(&1, 2), &2)), state)
         end
 
-      {:ok, %__MODULE__{records: records, root: root, blocks: blocks}}
-    else
-      {:error, :invalid_mst}
+      {:ok, %__MODULE__{records: records, root: root, blocks: state.blocks}}
+    catch
+      reason when reason in [:invalid_mst, :mst_too_large] -> {:error, reason}
     end
   end
 
+  def new(_, _), do: {:error, :invalid_mst}
+
   def get(%__MODULE__{records: records}, key), do: Map.fetch(records, key)
-  def put(%__MODULE__{records: records}, key, cid), do: new(Map.put(records, key, cid))
-  def delete(%__MODULE__{records: records}, key), do: new(Map.delete(records, key))
+
+  def put(%__MODULE__{records: records}, key, cid, opts \\ []),
+    do: new(Map.put(records, key, cid), opts)
+
+  def delete(%__MODULE__{records: records}, key, opts \\ []),
+    do: new(Map.delete(records, key), opts)
 
   @doc "Returns the search-path blocks and optional record CID from a constructed or fully validated tree."
   def proof(%__MODULE__{} = tree, key) do
@@ -82,10 +104,7 @@ defmodule Atoll.MST do
 
   def load(root, blocks, opts)
       when is_binary(root) and (is_map(blocks) or is_function(blocks, 1)) do
-    max_bytes = Keyword.get(opts, :max_bytes, 64 * 1024 * 1024)
-
-    unless is_integer(max_bytes) and max_bytes > 0,
-      do: raise(ArgumentError, "MST buffered metadata limit must be a positive integer")
+    max_bytes = buffer_limit!(opts)
 
     reader = if is_map(blocks), do: &Map.fetch(blocks, &1), else: blocks
 
@@ -118,6 +137,15 @@ defmodule Atoll.MST do
 
   def load(_, _, _), do: {:error, :invalid_mst}
 
+  defp buffer_limit!(opts) do
+    limit = Keyword.get(opts, :max_bytes, 64 * 1024 * 1024)
+
+    unless is_integer(limit) and limit > 0,
+      do: raise(ArgumentError, "MST buffered metadata limit must be a positive integer")
+
+    limit
+  end
+
   def height(key) when is_binary(key), do: zeros(:crypto.hash(:sha256, key), 0)
   defp zeros(<<0::2, rest::bitstring>>, count), do: zeros(rest, count + 1)
   defp zeros(_, count), do: count
@@ -127,13 +155,14 @@ defmodule Atoll.MST do
   defp build(items, level, blocks) do
     {left, rest} = Enum.split_while(items, &(elem(&1, 2) < level))
     {left_cid, blocks} = build(left, level - 1, blocks)
-    {entries, blocks} = build_entries(rest, level, "", [], blocks)
+    {entries, blocks} = build_entries(rest, level, "", [], blocks, 0)
     store(%{"l" => link(left_cid), "e" => Enum.reverse(entries)}, blocks)
   end
 
-  defp build_entries([], _, _, result, blocks), do: {result, blocks}
+  defp build_entries([], _, _, result, blocks, _count), do: {result, blocks}
 
-  defp build_entries([{key, cid, level} | tail], level, previous, result, blocks) do
+  defp build_entries([{key, cid, level} | tail], level, previous, result, blocks, count) do
+    if count >= 10_000, do: throw(:mst_too_large)
     {right, rest} = Enum.split_while(tail, &(elem(&1, 2) < level))
     {right_cid, blocks} = build(right, level - 1, blocks)
     prefix = common_prefix(previous, key, 0)
@@ -146,7 +175,7 @@ defmodule Atoll.MST do
       "t" => link(right_cid)
     }
 
-    build_entries(rest, level, key, [entry | result], blocks)
+    build_entries(rest, level, key, [entry | result], blocks, count + 1)
   end
 
   defp common_prefix(<<c, a::binary>>, <<c, b::binary>>, n), do: common_prefix(a, b, n + 1)
@@ -154,9 +183,20 @@ defmodule Atoll.MST do
   defp link(nil), do: nil
   defp link(cid), do: %Link{cid: cid}
 
-  defp store(node, blocks) do
+  defp store(node, state) do
     bytes = CBOR.encode!(node)
+    if byte_size(bytes) > 1_048_576, do: throw(:mst_too_large)
     cid = CID.create(bytes, :dag_cbor)
-    {cid, Map.put(blocks, cid, bytes)}
+
+    if Map.has_key?(state.blocks, cid) do
+      {cid, state}
+    else
+      used = state.used + byte_size(bytes) + byte_size(cid) + 96
+
+      if used > state.limit or map_size(state.blocks) >= 100_000,
+        do: throw(:mst_too_large)
+
+      {cid, %{state | blocks: Map.put(state.blocks, cid, bytes), used: used}}
+    end
   end
 end
