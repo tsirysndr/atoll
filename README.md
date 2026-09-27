@@ -189,6 +189,7 @@ record Lexicons or grant access to account data.
 - [x] Bounded signed-tree membership verification for current and historical `getBlocks` exports.
 - [x] Bounded metadata verification and revision-membership staging for signing-key rotation/recovery.
 - [x] Bounded search-path loading for individual signed record proof exports.
+- [x] Buffered MST loading through canonical traversal with an explicit retained-metadata budget.
 - [x] Incremental CARv1 decoding with bounded framing buffers and verified block callbacks.
 - [x] Request-scoped private disk staging for incrementally validated CAR blocks.
 - [x] Disk-backed staging CID index with bounded lookup memory and collision work.
@@ -3582,9 +3583,21 @@ Quota, blob-reference, head and event failures roll the entire mutation back.
 Writes still rebuild the whole tree and perform work proportional to record count;
 this is not incremental path mutation. Pending-byte accounting is not a precise
 BEAM heap measurement. Public batch/body limits still bound prepared records, and
-the database materializes revision arrays. Legacy buffered MST and snapshot helper
-APIs still retain complete metadata; the broad metadata-memory checklist remains
-open for those paths.
+the database materializes revision arrays. `MST.load/3` now uses the canonical
+traversal directly instead of collecting records and rebuilding the tree. It
+returns the same fully buffered tree, but caps retained metadata at 64 MiB by
+default (`max_bytes:` overrides this for trusted callers). Accounting charges
+each encoded node plus its CID and a 96-byte map-entry allowance, and each expanded
+record path plus its CID and a 128-byte allowance. Expanded paths count even when
+prefix compression makes the encoded tree small. This is an accounting budget,
+not an exact heap-size limit; traversal's independent 16 MiB pending budget and
+node/depth/count limits also apply. Exhausting the retained budget returns
+`{:error, :mst_too_large}` without a partial tree or further block reads. Invalid
+or noncanonical trees return `{:error, :invalid_mst}`. The loader accepts either a
+block map or a reader callback and never reads record bodies or unrelated blocks.
+Callers needing a stream should use `MST.Traversal.stream/3` directly. Buffered
+constructor/mutation and snapshot helper APIs still retain complete metadata;
+the broad metadata-memory checklist remains open for those paths.
 
 `Atoll.MST.Editor.apply/4` edits a caller-authenticated partial tree using up to
 200 `{:put, path, cid}` / `{:delete, path}` operations. It lazily reads search paths

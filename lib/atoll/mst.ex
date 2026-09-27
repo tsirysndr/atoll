@@ -2,8 +2,10 @@ defmodule Atoll.MST do
   @moduledoc """
   Deterministic ATProto Merkle Search Trees.
 
-  This initial implementation rebuilds the tree on mutation. It prioritizes
-  canonical serialization over incremental-update performance.
+  The buffered constructor rebuilds the tree on mutation and remains a canonical
+  reference implementation. Loading uses bounded canonical traversal and caps
+  retained metadata. Production streaming construction and partial edits live in
+  MST.Builder and MST.Editor respectively.
   """
   alias Atoll.{CBOR, CID, Syntax}
   alias Atoll.CBOR.{Bytes, Link}
@@ -67,19 +69,54 @@ defmodule Atoll.MST do
     end
   end
 
-  @doc "Loads a block map or CID reader returning {:ok, bytes}; requires the reconstructed canonical root to match."
-  def load(root, blocks) when is_binary(root) and (is_map(blocks) or is_function(blocks, 1)) do
-    try do
-      {records, _seen} = read_node(root, blocks, %{}, MapSet.new(), 0)
+  @doc """
+  Materializes a canonically validated tree from a block map or CID reader.
 
-      case new(records) do
-        {:ok, %__MODULE__{root: ^root} = tree} -> {:ok, tree}
-        _ -> {:error, :invalid_mst}
+  The retained metadata budget defaults to 64 MiB and can be set with :max_bytes.
+  Accounting includes encoded nodes, expanded record paths, CIDs and fixed map
+  entry allowances; it is not an exact BEAM heap measurement. Traversal retains
+  its independent pending-node/depth/count limits. Use MST.Traversal.stream/3
+  when the caller does not need the entire tree in memory.
+  """
+  def load(root, blocks, opts \\ [])
+
+  def load(root, blocks, opts)
+      when is_binary(root) and (is_map(blocks) or is_function(blocks, 1)) do
+    max_bytes = Keyword.get(opts, :max_bytes, 64 * 1024 * 1024)
+
+    unless is_integer(max_bytes) and max_bytes > 0,
+      do: raise(ArgumentError, "MST buffered metadata limit must be a positive integer")
+
+    reader = if is_map(blocks), do: &Map.fetch(blocks, &1), else: blocks
+
+    root
+    |> Atoll.MST.Traversal.stream(reader)
+    |> Enum.reduce_while({:ok, %__MODULE__{root: root}, 0}, fn event, {:ok, tree, used} ->
+      {field, key, value, charge} =
+        case event do
+          {:node, cid, bytes} ->
+            {:blocks, cid, bytes, byte_size(bytes) + byte_size(cid) + 96}
+
+          {:record, path, cid} ->
+            {:records, path, cid, byte_size(path) + byte_size(cid) + 128}
+        end
+
+      if used + charge > max_bytes do
+        {:halt, {:error, :mst_too_large}}
+      else
+        tree = Map.update!(tree, field, &Map.put(&1, key, value))
+        {:cont, {:ok, tree, used + charge}}
       end
-    catch
-      :invalid_mst -> {:error, :invalid_mst}
+    end)
+    |> case do
+      {:ok, tree, _used} -> {:ok, tree}
+      error -> error
     end
+  rescue
+    Atoll.MST.TraversalError -> {:error, :invalid_mst}
   end
+
+  def load(_, _, _), do: {:error, :invalid_mst}
 
   def height(key) when is_binary(key), do: zeros(:crypto.hash(:sha256, key), 0)
   defp zeros(<<0::2, rest::bitstring>>, count), do: zeros(rest, count + 1)
@@ -122,57 +159,4 @@ defmodule Atoll.MST do
     cid = CID.create(bytes, :dag_cbor)
     {cid, Map.put(blocks, cid, bytes)}
   end
-
-  defp read_node(cid, blocks, records, seen, depth) do
-    if depth > 128 or MapSet.size(seen) >= 100_000 or MapSet.member?(seen, cid), do: invalid!()
-    bytes = read_block(blocks, cid)
-    unless is_binary(bytes) and CID.verify(cid, bytes) == :ok, do: invalid!()
-
-    case CBOR.decode(bytes) do
-      {:ok, %{"l" => left, "e" => entries} = node}
-      when map_size(node) == 2 and is_list(entries) ->
-        seen = MapSet.put(seen, cid)
-        {records, seen} = read_child(left, blocks, records, seen, depth)
-
-        {records, seen, _key} =
-          Enum.reduce(entries, {records, seen, ""}, fn entry, {acc, visited, previous} ->
-            case entry do
-              %{"p" => p, "k" => %Bytes{data: suffix}, "v" => %Link{cid: value}, "t" => right}
-              when map_size(entry) == 4 and is_integer(p) and p >= 0 and p <= byte_size(previous) ->
-                key = binary_part(previous, 0, p) <> suffix
-                if Map.has_key?(acc, key) or map_size(acc) >= 1_000_000, do: invalid!()
-
-                {acc, visited} =
-                  read_child(right, blocks, Map.put(acc, key, value), visited, depth)
-
-                {acc, visited, key}
-
-              _ ->
-                invalid!()
-            end
-          end)
-
-        {records, seen}
-
-      _ ->
-        invalid!()
-    end
-  end
-
-  defp read_child(nil, _, records, seen, _), do: {records, seen}
-
-  defp read_child(%Link{cid: cid}, blocks, records, seen, depth),
-    do: read_node(cid, blocks, records, seen, depth + 1)
-
-  defp read_child(_, _, _, _, _), do: invalid!()
-  defp read_block(blocks, cid) when is_map(blocks), do: Map.get(blocks, cid)
-
-  defp read_block(reader, cid) do
-    case reader.(cid) do
-      {:ok, bytes} when is_binary(bytes) -> bytes
-      _ -> invalid!()
-    end
-  end
-
-  defp invalid!, do: throw(:invalid_mst)
 end
