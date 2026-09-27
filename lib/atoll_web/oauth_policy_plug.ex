@@ -28,6 +28,8 @@ defmodule AtollWeb.OAuthPolicyPlug do
   )
 
   @resource ~w(
+    app.bsky.actor.getPreferences
+    app.bsky.actor.putPreferences
     com.atproto.server.getSession
     com.atproto.server.checkAccountStatus
     com.atproto.server.getServiceAuth

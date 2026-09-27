@@ -175,6 +175,9 @@ defmodule Atoll.OAuth.Permissions do
            ],
       do: allows_account?(scope, "email", "manage")
 
+  def write_admission?(scope, :put_preferences),
+    do: allows_preferences?(scope, "app.bsky.actor.putPreferences")
+
   def write_admission?(scope, action) do
     scopes = String.split(scope, " ")
 
@@ -205,6 +208,14 @@ defmodule Atoll.OAuth.Permissions do
 
   def allows_rpc?(scope, audience, method),
     do: rpc_allowed?(String.split(scope, " "), audience, method)
+
+  @doc "Locally served actor preferences follow the transitional or AppView RPC grants."
+  def allows_preferences?(scope, method) do
+    scopes = String.split(scope, " ")
+
+    "transition:generic" in scopes or
+      rpc_allowed?(scopes, Application.get_env(:atoll, :appview_proxy), method)
+  end
 
   def allows_account?(scope, attr, action) do
     scopes = String.split(scope, " ")

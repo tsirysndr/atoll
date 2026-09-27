@@ -46,7 +46,7 @@ Phoenix for server-side reporting. Non-XRPC routes retain their existing error
 format. Failures rejected by the HTTP adapter before reaching Phoenix and errors
 after a response or WebSocket upgrade has begun are outside this JSON renderer.
 
-Routed GET query parameters are checked against 26 unmodified upstream Lexicons
+Routed GET query parameters are checked against 27 unmodified upstream Lexicons
 vendored in `priv/lexicons`, pinned to the revision recorded there with its MIT
 license. Validation covers required parameters, string identifier formats and
 lengths, integer bounds, booleans, and repeated-key arrays. Controller-specific
@@ -470,6 +470,7 @@ mutation. Deletes and empty batches need no record schema, even with `validate: 
 - [ ] Authorization for remaining account and repository operations.
 - [ ] Account migration, identity updates, and signing-key lifecycle.
 - [x] Authenticated `com.atproto.server.checkAccountStatus` with repository/blob inventory and DID service/key checks.
+- [x] Locally served private `app.bsky` actor preferences with namespace replacement, restricted-session personal-details protection and declared-age synthesis.
 
 `Atoll.Accounts.Credentials.create/2` is a trusted internal operation that attaches
 a password to an existing repository DID. It never replaces an existing credential.
@@ -6841,3 +6842,33 @@ permitted by [RFC 7009](https://www.rfc-editor.org/rfc/rfc7009.html).
 The ATProto [official OAuth client](https://github.com/bluesky-social/atproto/blob/main/packages/oauth/oauth-client/src/oauth-server-agent.ts)
 uses the discovery endpoint for logout with its existing client credentials and
 DPoP key. No tokens or assertions are written to application logs by this route.
+
+### Account preferences
+
+`GET app.bsky.actor.getPreferences` and `POST app.bsky.actor.putPreferences`
+serve the account's private client preferences from PostgreSQL, following the
+[upstream reference behavior](https://github.com/bluesky-social/atproto/blob/7a857989751ae31518509d69ab7194a922064f3d/packages/pds/src/actor-store/preference).
+Preferences never enter the signed repository, the firehose, or public reads.
+Both endpoints accept password, app-password, and DPoP OAuth credentials, and
+work for deactivated accounts under password sessions so migration tooling can
+copy preferences before activation. Requests carry `no-store` responses, the
+shared session rate budget, and a 256 KiB JSON body limit.
+
+Bodies are validated against the pinned `app.bsky.actor.defs` preferences
+union; the union is open, so unknown preference types are preserved as long as
+each entry carries an `app.bsky`-namespaced `$type`. A put replaces exactly the
+caller-visible `app.bsky` preferences and keeps entries outside that namespace.
+The read-only declared-age preference is never stored: it is synthesized on
+reads from a stored personal-details birth date. Personal details are limited
+to full password sessions: app-password and OAuth callers cannot read or write
+`personalDetailsPref` (writes return `InvalidRequest`; reads omit the entry
+while still reporting the derived age flags), and existing personal details
+survive their namespace replacements.
+
+OAuth callers need `transition:generic` or granular `rpc:` grants for these
+method NSIDs (matching the configured default AppView audience or a wildcard
+audience). Writes use the shared pre-body proof admission and transactional
+authorization recheck; reads run inside resource authorization locks. Requests
+with an `Atproto-Proxy` header still proxy to the named service instead of the
+local store. Run the migration creating the account-preferences table before
+use; deleting an account removes its stored preferences.

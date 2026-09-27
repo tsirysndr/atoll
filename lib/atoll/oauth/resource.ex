@@ -111,7 +111,8 @@ defmodule Atoll.OAuth.Resource do
     request_email_confirmation: "com.atproto.server.requestEmailConfirmation",
     confirm_email: "com.atproto.server.confirmEmail",
     request_email_update: "com.atproto.server.requestEmailUpdate",
-    update_email: "com.atproto.server.updateEmail"
+    update_email: "com.atproto.server.updateEmail",
+    put_preferences: "app.bsky.actor.putPreferences"
   }
 
   @doc "Admit a POST proof and issue a process/method-bound internal credential, valid for 30 seconds (300 for streamed imports)."

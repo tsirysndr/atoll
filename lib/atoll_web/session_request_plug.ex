@@ -2,7 +2,10 @@ defmodule AtollWeb.SessionRequestPlug do
   @moduledoc "Session method, body-size, and rate checks before the general body parser."
   import Plug.Conn
   @prefix "/xrpc/com.atproto.server."
+  @preferences_put "/xrpc/app.bsky.actor.putPreferences"
+  @preferences_get "/xrpc/app.bsky.actor.getPreferences"
   @procedures [
+    @preferences_put,
     "/xrpc/com.atproto.identity.requestPlcOperationSignature",
     "/xrpc/com.atproto.identity.submitPlcOperation",
     "/xrpc/com.atproto.identity.signPlcOperation",
@@ -33,6 +36,7 @@ defmodule AtollWeb.SessionRequestPlug do
   ]
   @queries @identity_queries ++
              [
+               @preferences_get,
                @prefix <> "getAccountInviteCodes",
                @prefix <> "listAppPasswords",
                @prefix <> "getSession",
@@ -56,6 +60,14 @@ defmodule AtollWeb.SessionRequestPlug do
                     read_length: 16_384,
                     read_timeout: 5_000
                   )
+
+  @preferences_parser Plug.Parsers.init(
+                        parsers: [:json],
+                        json_decoder: Jason,
+                        length: 262_144,
+                        read_length: 65_536,
+                        read_timeout: 5_000
+                      )
 
   def init(opts), do: opts
 
@@ -130,6 +142,7 @@ defmodule AtollWeb.SessionRequestPlug do
       cond do
         path in email_paths -> :atoll_email_credential
         path in identity_paths -> :atoll_identity_credential
+        path == @preferences_put -> :atoll_preferences_credential
         true -> nil
       end
 
@@ -145,6 +158,7 @@ defmodule AtollWeb.SessionRequestPlug do
 
   defp parse_body(conn, path)
        when path in [
+              @preferences_put,
               "/xrpc/com.atproto.identity.submitPlcOperation",
               "/xrpc/com.atproto.identity.signPlcOperation",
               "/xrpc/com.atproto.identity.updateHandle",
@@ -167,14 +181,19 @@ defmodule AtollWeb.SessionRequestPlug do
           {:ok, "application", "json", _} ->
             Plug.Parsers.call(
               conn,
-              if(
+              cond do
                 path in [
                   "/xrpc/com.atproto.identity.submitPlcOperation",
                   "/xrpc/com.atproto.identity.signPlcOperation"
-                ],
-                do: @signing_parser,
-                else: @parser
-              )
+                ] ->
+                  @signing_parser
+
+                path == @preferences_put ->
+                  @preferences_parser
+
+                true ->
+                  @parser
+              end
             )
 
           _ ->

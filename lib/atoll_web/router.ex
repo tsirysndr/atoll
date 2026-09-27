@@ -71,6 +71,8 @@ defmodule AtollWeb.Router do
     post "/com.atproto.server.activateAccount", SessionController, :activate
     post "/com.atproto.server.deactivateAccount", SessionController, :deactivate
 
+    get "/app.bsky.actor.getPreferences", ActorController, :get_preferences
+    post "/app.bsky.actor.putPreferences", ActorController, :put_preferences
     post "/com.atproto.identity.submitPlcOperation", IdentityController, :submit_operation
     post "/com.atproto.identity.signPlcOperation", IdentityController, :sign_operation
 
