@@ -1,5 +1,5 @@
 defmodule Atoll.Repositories.EventsTest do
-  use Atoll.DataCase, async: true
+  use Atoll.DataCase, async: false
   alias Atoll.{CBOR, Repositories, SigningKey}
   alias Atoll.Repositories.Events
 

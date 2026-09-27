@@ -1,5 +1,5 @@
 defmodule AtollWeb.SyncProofControllerTest do
-  use AtollWeb.ConnCase, async: true
+  use AtollWeb.ConnCase, async: false
   alias Atoll.{CAR, CBOR, CID, Commit, Repo, Repositories, SigningKey}
   alias Atoll.CBOR.Link
   alias Atoll.Repositories.{Record, Revision}

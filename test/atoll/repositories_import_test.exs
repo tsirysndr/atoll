@@ -1,5 +1,5 @@
 defmodule Atoll.RepositoriesImportTest do
-  use Atoll.DataCase, async: true
+  use Atoll.DataCase, async: false
   alias Atoll.{CAR, CBOR, CID, Commit, MST, Repositories, SigningKey, Storage, TID}
   alias Atoll.Repositories.Snapshot
   alias Atoll.Storage.Block

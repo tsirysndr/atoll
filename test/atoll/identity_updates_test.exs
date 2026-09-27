@@ -1,5 +1,5 @@
 defmodule Atoll.IdentityUpdatesTest do
-  use Atoll.DataCase, async: true
+  use Atoll.DataCase, async: false
   alias Atoll.{Multikey, Repositories, SigningKey}
   alias Atoll.Identity.{Observation, Updates}
   alias Atoll.Repositories.{EventEncoder, Events}

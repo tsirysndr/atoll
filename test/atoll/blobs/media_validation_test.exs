@@ -1,5 +1,5 @@
 defmodule Atoll.Blobs.MediaValidationTest do
-  use Atoll.DataCase, async: true
+  use Atoll.DataCase, async: false
   alias Atoll.Blobs
   alias Atoll.Blobs.MediaValidation
   @did "did:plc:mediavalidation"

@@ -1,5 +1,5 @@
 defmodule Atoll.RepositoriesTest do
-  use Atoll.DataCase, async: true
+  use Atoll.DataCase, async: false
   alias Atoll.{CAR, Commit, MST, Repositories, SigningKey, Storage, TID}
   alias Atoll.Repositories.Head
   alias Atoll.Storage.Block

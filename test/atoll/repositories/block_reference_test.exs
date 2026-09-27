@@ -1,5 +1,5 @@
 defmodule Atoll.Repositories.BlockReferenceTest do
-  use Atoll.DataCase, async: true
+  use Atoll.DataCase, async: false
   alias Atoll.{Repositories, SigningKey}
   alias Atoll.Repositories.{BlockReference, Quota, Revision}
   @did "did:plc:blockreferences"

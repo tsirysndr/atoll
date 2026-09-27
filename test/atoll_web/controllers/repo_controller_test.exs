@@ -1,5 +1,5 @@
 defmodule AtollWeb.RepoControllerTest do
-  use AtollWeb.ConnCase, async: true
+  use AtollWeb.ConnCase, async: false
   alias Atoll.{CAR, CID, Commit, MST, Repositories, SigningKey}
   @did "did:plc:example"
   @collection "com.example.record"

@@ -1,5 +1,5 @@
 defmodule Atoll.Accounts.CredentialsTest do
-  use Atoll.DataCase, async: true
+  use Atoll.DataCase, async: false
   alias Atoll.{Repositories, SigningKey}
   alias Atoll.Accounts.{Credential, Credentials}
   @did "did:plc:credentials"

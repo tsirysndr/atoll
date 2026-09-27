@@ -1,5 +1,5 @@
 defmodule Atoll.BlobReferencesTest do
-  use Atoll.DataCase, async: true
+  use Atoll.DataCase, async: false
   alias Atoll.{Blobs, CAR, CBOR, CID, Commit, MST, Repositories, SigningKey, TID}
   alias Atoll.Blobs.Reference
   alias Atoll.Repositories.Events

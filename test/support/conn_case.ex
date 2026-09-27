@@ -10,9 +10,10 @@ defmodule AtollWeb.ConnCase do
   Finally, if the test case interacts with the database,
   we enable the SQL sandbox, so changes done to the database
   are reverted at the end of every test. If you are using
-  PostgreSQL, you can even run database tests asynchronously
-  by setting `use AtollWeb.ConnCase, async: true`, although
-  this option is not recommended for other databases.
+  PostgreSQL, tests that do not mutate repositories can run asynchronously
+  with `use AtollWeb.ConnCase, async: true`. Tests creating or updating
+  repositories must use `async: false`: their sandbox transaction holds the
+  global event advisory lock until cleanup.
   """
 
   use ExUnit.CaseTemplate

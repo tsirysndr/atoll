@@ -1,5 +1,5 @@
 defmodule AtollWeb.RepositoryDiffTest do
-  use AtollWeb.ConnCase, async: true
+  use AtollWeb.ConnCase, async: false
   alias Atoll.{CAR, CBOR, Commit, MST, Repo, Repositories, SigningKey, TID}
   alias Atoll.Repositories.Revision
   @did "did:web:alice.example.com"

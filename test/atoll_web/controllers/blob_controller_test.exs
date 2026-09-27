@@ -1,5 +1,5 @@
 defmodule AtollWeb.BlobControllerTest do
-  use AtollWeb.ConnCase, async: true
+  use AtollWeb.ConnCase, async: false
   alias Atoll.{Blobs, Repositories, SigningKey}
   @did "did:plc:blobhttp"
   @get "/xrpc/com.atproto.sync.getBlob"

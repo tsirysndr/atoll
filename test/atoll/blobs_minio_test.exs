@@ -1,5 +1,5 @@
 defmodule Atoll.BlobsMinioTest do
-  use Atoll.DataCase, async: true
+  use Atoll.DataCase, async: false
   alias Atoll.{Blobs, CID, Repositories, SigningKey, Storage}
   alias Atoll.Blobs.Blob
   @moduletag :minio

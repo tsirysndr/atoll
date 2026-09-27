@@ -1,5 +1,5 @@
 defmodule AtollWeb.RepositoryStatusTest do
-  use AtollWeb.ConnCase, async: true
+  use AtollWeb.ConnCase, async: false
   alias Atoll.{CID, Repositories, SigningKey}
   @did "did:web:alice.example.com"
   @collection "com.example.record"

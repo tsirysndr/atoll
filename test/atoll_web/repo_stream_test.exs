@@ -1,5 +1,5 @@
 defmodule AtollWeb.RepoStreamTest do
-  use AtollWeb.ConnCase, async: true
+  use AtollWeb.ConnCase, async: false
   alias Atoll.{CBOR, Repositories, SigningKey}
   alias Atoll.Repositories.{Events, EventEncoder}
   alias AtollWeb.RepoStreamSocket, as: Socket

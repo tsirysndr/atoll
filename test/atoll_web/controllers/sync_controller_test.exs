@@ -1,5 +1,5 @@
 defmodule AtollWeb.SyncControllerTest do
-  use AtollWeb.ConnCase, async: true
+  use AtollWeb.ConnCase, async: false
   alias Atoll.{CID, Repositories, SigningKey}
   @latest "/xrpc/com.atproto.sync.getLatestCommit"
   @status "/xrpc/com.atproto.sync.getRepoStatus"

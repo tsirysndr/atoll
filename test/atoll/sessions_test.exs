@@ -1,5 +1,5 @@
 defmodule Atoll.Accounts.SessionsTest do
-  use Atoll.DataCase, async: true
+  use Atoll.DataCase, async: false
   alias Atoll.{Repositories, SigningKey}
   alias Atoll.Accounts.{Credentials, Session, Sessions, Tokens}
   @did "did:plc:sessions"
