@@ -27,10 +27,10 @@ try {
     requests.push({ path: url.pathname, status: response.status })
     return response
   }
-  assert.ok(['base', 'granular'].includes(scenario))
+  assert.ok(['base', 'granular', 'blobs'].includes(scenario))
   const collection = 'com.example.oauthrecord'
-  const grantedScope = scenario === 'granular' ? `atproto repo:${collection}?action=create` : 'atproto'
-  const requestedScope = scenario === 'granular' ? `${grantedScope} repo:${collection}?action=update` : 'atproto'
+  const grantedScope = scenario === 'granular' ? `atproto repo:${collection}?action=create` : scenario === 'blobs' ? 'atproto blob:text/plain' : 'atproto'
+  const requestedScope = scenario === 'granular' ? `${grantedScope} repo:${collection}?action=update` : scenario === 'blobs' ? `${grantedScope} blob:image/png` : 'atproto'
   const redirect = 'http://127.0.0.1:8750/callback'
   const clientId = `http://localhost?${new URLSearchParams({ redirect_uri: redirect, scope: requestedScope })}`
   const client = new NodeOAuthClient({
@@ -91,6 +91,12 @@ try {
     assert.ok(html.includes('name="permission_2"'))
     consent.permission_1 = 'yes'
   }
+  if (scenario === 'blobs') {
+    assert.ok(html.includes('Upload media: text/plain'))
+    assert.ok(html.includes('Upload media: image/png'))
+    // Select text uploads and decline the requested PNG permission.
+    consent.permission_1 = 'yes'
+  }
   response = await browser('/oauth/authorize', consent)
   assert.equal(response.status, 303)
   const callback = new URL(response.headers.get('location'))
@@ -126,6 +132,30 @@ try {
     assert.equal(saved.status, 200)
     assert.deepEqual((await saved.json()).value, record)
   }
+  const upload = (mime, body) => session.fetchHandler('/xrpc/com.atproto.repo.uploadBlob', {
+    method: 'POST', headers: { 'content-type': mime }, body,
+  })
+  const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aK1sAAAAASUVORK5CYII=', 'base64')
+  const checkBlobPermissions = async suffix => {
+    const body = `allowed OAuth text ${suffix}`
+    const uploaded = await upload('text/plain', body)
+    assert.equal(uploaded.status, 200)
+    const { blob } = await uploaded.json()
+    assert.equal(blob.$type, 'blob')
+    assert.equal(blob.mimeType, 'text/plain')
+    assert.equal(blob.size, Buffer.byteLength(body))
+    assert.match(blob.ref.$link, /^b[a-z2-7]+$/)
+    await denied(upload('image/png', png))
+    // A permitted declaration must not bypass checks on sniffed media bytes.
+    await denied(upload('text/plain', png))
+    await denied(upload('application/json', '{"not":"granted"}'))
+    await denied(create('blob-grant-cannot-write'))
+  }
+  if (scenario === 'blobs') {
+    stage = 'granular blob upload and MIME restrictions'
+    assert.equal((await session.getTokenInfo()).scope, grantedScope)
+    await checkBlobPermissions('before refresh')
+  }
   if (scenario === 'granular') {
     stage = 'granular writes and consent narrowing'
     assert.equal((await session.getTokenInfo()).scope, grantedScope)
@@ -133,6 +163,7 @@ try {
     await checkRestrictions()
   } else {
     await denied(create('base-denied'))
+    if (scenario === 'base') await denied(upload('text/plain', 'base grant upload'))
   }
   stage = 'refresh'
   const info = await session.getTokenInfo(true)
@@ -144,6 +175,10 @@ try {
     stage = 'granular permissions after refresh'
     assert.equal((await create('second')).status, 200)
     await checkRestrictions()
+  }
+  if (scenario === 'blobs') {
+    stage = 'blob permissions after refresh'
+    await checkBlobPermissions('after refresh')
   }
   stage = 'source session logout'
   response = await browser('/account/sessions')

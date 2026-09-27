@@ -947,7 +947,7 @@ observations do not produce duplicate events. The
 - [ ] Comprehensive operational monitoring and alerting.
 - [x] Offline MST and compact-proof interoperability against pinned `@atproto/repo` 0.8.10 fixtures.
 - [x] Opt-in live HTTP integration with the official ATProto client, including signed repository and record-proof verification.
-- [x] Opt-in official OAuth SDK integration covering discovery, PAR, narrowed granular repository consent, DPoP resources, refresh and source-session revocation.
+- [x] Opt-in official OAuth SDK integration covering discovery, PAR, narrowed granular repository/blob consent, DPoP resources, refresh and source-session revocation.
 - [x] Upstream WebSocket firehose decoding, signed commit application, live delivery, cursor resumption and error-frame integration tests.
 - [ ] End-to-end compatibility tests with existing ATProto clients and servers.
 
@@ -1209,8 +1209,8 @@ accounts, tokens and keys are disposable and database changes roll back.
 
 Identity resolution uses a fixed synthetic DID document pointing at the temporary
 server; the SDK still checks that document's PDS against discovered issuer metadata.
-Two scenarios cover a localhost public client with base `atproto` scope and a
-granular repository grant. The base grant cannot write records. The granular flow
+Three scenarios cover a localhost public client with base `atproto` scope, a
+granular repository grant, and a granular blob grant. The base grant cannot write records. The granular flow
 requests create/update access to one collection but approves only create; the SDK
 receives the narrowed scope and can create records before and after refresh.
 Updates, deletes, cross-collection creates, and batches mixing permitted and
@@ -1218,8 +1218,16 @@ forbidden operations return `insufficient_scope`. Reads and a database assertion
 verify preserved record contents and no partial batch writes. Refresh preserves
 the consented scope rather than restoring declined permissions.
 
+The blob scenario requests text and PNG upload permissions, approving only text.
+It verifies successful text uploads and rejects PNG, JSON, and PNG bytes declared
+as text, both before and after refresh. The blob grant cannot write records, and
+the base grant cannot upload blobs. Database assertions compare the exact stored
+raw CIDs and bytes with the two permitted uploads, proving rejected uploads leave
+neither blob metadata nor PostgreSQL blob bytes. This harness uses PostgreSQL blob
+storage; it does not establish upstream OAuth interoperability with S3 storage.
+
 These tests do not establish live DID/handle resolution, confidential-client
-interoperability, other granular permission families, browser rendering, or
+interoperability, RPC/account/identity permission families, browser rendering, or
 complete OAuth profile compliance.
 The development-only HTTP identity exception is enabled only for this test and
 restored afterward. The `interop` tag remains excluded from default tests and CI

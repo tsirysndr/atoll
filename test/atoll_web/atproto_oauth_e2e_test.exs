@@ -2,7 +2,7 @@ defmodule AtollWeb.AtprotoOAuthE2ETest do
   use Atoll.DataCase, async: false
   @moduletag :interop
 
-  for scenario <- ["base", "granular"] do
+  for scenario <- ["base", "granular", "blobs"] do
     @tag scenario: scenario
     test "official OAuth SDK verifies #{scenario} grants through refresh and revocation", %{
       scenario: scenario
@@ -13,7 +13,8 @@ defmodule AtollWeb.AtprotoOAuthE2ETest do
         :session_signing_key,
         :key_encryption_key,
         :oauth_nonce_secret,
-        :localhost_dids_enabled
+        :localhost_dids_enabled,
+        :blob_storage
       ]
 
       previous = Map.new(keys, &{&1, Application.fetch_env(:atoll, &1)})
@@ -34,6 +35,7 @@ defmodule AtollWeb.AtprotoOAuthE2ETest do
           do: Application.put_env(:atoll, key, :crypto.strong_rand_bytes(32))
 
       Application.put_env(:atoll, :localhost_dids_enabled, true)
+      Application.put_env(:atoll, :blob_storage, backend: :postgres)
       server = start_supervised!({Bandit, plug: AtollWeb.Endpoint, port: 0, ip: {127, 0, 0, 1}})
       {:ok, {_, port}} = ThousandIsland.listener_info(server)
 
@@ -76,6 +78,33 @@ defmodule AtollWeb.AtprotoOAuthE2ETest do
 
       assert Repo.all(from r in Atoll.Repositories.Record, order_by: r.path, select: r.path) ==
                expected
+
+      expected_blobs =
+        if scenario == "blobs",
+          do:
+            Enum.map(
+              ["before refresh", "after refresh"],
+              &Atoll.CID.create("allowed OAuth text " <> &1, :raw)
+            )
+            |> Enum.sort(),
+          else: []
+
+      assert Repo.all(from b in Atoll.Blobs.Blob, order_by: b.cid, select: b.cid) ==
+               expected_blobs
+
+      raw_prefix = <<1, 0x55, 0x12, 0x20>>
+
+      assert Repo.all(
+               from b in Atoll.Storage.Block,
+                 where: fragment("substring(? from 1 for 4) = ?", b.cid, ^raw_prefix),
+                 order_by: b.cid,
+                 select: b.cid
+             ) == expected_blobs
+
+      for cid <- expected_blobs do
+        assert {:ok, bytes} = Atoll.Storage.get_block(cid)
+        assert bytes in ["allowed OAuth text before refresh", "allowed OAuth text after refresh"]
+      end
     end
   end
 end
