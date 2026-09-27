@@ -97,6 +97,40 @@ defmodule Atoll.Accounts.TokensTest do
     end
   end
 
+  test "revocation accepts expiry only and preserves signature, audience and refresh claim checks" do
+    {:ok, pair} = Tokens.pair(@did, Tokens.random_id(), @opts)
+    {:ok, claims} = Tokens.verify(pair.refresh_jwt, :refresh, @opts)
+    expired = Keyword.put(@opts, :now, claims["exp"])
+    assert {:ok, ^claims} = Tokens.verify_refresh_for_revocation(pair.refresh_jwt, expired)
+    assert {:error, :expired_token} = Tokens.verify(pair.refresh_jwt, :refresh, expired)
+
+    assert {:error, :invalid_token} =
+             Tokens.verify_refresh_for_revocation(pair.access_jwt, expired)
+
+    for token <- [nil, "", pair.refresh_jwt <> "x", String.duplicate("x", 8193)] do
+      assert {:error, :invalid_token} = Tokens.verify_refresh_for_revocation(token, expired)
+    end
+
+    for change <- [
+          %{"scope" => "com.atproto.access"},
+          %{"aud" => "did:web:other.test"},
+          %{"sub" => "invalid"},
+          %{"sid" => "invalid"},
+          %{"jti" => "invalid"},
+          %{"exp" => claims["exp"] + 1},
+          %{"iat" => claims["exp"] + 1, "exp" => claims["exp"] + 1 + 90 * 86_400}
+        ] do
+      token = sign(Map.merge(claims, change), %{"alg" => "HS256", "typ" => "refresh+jwt"})
+      assert {:error, :invalid_token} = Tokens.verify_refresh_for_revocation(token, expired)
+    end
+
+    assert {:error, :invalid_token} =
+             Tokens.verify_refresh_for_revocation(
+               pair.refresh_jwt,
+               Keyword.put(expired, :secret, :binary.copy(<<8>>, 32))
+             )
+  end
+
   defp sign(claims, header \\ %{"alg" => "HS256", "typ" => "at+jwt"}) do
     JOSE.JWK.from_oct(@opts[:secret])
     |> JOSE.JWT.sign(header, claims)

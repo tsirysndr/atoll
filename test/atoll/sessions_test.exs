@@ -109,6 +109,32 @@ defmodule Atoll.Accounts.SessionsTest do
     assert Sessions.refresh(unpersisted.refresh_jwt, @opts) == {:error, :invalid_token}
   end
 
+  test "expired current refresh tokens revoke only their own session, including inactive accounts" do
+    {:ok, first} = Sessions.create(@did, @password, @opts)
+    {:ok, claims} = Tokens.verify(first.refresh_jwt, :refresh, @opts)
+    expired = Keyword.put(@opts, :now, claims["exp"])
+    {:ok, independent} = Sessions.create(@did, @password, expired)
+    assert {:error, :expired_token} = Sessions.refresh(first.refresh_jwt, expired)
+    assert {:error, :expired_token} = Sessions.authenticate(first.access_jwt, expired)
+    {:ok, _} = Repositories.set_status(@did, :suspended)
+    assert {:ok, :ok} = Sessions.revoke(first.refresh_jwt, expired)
+    refute Repo.get(Session, claims["sid"])
+    assert {:error, :invalid_token} = Sessions.revoke(first.refresh_jwt, expired)
+    {:ok, _} = Repositories.set_status(@did, :active)
+    assert {:ok, %{did: @did}} = Sessions.authenticate(independent.access_jwt, expired)
+  end
+
+  test "an expired rotated refresh token cannot revoke the replacement session" do
+    {:ok, first} = Sessions.create(@did, @password, @opts)
+    {:ok, claims} = Tokens.verify(first.refresh_jwt, :refresh, @opts)
+    later = Keyword.put(@opts, :now, @opts[:now] + 60)
+    {:ok, second} = Sessions.refresh(first.refresh_jwt, later)
+    expired = Keyword.put(@opts, :now, claims["exp"])
+    assert {:error, :invalid_token} = Sessions.revoke(first.refresh_jwt, expired)
+    assert Repo.aggregate(Session, :count) == 1
+    assert {:ok, _} = Sessions.refresh(second.refresh_jwt, expired)
+  end
+
   test "taken-down and suspended repositories cannot create, authenticate or refresh sessions but can revoke" do
     for status <- [:takendown, :suspended] do
       {:ok, _} = Repositories.set_status(@did, :active)

@@ -139,6 +139,20 @@ defmodule AtollWeb.SessionControllerTest do
              conn |> get(@get, %{accessJwt: pair["accessJwt"]}) |> json_response(401)
   end
 
+  test "deleteSession accepts an expired current refresh token without reviving access", %{
+    conn: conn
+  } do
+    past = System.system_time(:second) - 90 * 86_400 - 60
+    {:ok, pair} = Sessions.create(@did, @password, now: past)
+    assert conn |> bearer(pair.refresh_jwt) |> post(@refresh) |> response(401)
+    assert conn |> bearer(pair.access_jwt) |> get(@get) |> response(401)
+    reply = conn |> bearer(pair.refresh_jwt) |> post(@delete)
+    assert response(reply, 200) == ""
+    assert get_resp_header(reply, "cache-control") == ["no-store"]
+    refute Atoll.Repo.exists?(Atoll.Accounts.Session)
+    assert conn |> bearer(pair.refresh_jwt) |> post(@delete) |> response(401)
+  end
+
   test "does not read credentials or signing options from query parameters", %{conn: conn} do
     response =
       conn

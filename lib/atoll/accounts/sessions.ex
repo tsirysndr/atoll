@@ -239,11 +239,11 @@ defmodule Atoll.Accounts.Sessions do
   defp full_scope(%{"scope" => "com.atproto.access"}), do: :ok
   defp full_scope(_), do: {:error, :forbidden}
 
-  @doc "Revokes a session with its current refresh token, even while the repository is inactive."
+  @doc "Revokes a session with its current refresh token, including expired sessions and inactive repositories."
   def revoke(token, opts \\ []) do
-    with {:ok, claims} <- Tokens.verify(token, :refresh, opts) do
+    with {:ok, claims} <- Tokens.verify_refresh_for_revocation(token, opts) do
       Repo.transaction(fn ->
-        session = session!(claims, opts, true)
+        session = session!(claims, opts, true, true)
         matching_refresh!(session, claims)
         Repo.delete!(session, log: false)
         :ok
@@ -251,7 +251,7 @@ defmodule Atoll.Accounts.Sessions do
     end
   end
 
-  defp session!(claims, opts, update?) do
+  defp session!(claims, opts, update?, allow_expired? \\ false) do
     query = from s in Session, where: s.id == ^claims["sid"] and s.did == ^claims["sub"]
 
     query =
@@ -266,7 +266,7 @@ defmodule Atoll.Accounts.Sessions do
        do: Repo.rollback(:invalid_token)
 
     now = Keyword.get(opts, :now, System.system_time(:second))
-    if session.expires_at <= now, do: Repo.rollback(:expired_token)
+    if session.expires_at <= now and not allow_expired?, do: Repo.rollback(:expired_token)
     session
   end
 

@@ -40,10 +40,14 @@ defmodule Atoll.Accounts.Tokens do
     end
   end
 
-  def verify(token, kind, opts \\ [])
+  def verify(token, kind, opts \\ []), do: verify_token(token, kind, opts, false)
 
-  def verify(token, kind, opts)
-      when is_binary(token) and byte_size(token) <= 8192 and kind in [:access, :refresh] do
+  @doc "Verifies a refresh token for revocation only, including after expiry; callers must check stored session ownership and token identity."
+  def verify_refresh_for_revocation(token, opts \\ []),
+    do: verify_token(token, :refresh, opts, true)
+
+  defp verify_token(token, kind, opts, allow_expired)
+       when is_binary(token) and byte_size(token) <= 8192 and kind in [:access, :refresh] do
     with {:ok, key, audience} <- configuration(opts),
          {:ok, previous} <- verification_keys(opts) do
       Enum.reduce_while([key | previous], {:error, :invalid_token}, fn candidate, _ ->
@@ -52,7 +56,8 @@ defmodule Atoll.Accounts.Tokens do
                kind,
                candidate,
                audience,
-               Keyword.get(opts, :now, System.system_time(:second))
+               Keyword.get(opts, :now, System.system_time(:second)),
+               allow_expired
              ) do
           {:error, :invalid_token} = error -> {:cont, error}
           result -> {:halt, result}
@@ -61,9 +66,9 @@ defmodule Atoll.Accounts.Tokens do
     end
   end
 
-  def verify(_, _, _), do: {:error, :invalid_token}
+  defp verify_token(_, _, _, _), do: {:error, :invalid_token}
 
-  defp verify_signed(token, kind, key, audience, now) do
+  defp verify_signed(token, kind, key, audience, now, allow_expired) do
     {typ, _scope, ttl} = profile(kind)
 
     with {true, %JOSE.JWT{fields: claims}, %JOSE.JWS{fields: header, b64: :undefined}} <-
@@ -83,7 +88,7 @@ defmodule Atoll.Accounts.Tokens do
          true <-
            is_integer(issued) and is_integer(expires) and issued >= 0 and
              issued <= now and expires - issued == ttl do
-      if expires > now, do: {:ok, claims}, else: {:error, :expired_token}
+      if expires > now or allow_expired, do: {:ok, claims}, else: {:error, :expired_token}
     else
       _ -> {:error, :invalid_token}
     end

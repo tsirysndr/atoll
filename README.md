@@ -516,6 +516,14 @@ omits tokens. Deletion returns an empty 200 response. Credentials must be in the
 body, and tokens must be in a single Authorization header; query parameters cannot
 supply them. Session responses and errors use `Cache-Control: no-store`.
 
+Session deletion accepts an expired **current** refresh token, matching the
+[reference PDS revocation policy](https://github.com/bluesky-social/atproto/blob/main/packages/pds/src/api/com/atproto/server/deleteSession.ts).
+Its signature, audience, refresh scope, session owner, token identifier and stored
+expiry must still match. Expired tokens cannot authenticate or refresh a session;
+this exception only permits deletion. Rotated tokens, access tokens and tokens
+for already deleted or cleaned-up sessions remain invalid. Other sessions for the
+same account are unaffected, and inactive accounts can still delete sessions.
+
 Session request bodies are limited to 4 KiB before general parsing. Login permits
 20 attempts per direct peer IP per five minutes; other session methods share a
 300-request limit per peer per five minutes. The limiter retains at most 10000
