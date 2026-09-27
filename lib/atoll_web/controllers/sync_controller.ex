@@ -64,19 +64,31 @@ defmodule AtollWeb.SyncController do
     end
   end
 
+  def list_repos_by_collection(conn, params) do
+    with true <- Syntax.nsid?(params["collection"]),
+         {:ok, limit} <- limit(params["limit"], 2000),
+         true <- is_nil(params["cursor"]) or Syntax.did?(params["cursor"]) do
+      json(conn, Repositories.list_by_collection(params["collection"], limit, params["cursor"]))
+    else
+      false -> {:error, :invalid_request}
+      error -> error
+    end
+  end
+
   defp head(%{"did" => did}) do
     if Syntax.did?(did), do: Repositories.get_head(did), else: {:error, :invalid_request}
   end
 
   defp head(_), do: {:error, :invalid_request}
-  defp limit(nil), do: {:ok, 500}
+  defp limit(value, maximum \\ 1000)
+  defp limit(nil, _), do: {:ok, 500}
 
-  defp limit(value) when is_binary(value) do
+  defp limit(value, maximum) when is_binary(value) do
     case Integer.parse(value) do
-      {n, ""} when n in 1..1000 -> {:ok, n}
+      {n, ""} when n >= 1 and n <= maximum -> {:ok, n}
       _ -> {:error, :invalid_request}
     end
   end
 
-  defp limit(_), do: {:error, :invalid_request}
+  defp limit(_, _), do: {:error, :invalid_request}
 end

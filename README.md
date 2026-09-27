@@ -793,6 +793,7 @@ locking protects shared objects when collectors overlap.
 - [x] Incremental repository exports using `since`, backed by per-repository revision block sets; unknown revisions return a full snapshot.
 - [x] Transactional per-repository block reference counts for quota/status inventory and garbage-collection lookups.
 - [x] Bounded operator revision-history compaction preserving current heads and retained replay dependencies.
+- [x] `com.atproto.sync.listReposByCollection` with indexed collection lookup, distinct active DIDs and exclusive pagination.
 - [x] `getLatestCommit`, `getRepoStatus`, and paginated `listRepos` sync endpoints with persistent repository status.
 - [x] `com.atproto.sync.getRecord` compact signed existence and absence proofs.
 - [x] Bounded verification of partial MST search paths and signed record CAR inclusion proofs.
@@ -934,6 +935,27 @@ The opt-in authentication-state cleanup worker schedules replay-marker pruning.
 Migration account creation uses this verifier, which
 uses the configured PLC resolution policy: directory HTTPS trust by default, or
 independent audit verification when enabled.
+
+`GET /xrpc/com.atproto.sync.listReposByCollection?collection=com.example.record`
+lists distinct active hosted DIDs with at least one current record in that exact
+collection. The response contains `repos: [{did: "..."}]`; the default page size
+is 500 and `limit` accepts 1–2000, following the vendored
+[upstream Lexicon](https://github.com/bluesky-social/atproto/blob/7a857989751ae31518509d69ab7194a922064f3d/lexicons/com/atproto/sync/listReposByCollection.json).
+The optional cursor is the last returned DID, ordered bytewise and exclusive.
+A response includes a cursor only when another matching DID exists. Continue with
+the same collection; pagination observes current committed state, not a snapshot
+across requests. A valid collection with no records returns an empty list; a missing or malformed
+collection is rejected.
+
+This public discovery query excludes deactivated, suspended and taken-down
+accounts. Supplied OAuth credentials still undergo normal public-read proof and
+grant validation; owner credentials do not broaden the result. Record takedowns
+retain signed sync data and therefore do not remove collection membership.
+Membership derives from current repository records, so writes, deletions and
+imports need no separate asynchronous inventory update. A database expression
+index on collection and bytewise DID supports lookup and pagination. Run the new
+migration before serving the route; creating this index takes the usual PostgreSQL
+index-build lock on record writes, so schedule it appropriately for large servers.
 
 For local development, connect to
 `ws://localhost:4000/xrpc/com.atproto.sync.subscribeRepos?cursor=0`.

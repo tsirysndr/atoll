@@ -95,6 +95,7 @@ defmodule AtollWeb.Router do
     get "/com.atproto.repo.listRecords", RepoController, :list_records
     get "/com.atproto.sync.getLatestCommit", SyncController, :latest_commit
     get "/com.atproto.sync.getRepoStatus", SyncController, :repo_status
+    get "/com.atproto.sync.listReposByCollection", SyncController, :list_repos_by_collection
     get "/com.atproto.sync.listRepos", SyncController, :list_repos
     get "/com.atproto.sync.listBlobs", BlobController, :list_blobs
   end

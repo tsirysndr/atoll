@@ -23,6 +23,7 @@ defmodule AtollWeb.OAuthPolicyPlug do
     com.atproto.sync.getLatestCommit
     com.atproto.sync.getRepoStatus
     com.atproto.sync.listRepos
+    com.atproto.sync.listReposByCollection
     com.atproto.sync.subscribeRepos
   )
 

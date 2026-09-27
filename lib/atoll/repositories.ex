@@ -494,6 +494,29 @@ defmodule Atoll.Repositories do
     if length(rows) > limit, do: Map.put(result, :cursor, List.last(page).did), else: result
   end
 
+  @doc "Lists distinct active repositories containing a collection, in bytewise DID order."
+  def list_by_collection(collection, limit, cursor \\ nil) when limit in 1..2000 do
+    query =
+      from r in Record,
+        join: h in Head,
+        on: h.did == r.did,
+        where: h.status == :active and fragment("split_part(?, '/', 1) = ?", r.path, ^collection),
+        select: %{did: fragment("? COLLATE \"C\"", r.did)},
+        distinct: true,
+        order_by: [asc: fragment("? COLLATE \"C\"", r.did)],
+        limit: ^(limit + 1)
+
+    query =
+      if is_nil(cursor),
+        do: query,
+        else: from(r in query, where: fragment("? COLLATE \"C\" > ?", r.did, ^cursor))
+
+    rows = Repo.all(query)
+    page = Enum.take(rows, limit)
+    result = %{repos: page}
+    if length(rows) > limit, do: Map.put(result, :cursor, List.last(page).did), else: result
+  end
+
   def get_record(did, path) when is_binary(did) and is_binary(path) do
     Repo.transaction(fn ->
       locked_head!(did, "FOR SHARE")
