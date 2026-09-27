@@ -1,8 +1,8 @@
 defmodule AtollWeb.OAuthRequestPlug do
-  @moduledoc "PAR and token HTTP boundary before general parsing, logging, or method rewriting."
+  @moduledoc "PAR, token and revocation HTTP boundary before general parsing, logging, or method rewriting."
   @behaviour Plug
   import Plug.Conn
-  alias Atoll.OAuth.{DPoP, Form, Nonce, PAR, CodeExchange, Refresh}
+  alias Atoll.OAuth.{DPoP, Form, Nonce, PAR, CodeExchange, Refresh, Revocation}
   @limit 49_152
   @allowed_headers ~w(content-type dpop)
 
@@ -11,6 +11,7 @@ defmodule AtollWeb.OAuthRequestPlug do
   def call(conn, _opts) do
     case Enum.map(conn.path_info, &URI.decode/1) do
       ["oauth", "par"] -> handle(put_private(conn, :oauth_endpoint, :oauth_par))
+      ["oauth", "revoke"] -> handle(put_private(conn, :oauth_endpoint, :oauth_revoke))
       ["oauth", "token"] -> handle(put_private(conn, :oauth_endpoint, :oauth_token))
       _ -> conn
     end
@@ -47,8 +48,9 @@ defmodule AtollWeb.OAuthRequestPlug do
     end
   end
 
-  defp route(%{request_path: path} = conn) when path not in ["/oauth/par", "/oauth/token"],
-    do: error(conn, 400, "invalid_request")
+  defp route(%{request_path: path} = conn)
+       when path not in ["/oauth/par", "/oauth/token", "/oauth/revoke"],
+       do: error(conn, 400, "invalid_request")
 
   defp route(%{method: "OPTIONS"} = conn), do: preflight(conn)
   defp route(%{method: "POST"} = conn), do: parse(conn)
@@ -78,7 +80,8 @@ defmodule AtollWeb.OAuthRequestPlug do
     end
   end
 
-  defp reject_authorization(%{private: %{oauth_endpoint: :oauth_token}} = conn) do
+  defp reject_authorization(%{private: %{oauth_endpoint: endpoint}} = conn)
+       when endpoint in [:oauth_token, :oauth_revoke] do
     with [header] <- get_req_header(conn, "authorization"),
          [scheme | _] <- String.split(header, " ", parts: 2),
          true <- Regex.match?(~r/\A[A-Za-z][A-Za-z0-9_-]{0,63}\z/, scheme) do
@@ -133,6 +136,8 @@ defmodule AtollWeb.OAuthRequestPlug do
     end
   end
 
+  defp execute(:oauth_revoke, params, headers, opts), do: Revocation.revoke(params, headers, opts)
+
   defp execute(:oauth_par, params, headers, opts), do: PAR.push(params, headers, opts)
 
   defp execute(:oauth_token, %{"grant_type" => "authorization_code"} = params, headers, opts),
@@ -168,6 +173,7 @@ defmodule AtollWeb.OAuthRequestPlug do
 
   defp oauth_error(conn, reason)
        when reason in [
+              :oauth_revocation_store_unavailable,
               :oauth_refresh_store_full,
               :oauth_refresh_store_unavailable,
               :oauth_session_limit,

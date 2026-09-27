@@ -8,6 +8,9 @@ defmodule Atoll.OAuth.ServerMetadata do
        %{
          issuer: origin,
          authorization_endpoint: origin <> "/oauth/authorize",
+         revocation_endpoint: origin <> "/oauth/revoke",
+         revocation_endpoint_auth_methods_supported: ["none", "private_key_jwt"],
+         revocation_endpoint_auth_signing_alg_values_supported: ["ES256"],
          token_endpoint: origin <> "/oauth/token",
          pushed_authorization_request_endpoint: origin <> "/oauth/par",
          response_types_supported: ["code"],

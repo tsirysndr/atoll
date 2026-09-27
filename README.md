@@ -440,6 +440,7 @@ mutation. Deletes and empty batches need no record schema, even with `validate: 
 - [x] Internal RFC 6238 TOTP verification, authenticator provisioning URIs, and account-bound encrypted secret envelopes.
 - [x] Internal persistent TOTP enrollment and confirmation, one-time login codes, database attempt limits, and key rotation.
 - [x] Authenticator enrollment/management UI and single-use recovery codes (optional TOTP).
+- [x] Client-authenticated OAuth token revocation with DPoP binding, grant-wide invalidation and discovery metadata.
 - [x] Internal owner-authenticated OAuth session inventory and per-grant revocation.
 - [x] Browser account login, OAuth session inventory/revocation, and logout with encrypted cookies and CSRF protection.
 - [x] Persisted OAuth client/DPoP/session bindings and source password-session deletion cascades.
@@ -1354,8 +1355,10 @@ The harness checks the package name/version without installing dependencies. The
 SDK performs resource and authorization discovery, PKCE/PAR with server nonce
 retry, authorization-code exchange and issuer verification, DPoP resource access
 with nonce retry, and refresh rotation. The HTTP browser harness follows login
-and explicit consent with cookies and CSRF fields; it then logs out the source
-session and verifies that SDK resource access fails. Callback URLs are inspected
+and explicit consent with cookies and CSRF fields. Base and confidential cases
+use SDK `signOut()` and require a successful revocation request, an empty grant
+inventory, and a surviving source session. Other cases log out the source session
+and verify that SDK resource access fails. Callback URLs are inspected
 and passed to the SDK, never fetched. Requests are restricted to the temporary
 server origin, with five-second request and 45-second overall deadlines. Test
 accounts, tokens and keys are disposable and database changes roll back.
@@ -5470,7 +5473,7 @@ are described below. Protocol references:
 
 `GET /.well-known/oauth-protected-resource` identifies this PDS and its colocated
 authorization server. `GET /.well-known/oauth-authorization-server` advertises the
-implemented authorization, PAR and token endpoints, PKCE S256, ES256 DPoP and
+implemented authorization, PAR, token and revocation endpoints, PKCE S256, ES256 DPoP and
 client assertions, public/confidential clients, refresh grants, transitional
 scopes and `prompt=create`. Explicit `response_mode=query` is accepted by PAR;
 other response modes are rejected. The static scope list includes `repo:*` and
@@ -5493,10 +5496,10 @@ headers. Query strings and encoded path aliases are rejected; unsupported method
 return 405 before request-body parsing. Error responses are not cached.
 
 Metadata describes capabilities even when account signup is disabled or secrets
-are unconfigured. PAR/token still require the configured OAuth nonce secret, and
+are unconfigured. PAR/token/revocation still require the configured OAuth nonce secret, and
 account login requires the session secrets. Legacy Bearer sessions remain
 supported, so resource metadata does not claim every access token is DPoP-bound.
-No unimplemented registration, revocation, introspection, userinfo or JWKS endpoint
+No unimplemented registration, introspection, userinfo or JWKS endpoint
 is advertised. Discovery follows the
 [ATProto server metadata profile](https://atproto.com/specs/oauth#server-metadata).
 HTTP tests follow discovery through PAR, password login, consent, code exchange,
@@ -5638,7 +5641,7 @@ endpoint URL, using an authorization-server nonce; HTTP 400 `use_dpop_nonce`
 provides a fresh `DPoP-Nonce` for retry before client metadata retrieval or
 assertion consumption. Success returns HTTP 200 with the token response above.
 
-PAR and token routes share `AtollWeb.OAuthRequestPlug`, ahead of general body
+PAR, token and revocation routes share `AtollWeb.OAuthRequestPlug`, ahead of general body
 parsing, method overrides, and controller logging. The token route has a separate
 20-request/five-minute peer budget, including malformed requests and preflight.
 It inherits the 48 KiB encoded body limit, five-second body-read timeout, strict
@@ -6693,3 +6696,32 @@ suite excludes this `:browser` test; GitHub CI runs it as a separate step using
 the runner's installed browser. Screenshots are written as `atoll-passkey-*.png`
 in the system temporary directory. This verifies the passkey browser flow, not
 complete ATProto federation or third-party client interoperability.
+
+
+### OAuth client logout
+
+`POST /oauth/revoke` accepts form-encoded `client_id`, `token`, optional
+`token_type_hint`, and confidential-client assertion fields. Discovery advertises
+this endpoint and its `none` / `private_key_jwt` authentication methods. As with
+PAR/token, send a fresh ES256 DPoP proof with an authorization-server nonce,
+targeting the configured `/oauth/revoke` URL. This endpoint has its own
+20-request-per-peer/five-minute budget and shares the strict form, CORS,
+no-store and pre-parser protections of the token endpoint.
+
+An access token, current refresh token, or retained rotated refresh token can
+revoke its entire OAuth grant. All access tokens and refresh history belonging
+to that grant are deleted atomically; the source password/passkey session and
+other grants remain. Revocation works even when the source account session has
+expired or the account is deactivated. Refresh and revocation share the grant
+mutation lock, so a concurrent refresh cannot leave an orphaned usable token.
+
+Client authentication uses fresh metadata and, for confidential clients, a fresh
+assertion validated against the original session key binding. Token lookup also
+checks issuer, client ID and DPoP key. Unknown, foreign, mismatched-binding and
+already-revoked tokens return the same HTTP 200 `{}` after proof/client admission.
+Invalid proofs and client authentication still fail; replayed proofs/assertions
+cannot revoke a grant. Token hints are ignored, including unknown hints, as
+permitted by [RFC 7009](https://www.rfc-editor.org/rfc/rfc7009.html).
+The ATProto [official OAuth client](https://github.com/bluesky-social/atproto/blob/main/packages/oauth/oauth-client/src/oauth-server-agent.ts)
+uses the discovery endpoint for logout with its existing client credentials and
+DPoP key. No tokens or assertions are written to application logs by this route.

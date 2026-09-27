@@ -35,6 +35,14 @@ defmodule AtollWeb.OAuthMetadataTest do
     assert authorization["protected_resources"] == [@origin]
     assert authorization["authorization_endpoint"] == @origin <> "/oauth/authorize"
     assert authorization["pushed_authorization_request_endpoint"] == @origin <> "/oauth/par"
+    assert authorization["revocation_endpoint"] == @origin <> "/oauth/revoke"
+
+    assert authorization["revocation_endpoint_auth_methods_supported"] == [
+             "none",
+             "private_key_jwt"
+           ]
+
+    assert authorization["revocation_endpoint_auth_signing_alg_values_supported"] == ["ES256"]
     assert authorization["token_endpoint"] == @origin <> "/oauth/token"
     assert authorization["grant_types_supported"] == ["authorization_code", "refresh_token"]
     assert authorization["response_types_supported"] == ["code"]
@@ -55,7 +63,7 @@ defmodule AtollWeb.OAuthMetadataTest do
     assert authorization["client_id_metadata_document_supported"]
 
     for field <-
-          ~w(jwks_uri registration_endpoint revocation_endpoint introspection_endpoint userinfo_endpoint),
+          ~w(jwks_uri registration_endpoint introspection_endpoint userinfo_endpoint),
         do: refute(Map.has_key?(authorization, field))
   end
 

@@ -166,7 +166,10 @@ defmodule AtollWeb.AtprotoOAuthE2ETest do
       end
 
       assert Repo.aggregate(Atoll.OAuth.Session, :count) == 0
-      expected_sources = if scenario in ["key_removed", "key_replaced"], do: 1, else: 0
+
+      expected_sources =
+        if scenario in ["base", "confidential", "key_removed", "key_replaced"], do: 1, else: 0
+
       assert Repo.aggregate(Atoll.Accounts.Session, :count) == expected_sources
       assert Repo.aggregate(Atoll.OAuth.AccessToken, :count) == 0
       assert Repo.get!(Atoll.Accounts.Profile, did) == profile

@@ -58,6 +58,105 @@ defmodule Atoll.OAuth.RefreshTest do
     end
   end
 
+  test "client revocation accepts access, current refresh and rotated refresh tokens", c do
+    for kind <- [:access, :refresh, :used_refresh] do
+      grant = grant(c)
+      {:ok, tokens} = exchange(grant)
+      {:ok, rotated} = refresh(grant, tokens.refresh_token)
+
+      token =
+        case kind do
+          :access -> tokens.access_token
+          :refresh -> rotated.refresh_token
+          :used_refresh -> tokens.refresh_token
+        end
+
+      session = Repo.get!(AccessToken, :crypto.hash(:sha256, rotated.access_token)).session_id
+      assert {:ok, %{}} = revoke(grant, token, %{"token_type_hint" => "unknown_hint"})
+      refute Repo.get(Session, session)
+      refute Repo.get(AccessToken, :crypto.hash(:sha256, rotated.access_token))
+      refute Repo.get(RefreshUse, :crypto.hash(:sha256, tokens.refresh_token))
+      assert {:ok, %{}} = revoke(grant, token)
+      assert {:error, :invalid_grant} = refresh(grant, rotated.refresh_token)
+    end
+
+    # The unrelated grant and source account session survive.
+    assert Repo.aggregate(Session, :count) == 1
+    assert Repo.aggregate(Atoll.Accounts.Session, :count) == 1
+  end
+
+  test "revocation binds issuer, client, proof and original confidential key", c do
+    wrong = %{c | key: JOSE.JWK.generate_key({:ec, :secp256r1})}
+    assert {:ok, %{}} = revoke(wrong, c.tokens.access_token)
+    other = "https://other.example.com/metadata.json"
+
+    foreign = %{
+      c
+      | opts: Keyword.merge(c.opts, transport(Map.put(c.metadata, "client_id", other)))
+    }
+
+    assert {:ok, %{}} = revoke(foreign, c.tokens.refresh_token, %{"client_id" => other})
+    assert Repo.aggregate(Session, :count) == 1
+    assert {:ok, %{}} = revoke(c, "unknown-token")
+    header = proof(c, "/oauth/token")
+
+    assert {:error, :invalid_dpop_proof} =
+             Atoll.OAuth.Revocation.revoke(
+               %{"client_id" => @id, "token" => c.tokens.access_token},
+               [header],
+               c.opts
+             )
+
+    key = JOSE.JWK.generate_key({:ec, :secp256r1})
+    {_, public} = JOSE.JWK.to_public_map(key)
+
+    metadata =
+      Map.merge(c.metadata, %{
+        "token_endpoint_auth_method" => "private_key_jwt",
+        "jwks" => %{"keys" => [Map.put(public, "kid", "client-key")]}
+      })
+
+    confidential =
+      grant(Map.merge(c, %{auth_key: key, opts: Keyword.merge(c.opts, transport(metadata))}))
+
+    {:ok, tokens} = exchange(confidential)
+
+    assert {:error, :invalid_client_assertion} =
+             revoke(
+               %{confidential | auth_key: JOSE.JWK.generate_key({:ec, :secp256r1})},
+               tokens.access_token
+             )
+
+    # Downgrading metadata to public authentication cannot revoke a confidential grant.
+    assert {:ok, %{}} = revoke(c, tokens.access_token)
+    assert Repo.aggregate(Session, :count) == 2
+    assert {:ok, %{}} = revoke(confidential, tokens.access_token)
+    assert Repo.aggregate(Session, :count) == 1
+  end
+
+  test "revocation rejects proof replay and works after account or token expiry", c do
+    params = %{"client_id" => @id, "token" => c.tokens.access_token}
+    header = proof(c, "/oauth/revoke")
+
+    assert {:ok, %{}} =
+             Atoll.OAuth.Revocation.revoke(%{params | "token" => "missing"}, [header], c.opts)
+
+    assert {:error, :dpop_replayed} = Atoll.OAuth.Revocation.revoke(params, [header], c.opts)
+    assert Repo.aggregate(Session, :count) == 1
+    Repo.update_all(AccessToken, set: [expires_at: 1])
+    Repo.update_all(Atoll.Accounts.Session, set: [expires_at: 1])
+    Repo.update_all(Atoll.Repositories.Head, set: [status: :deactivated])
+    assert {:ok, %{}} = revoke(c, c.tokens.access_token)
+    assert Repo.aggregate(Session, :count) == 0
+  end
+
+  defp revoke(c, token, changes \\ %{}) do
+    params =
+      %{"client_id" => @id, "token" => token} |> Map.merge(assertion(c)) |> Map.merge(changes)
+
+    Atoll.OAuth.Revocation.revoke(params, [proof(c, "/oauth/revoke")], c.opts)
+  end
+
   test "rotation retains bindings and expiry, storing token hashes and per-access scope", c do
     session = Repo.one!(Session)
     assert {:ok, tokens} = refresh(c, c.tokens.refresh_token)
@@ -277,99 +376,120 @@ defmodule Atoll.OAuth.RefreshTest do
     end
   end
 
-  @tag :independent
-  test "concurrent refreshes rotate once then revoke on verified reuse", c do
-    did = "did:plc:exchange#{System.unique_integer([:positive])}"
-    key = SigningKey.generate()
-    {:ok, tree} = Atoll.MST.new()
-    {:ok, commit} = Atoll.Commit.create(did, tree.root, c.head.rev, key)
-    token = "atoll_refresh_" <> random()
+  for operation <- [:refresh, :revoke] do
+    @tag independent: true, operation: operation
+    test "concurrent refresh and #{operation} cannot leave usable tokens",
+         %{operation: operation} = c do
+      did = "did:plc:exchange#{System.unique_integer([:positive])}"
+      key = SigningKey.generate()
+      {:ok, tree} = Atoll.MST.new()
+      {:ok, commit} = Atoll.Commit.create(did, tree.root, c.head.rev, key)
+      token = "atoll_refresh_" <> random()
 
-    params = %{"grant_type" => "refresh_token", "client_id" => @id, "refresh_token" => token}
+      params = %{"grant_type" => "refresh_token", "client_id" => @id, "refresh_token" => token}
 
-    headers = for _ <- 1..2, do: proof(c, "/oauth/token")
+      headers = [
+        proof(c, "/oauth/token"),
+        proof(c, if(operation == :revoke, do: "/oauth/revoke", else: "/oauth/token"))
+      ]
 
-    proof_digests =
-      Enum.map(headers, fn token ->
-        [_, payload, _] = String.split(token, ".")
-        claims = payload |> Base.url_decode64!(padding: false) |> Jason.decode!()
+      proof_digests =
+        Enum.map(headers, fn token ->
+          [_, payload, _] = String.split(token, ".")
+          claims = payload |> Base.url_decode64!(padding: false) |> Jason.decode!()
 
-        :crypto.hash(
-          :sha256,
-          Atoll.CBOR.encode!([
-            "atoll.oauth.dpop-use.v1",
-            @issuer,
-            "authorization",
-            JOSE.JWK.thumbprint(c.key),
-            claims["jti"]
-          ])
-        )
+          :crypto.hash(
+            :sha256,
+            Atoll.CBOR.encode!([
+              "atoll.oauth.dpop-use.v1",
+              @issuer,
+              "authorization",
+              JOSE.JWK.thumbprint(c.key),
+              claims["jti"]
+            ])
+          )
+        end)
+
+      on_exit(fn ->
+        Ecto.Adapters.SQL.Sandbox.unboxed_run(Repo, fn ->
+          Repo.delete_all(from h in Atoll.Repositories.Head, where: h.did == ^did)
+          Repo.delete_all(from b in Atoll.Storage.Block, where: b.cid == ^commit.cid)
+          Repo.delete_all(from p in ProofUse, where: p.digest in ^proof_digests)
+        end)
       end)
 
-    on_exit(fn ->
       Ecto.Adapters.SQL.Sandbox.unboxed_run(Repo, fn ->
-        Repo.delete_all(from h in Atoll.Repositories.Head, where: h.did == ^did)
-        Repo.delete_all(from b in Atoll.Storage.Block, where: b.cid == ^commit.cid)
-        Repo.delete_all(from p in ProofUse, where: p.digest in ^proof_digests)
+        :ok = Atoll.Storage.put_block(commit.cid, commit.bytes)
+
+        Repo.insert!(%Atoll.Repositories.Head{
+          did: did,
+          head: commit.cid,
+          rev: c.head.rev,
+          curve: key.curve,
+          public_key: key.public
+        })
+
+        {:ok, pair} = Sessions.create_for_account(did, c.opts[:session_options])
+
+        {:ok, claims} =
+          Atoll.Accounts.Tokens.verify(pair.access_jwt, :access, c.opts[:session_options])
+
+        Repo.insert!(%Session{
+          id: random(),
+          did: did,
+          source_session_id: claims["sid"],
+          issuer: @issuer,
+          client_id: @id,
+          scope: "atproto",
+          dpop_jkt: JOSE.JWK.thumbprint(c.key),
+          refresh_digest: :crypto.hash(:sha256, token),
+          expires_at: System.system_time(:second) + 3600
+        })
       end)
-    end)
 
-    Ecto.Adapters.SQL.Sandbox.unboxed_run(Repo, fn ->
-      :ok = Atoll.Storage.put_block(commit.cid, commit.bytes)
+      supervisor = start_supervised!(Task.Supervisor)
 
-      Repo.insert!(%Atoll.Repositories.Head{
-        did: did,
-        head: commit.cid,
-        rev: c.head.rev,
-        curve: key.curve,
-        public_key: key.public
-      })
+      results =
+        Task.Supervisor.async_stream_nolink(
+          supervisor,
+          Enum.zip([:refresh, operation], headers),
+          fn {action, header} ->
+            Ecto.Adapters.SQL.Sandbox.unboxed_run(Repo, fn ->
+              case action do
+                :refresh ->
+                  Refresh.exchange(params, [header], c.opts)
 
-      {:ok, pair} = Sessions.create_for_account(did, c.opts[:session_options])
+                :revoke ->
+                  Atoll.OAuth.Revocation.revoke(
+                    %{"client_id" => @id, "token" => token},
+                    [header],
+                    c.opts
+                  )
+              end
+            end)
+          end,
+          max_concurrency: 2,
+          timeout: 10_000
+        )
+        |> Enum.map(fn {:ok, result} -> result end)
 
-      {:ok, claims} =
-        Atoll.Accounts.Tokens.verify(pair.access_jwt, :access, c.opts[:session_options])
+      if operation == :refresh do
+        assert Enum.count(results, &match?({:ok, _}, &1)) == 1, inspect(results)
+        assert Enum.count(results, &(&1 == {:error, :invalid_grant})) == 1
+      else
+        assert Enum.at(results, 1) == {:ok, %{}}
+        assert match?({:ok, _}, hd(results)) or hd(results) == {:error, :invalid_grant}
+      end
 
-      Repo.insert!(%Session{
-        id: random(),
-        did: did,
-        source_session_id: claims["sid"],
-        issuer: @issuer,
-        client_id: @id,
-        scope: "atproto",
-        dpop_jkt: JOSE.JWK.thumbprint(c.key),
-        refresh_digest: :crypto.hash(:sha256, token),
-        expires_at: System.system_time(:second) + 3600
-      })
-    end)
+      Ecto.Adapters.SQL.Sandbox.unboxed_run(Repo, fn ->
+        refute Repo.exists?(from s in Session, where: s.did == ^did)
 
-    supervisor = start_supervised!(Task.Supervisor)
-
-    results =
-      Task.Supervisor.async_stream_nolink(
-        supervisor,
-        headers,
-        fn header ->
-          Ecto.Adapters.SQL.Sandbox.unboxed_run(Repo, fn ->
-            Refresh.exchange(params, [header], c.opts)
-          end)
-        end,
-        max_concurrency: 2,
-        timeout: 10_000
-      )
-      |> Enum.map(fn {:ok, result} -> result end)
-
-    assert Enum.count(results, &match?({:ok, _}, &1)) == 1, inspect(results)
-    assert Enum.count(results, &(&1 == {:error, :invalid_grant})) == 1
-
-    Ecto.Adapters.SQL.Sandbox.unboxed_run(Repo, fn ->
-      refute Repo.exists?(from s in Session, where: s.did == ^did)
-
-      assert Repo.aggregate(
-               from(u in RefreshUse, where: u.digest == ^:crypto.hash(:sha256, token)),
-               :count
-             ) == 0
-    end)
+        assert Repo.aggregate(
+                 from(u in RefreshUse, where: u.digest == ^:crypto.hash(:sha256, token)),
+                 :count
+               ) == 0
+      end)
+    end
   end
 
   defp refresh(c, token, changes \\ %{}),

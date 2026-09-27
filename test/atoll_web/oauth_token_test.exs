@@ -309,6 +309,62 @@ defmodule AtollWeb.OAuthTokenTest do
     assert get(c.conn, "/health") |> json_response(200)
   end
 
+  test "revocation endpoint supports logout, idempotency, nonce admission and strict forms", c do
+    tokens = send_form(c, URI.encode_query(c.params)) |> json_response(200)
+    assert_received :metadata_fetched
+    body = URI.encode_query(%{"client_id" => @id, "token" => tokens["access_token"]})
+    base = put_req_header(c.conn, "content-type", "application/x-www-form-urlencoded")
+
+    challenge =
+      base
+      |> put_req_header("dpop", proof(%{c | nonce: "unknown"}, "/oauth/revoke"))
+      |> post("/oauth/revoke", body)
+
+    assert json_response(challenge, 400) == %{"error" => "use_dpop_nonce"}
+    assert get_resp_header(challenge, "dpop-nonce") != []
+    refute_received :metadata_fetched
+    assert Repo.aggregate(Session, :count) == 1
+
+    for _ <- 1..2 do
+      result =
+        base |> put_req_header("dpop", proof(c, "/oauth/revoke")) |> post("/oauth/revoke", body)
+
+      assert json_response(result, 200) == %{}
+      assert get_resp_header(result, "cache-control") == ["no-store"]
+      assert get_resp_header(result, "access-control-allow-origin") == ["*"]
+      assert_received :metadata_fetched
+    end
+
+    assert Repo.aggregate(Session, :count) == 0
+    assert Repo.aggregate(AccessToken, :count) == 0
+    assert Repo.aggregate(Atoll.Accounts.Session, :count) == 1
+
+    for {path, form} <- [
+          {"/oauth/revoke", body <> "&token=duplicate"},
+          {"/oauth/revoke?token=x", body},
+          {"/oauth/%72evoke", body}
+        ] do
+      assert base
+             |> put_req_header("dpop", proof(c, "/oauth/revoke"))
+             |> post(path, form)
+             |> json_response(400)
+    end
+
+    refute_received :metadata_fetched
+    assert get(base, "/oauth/revoke").status == 405
+
+    preflight =
+      base
+      |> put_req_header("origin", "https://app.example.com")
+      |> put_req_header("access-control-request-method", "POST")
+      |> put_req_header("access-control-request-headers", "content-type, dpop")
+      |> options("/oauth/revoke")
+
+    assert response(preflight, 204) == ""
+    for _ <- 1..20, do: Atoll.Accounts.SessionLimiter.check({:oauth_revoke, c.conn.remote_ip}, 20)
+    assert post(base, "/oauth/revoke", "%ZZ").status == 429
+  end
+
   defp transport(metadata) do
     parent = self()
 

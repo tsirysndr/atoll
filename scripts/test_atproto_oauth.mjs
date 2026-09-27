@@ -299,13 +299,23 @@ try {
     await checkEmailPrivacy()
     stage = 'RPC permissions after refresh'
     await checkRpcPermissions()
-    stage = 'source session logout'
-    response = await browser('/account/sessions')
-    html = await response.text()
-    response = await browser('/account/logout', { _csrf_token: value(html, '_csrf_token') })
-    assert.equal(response.status, 303)
-    response = scenario === 'rpc' ? await serviceToken({ aud: audience, lxm: method }) : await session.fetchHandler('/xrpc/com.atproto.server.getSession')
-    assert.equal(response.status, 401)
+    if (scenario === 'base' || scenario === 'confidential') {
+      stage = 'official SDK token revocation'
+      await session.signOut()
+      // SDK logout swallows remote errors; require an actual successful request.
+      assert.ok(requests.some(r => r.path === '/oauth/revoke' && r.status === 200))
+      response = await browser('/account/sessions')
+      assert.equal(response.status, 200)
+      assert.ok(!(await response.text()).includes('name="id"'), 'revoked grant remains in account inventory')
+    } else {
+      stage = 'source session logout'
+      response = await browser('/account/sessions')
+      html = await response.text()
+      response = await browser('/account/logout', { _csrf_token: value(html, '_csrf_token') })
+      assert.equal(response.status, 303)
+      response = scenario === 'rpc' ? await serviceToken({ aud: audience, lxm: method }) : await session.fetchHandler('/xrpc/com.atproto.server.getSession')
+      assert.equal(response.status, 401)
+    }
   }
   for (const path of ['/.well-known/oauth-protected-resource', '/.well-known/oauth-authorization-server']) {
     assert.ok(requests.some(r => r.path === path && r.status === 200))
