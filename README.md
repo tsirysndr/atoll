@@ -183,6 +183,7 @@ record Lexicons or grant access to account data.
 - [x] Streamed HTTP imports with private staging and atomic publication.
 - [ ] Bounded-memory repository metadata traversal.
 - [x] Bounded canonical MST traversal and streamed metadata validation for full/incremental HTTP exports.
+- [x] Bounded signed-tree membership verification for current and historical `getBlocks` exports.
 - [x] Bounded search-path loading for individual signed record proof exports.
 - [x] Incremental CARv1 decoding with bounded framing buffers and verified block callbacks.
 - [x] Request-scoped private disk staging for incrementally validated CAR blocks.
@@ -805,9 +806,16 @@ requested blocks in a rootless CAR. Deleted record bytes remain publicly retriev
 while their signed revisions are retained. Candidate revisions are selected by
 their block indexes, then their commits and canonical trees are verified before
 granting access; shared storage or index membership alone is insufficient. A
-missing or foreign CID rejects the whole request. Historical verification can
-load multiple complete retained trees, so its cost grows with repository history;
-more scalable signed-tree membership verification remains pending.
+missing or foreign CID rejects the whole request. Current and historical membership
+verification uses bounded canonical MST traversal, retaining only pending branches
+and at most 100 requested CIDs. Revision block arrays stay in PostgreSQL; candidate
+rows stream one at a time with only commit/revision/signing-key metadata. Every
+selected tree is exhausted even after all requested CIDs have been found, so missing
+or corrupt nodes reject the request before any CAR is returned. Only requested
+record bodies are read and hash-checked; unrelated historical record-body damage
+does not prevent serving authenticated blocks. Current metadata is checked against
+the streamed record index. Work still grows with the size and number of candidate
+trees, and the returned CAR remains buffered within its existing archive limit.
 
 `GET /xrpc/com.atproto.server.getServiceAuth` normally requires an active account's access
 token (legacy JWT or DPoP OAuth) and a stored repository signing key. Supply `aud` as a DID or DID with a
@@ -3377,8 +3385,8 @@ Tests compare fetched paths with constructed canonical trees, enforce exact byte
 budgets, and distinguish unrelated damage from selected-path corruption.
 
 Whole-tree traversal is available for streamed HTTP exports as described below.
-Imports, buffered/history/operator paths and repository mutations still hold
-metadata in memory. Compact commit-event inversion proofs remain pending.
+Imports, buffered exports, historical record-version reads, operator workflows and
+repository mutations still hold metadata in memory. Compact commit-event inversion proofs remain pending.
 
 `Atoll.Repositories.RecordProof.verify/5` accepts a CAR of at most 2 MiB, an
 expected DID/path, and a trusted signing curve/public key. It checks the first CAR
@@ -3450,7 +3458,7 @@ traversal remain possible optimizations. Full exports still inspect all metadata
 before sending, and large repositories can reach the transaction deadline.
 
 The complete archive, record/CID map and whole MST are not accumulated by this
-HTTP export path. Buffered exports, imports, historical block proofs, key-recovery
+HTTP export path. Buffered exports, imports, historical record-version reads, key-recovery
 workflows and mutations retain their existing metadata costs. The streaming callback must finish
 consuming the enumerable before returning. The legacy `CAR.decode/1` and `import_archive/3` APIs remain buffered;
 HTTP imports use incremental decoding and staging. Tests compare full and incremental block sets with the buffered codec,

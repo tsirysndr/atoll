@@ -764,21 +764,13 @@ defmodule Atoll.Repositories do
   @doc "Exports requested blocks proven reachable from current or retained signed repository revisions."
   def export_blocks(did, cids) when is_list(cids) and length(cids) in 1..100 do
     Repo.transaction(fn ->
-      {head, tree, commit} = snapshot!(did)
-      available = MapSet.new([head.head | Map.keys(tree.blocks) ++ Map.values(tree.records)])
-      missing = MapSet.difference(MapSet.new(cids), available)
+      {head, root, commit} = streaming_snapshot!(did, true)
+      missing = missing_from_tree!(root, MapSet.delete(MapSet.new(cids), head.head))
       verify_historical_blocks!(head, missing)
 
       blocks =
-        Enum.reduce(Enum.uniq(cids), %{}, fn cid, acc ->
-          bytes =
-            cond do
-              cid == head.head -> commit
-              Map.has_key?(tree.blocks, cid) -> Map.fetch!(tree.blocks, cid)
-              true -> block!(cid)
-            end
-
-          Map.put(acc, cid, bytes)
+        Map.new(Enum.uniq(cids), fn cid ->
+          {cid, if(cid == head.head, do: commit, else: block!(cid))}
         end)
 
       archive!([], blocks)
@@ -795,7 +787,8 @@ defmodule Atoll.Repositories do
         from r in Revision,
           where: r.did == ^head.did,
           where: fragment("? && ?", r.blocks, type(^requested, {:array, :binary})),
-          order_by: [desc: r.rev]
+          order_by: [desc: r.rev],
+          select: map(r, [:head, :rev, :signing_curve, :signing_public_key])
 
       remaining =
         revisions
@@ -809,13 +802,10 @@ defmodule Atoll.Repositories do
                    revision.signing_curve,
                    revision.signing_public_key
                  ),
-               true <- commit["rev"] == revision.rev,
-               blocks = Map.new(revision.blocks, &{&1, block!(&1)}),
-               {:ok, tree} <- MST.load(commit["data"].cid, blocks) do
-            reachable =
-              MapSet.new([revision.head | Map.keys(tree.blocks) ++ Map.values(tree.records)])
+               true <- commit["rev"] == revision.rev do
+            remaining =
+              missing_from_tree!(commit["data"].cid, MapSet.delete(remaining, revision.head))
 
-            remaining = MapSet.difference(remaining, reachable)
             if MapSet.size(remaining) == 0, do: {:halt, remaining}, else: {:cont, remaining}
           else
             _ -> Repo.rollback(:invalid_repository)
@@ -826,7 +816,19 @@ defmodule Atoll.Repositories do
     end
   end
 
-  defp snapshot!(did, require_active \\ true) do
+  # Exhaust the whole canonical tree even if all requested CIDs were found:
+  # an unvisited malformed branch must not authenticate a revision.
+  defp missing_from_tree!(root, requested) do
+    MST.Traversal.stream(root, &Storage.get_block/1)
+    |> Enum.reduce(requested, fn
+      {:node, cid, _}, remaining -> MapSet.delete(remaining, cid)
+      {:record, _, cid}, remaining -> MapSet.delete(remaining, cid)
+    end)
+  rescue
+    Atoll.MST.TraversalError -> Repo.rollback(:invalid_repository)
+  end
+
+  defp snapshot!(did, require_active) do
     head = locked_head!(did, "FOR SHARE", require_active)
     bytes = block!(head.head)
 

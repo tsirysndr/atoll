@@ -141,6 +141,80 @@ defmodule AtollWeb.SyncProofControllerTest do
              |> json_response(500)
   end
 
+  test "historical membership reads only requested record bodies", %{
+    conn: conn,
+    key: key,
+    head: head,
+    all: all
+  } do
+    {:ok, old} = Repositories.get_record(@did, @collection <> "/r1")
+    {:ok, _} = Repositories.apply_writes(@did, [{:delete, @collection <> "/r1"}], key)
+
+    Repo.get!(Atoll.Storage.Block, old.cid)
+    |> Ecto.Changeset.change(data: "corrupt")
+    |> Repo.update!()
+
+    bytes = conn |> get(@blocks, %{did: @did, cids: CID.to_base32(head.head)}) |> response(200)
+    assert {:ok, %{roots: [], blocks: blocks}} = CAR.decode(bytes)
+    assert blocks == Map.take(all, [head.head])
+
+    for cids <- [[old.cid], [head.head, old.cid]] do
+      query = URI.encode_query([{"did", @did} | Enum.map(cids, &{"cids", CID.to_base32(&1)})])
+
+      assert %{"error" => "InternalServerError"} =
+               conn |> get(@blocks <> "?" <> query) |> json_response(500)
+    end
+  end
+
+  test "historical verification exhausts all branches even when requesting only its commit", %{
+    conn: conn,
+    key: key,
+    head: head,
+    all: all
+  } do
+    {:ok, commit} = CBOR.decode(all[head.head])
+
+    nodes =
+      Atoll.MST.Traversal.stream(commit["data"].cid, &Map.fetch(all, &1))
+      |> Enum.flat_map(fn
+        {:node, cid, _} -> [cid]
+        _ -> []
+      end)
+
+    assert length(nodes) > 1
+    # Empty the current tree so the damaged node belongs only to retained history.
+    writes = for i <- 1..100, do: {:delete, @collection <> "/r#{i}"}
+    {:ok, _} = Repositories.apply_writes(@did, writes, key)
+    node = Repo.get!(Atoll.Storage.Block, List.last(nodes))
+    damaged = node |> Ecto.Changeset.change(data: "corrupt") |> Repo.update!()
+
+    assert conn
+           |> get(@blocks, %{did: @did, cids: CID.to_base32(head.head)})
+           |> json_response(500)
+
+    Repo.delete!(damaged)
+
+    assert conn
+           |> get(@blocks, %{did: @did, cids: CID.to_base32(head.head)})
+           |> json_response(500)
+  end
+
+  test "current block exports reject damaged stored nodes instead of rebuilding them", %{
+    conn: conn,
+    head: head,
+    all: all
+  } do
+    {:ok, commit} = CBOR.decode(all[head.head])
+
+    Repo.get!(Atoll.Storage.Block, commit["data"].cid)
+    |> Ecto.Changeset.change(data: "corrupt")
+    |> Repo.update!()
+
+    assert conn
+           |> get(@blocks, %{did: @did, cids: CID.to_base32(head.head)})
+           |> json_response(500)
+  end
+
   test "rejects malformed requests and missing repos", %{conn: conn, head: head} do
     for params <- [
           %{},
