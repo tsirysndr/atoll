@@ -85,9 +85,33 @@ report a blocked or suspended process as present; use the progress alert alongsi
 this inventory check. Both gauges keep the eight fixed worker labels and expose
 no process IDs, account identifiers or configuration secrets.
 
+## Latency percentiles
+
+For per-instance completed HTTP request p95 over five minutes:
+
+```promql
+histogram_quantile(0.95,
+  sum by (job, instance, le) (
+    rate(atoll_http_latency_seconds_bucket{job="atoll"}[5m])
+  )
+)
+```
+
+Use `atoll_database_latency_seconds_bucket` for total Ecto duration or
+`atoll_database_pool_wait_seconds_bucket` for pool waits. Apply `rate()` before
+aggregation to handle collector resets. These fixed classic histograms estimate
+quantiles within buckets; they do not store individual samples. Sparse traffic
+can produce unstable estimates and an empty observation window yields NaN.
+The highest finite bound is ten seconds: the +Inf bucket and sum retain longer
+observations, but a quantile in that bucket resolves to the ten-second bound,
+not the actual tail duration. There are no route, SQL or account labels.
+See Prometheus's [histogram guidance](https://prometheus.io/docs/practices/histograms/).
+The existing database alerts continue to use means; this query does not add a
+percentile alert or dashboard automatically.
+
 ## Validation
 
-From the repository root:
+With Docker, Elixir/Erlang and the project Mix dependencies installed, run from the repository root:
 
 ```sh
 bash scripts/test_monitoring.sh
@@ -96,7 +120,12 @@ bash scripts/test_monitoring.sh
 The script uses Prometheus 3.5.0 `promtool` in a digest-pinned Docker image, pulling
 it only if needed. It starts no service, exposes no ports, mounts the rule files
 read-only, and disables networking inside each test container. No application
-database or credentials are used. GitHub Actions runs the same check on pushes.
+database or credentials are used. It also compiles in the test environment and
+runs `scripts/metrics_fixture.exs` with `mix run --no-start`: only telemetry and
+the collector start, without Repo, the endpoint or background workers. Synthetic
+timings exercise zero durations, finite buckets and overflow. The actual emitted
+text passes through `promtool check metrics` to validate metric metadata and
+exposition framing. GitHub Actions runs the same checks on pushes.
 
 `alerts.test.yml` exercises firing delays, recovery, instance isolation, unrelated
 jobs, low volume, idle and missing series, failed items, failed/timed-out runs,

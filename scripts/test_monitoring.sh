@@ -15,3 +15,11 @@ promtool() {
 
 promtool check rules alerts.yml
 promtool test rules alerts.test.yml
+
+# Validate actual emitted metric families, including classic histogram framing.
+# Compile only; the fixture starts telemetry and the collector, never Atoll/Repo.
+ATOLL_BLOB_STORAGE=postgres MIX_ENV=test mix compile --warnings-as-errors
+ATOLL_BLOB_STORAGE=postgres MIX_ENV=test mix run --no-start --no-compile scripts/metrics_fixture.exs \
+  | docker run --rm -i --network none --read-only --cap-drop ALL \
+      --security-opt no-new-privileges --entrypoint /bin/promtool \
+      "$promtool_image" check metrics

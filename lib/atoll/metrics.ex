@@ -1,7 +1,33 @@
 defmodule Atoll.Metrics do
-  @moduledoc "Fixed-cardinality local Prometheus counters and progress gauges; no request or account metadata."
+  @moduledoc "Fixed-cardinality local Prometheus counters, histograms and gauges; no request or account metadata."
   use GenServer
 
+  @help %{
+    "atoll_http_duration_seconds_total" =>
+      "Accumulated completed HTTP request duration in seconds.",
+    "atoll_database_duration_seconds_total" =>
+      "Accumulated total Ecto query-event duration in seconds.",
+    "atoll_database_queue_seconds_total" =>
+      "Accumulated Ecto connection-pool queue time in seconds.",
+    "atoll_database_queries_total" => "Ecto query events including reported failures.",
+    "atoll_http_requests_total" => "Completed HTTP requests by status class.",
+    "atoll_readiness_checks_total" => "Database readiness checks by outcome.",
+    "atoll_worker_runs_total" => "Background worker completion events by worker and result.",
+    "atoll_worker_items_failed_total" => "Failed items reported by background workers.",
+    "atoll_collector_start_time_seconds" => "Unix timestamp of this collector start.",
+    "atoll_vm_memory_bytes" => "Total Erlang VM memory in bytes.",
+    "atoll_vm_run_queue" => "Current Erlang VM run queue length.",
+    "atoll_worker_progress_deadline_seconds" =>
+      "Expected next worker progress as Unix seconds; zero means unobserved.",
+    "atoll_worker_expected" => "Whether application configuration enables the standard worker.",
+    "atoll_worker_present" => "Whether the standard worker has a registered local process.",
+    "atoll_http_latency_seconds" =>
+      "Distribution of valid completed HTTP request durations in seconds.",
+    "atoll_database_latency_seconds" =>
+      "Distribution of valid total Ecto query-event durations in seconds.",
+    "atoll_database_pool_wait_seconds" =>
+      "Distribution of valid Ecto connection-pool waits in seconds."
+  }
   @workers %{
     [:atoll, :identity, :refresh] => "identity_refresh",
     [:atoll, :blobs, :cleanup] => "blob_cleanup",
@@ -12,6 +38,25 @@ defmodule Atoll.Metrics do
     [:atoll, :events, :retention] => "event_retention",
     [:atoll, :relay, :announcement] => "relay_announcement"
   }
+  @buckets [
+    {1000, "0.001"},
+    {5000, "0.005"},
+    {10_000, "0.01"},
+    {25_000, "0.025"},
+    {50_000, "0.05"},
+    {100_000, "0.1"},
+    {250_000, "0.25"},
+    {500_000, "0.5"},
+    {1_000_000, "1"},
+    {2_500_000, "2.5"},
+    {5_000_000, "5"},
+    {10_000_000, "10"}
+  ]
+  @histograms [
+    {:http_time, "atoll_http_latency_seconds"},
+    {:query_time, "atoll_database_latency_seconds"},
+    {:queue_time, "atoll_database_pool_wait_seconds"}
+  ]
   @outcomes ~w(ok complete completed published unchanged skipped failed timeout other)a
   @classes ~w(1xx 2xx 3xx 4xx 5xx unknown)
   @events [
@@ -38,6 +83,10 @@ defmodule Atoll.Metrics do
     indexes = definitions |> Enum.with_index(1) |> Map.new(fn {{key, _, _}, n} -> {key, n} end)
 
     state = %{
+      histograms:
+        Map.new(@histograms, fn {key, _} ->
+          {key, :counters.new(length(@buckets) + 1, [:write_concurrency])}
+        end),
       deadlines: :atomics.new(map_size(@workers), []),
       worker_indexes: @workers |> Map.values() |> Enum.sort() |> Enum.with_index(1) |> Map.new(),
       counters: :counters.new(length(definitions), [:write_concurrency]),
@@ -54,7 +103,7 @@ defmodule Atoll.Metrics do
         state.handler,
         @events,
         &__MODULE__.handle_event/4,
-        Map.take(state, [:counters, :indexes, :deadlines, :worker_indexes])
+        Map.take(state, [:counters, :indexes, :deadlines, :worker_indexes, :histograms])
       )
 
     {:ok, state}
@@ -69,13 +118,13 @@ defmodule Atoll.Metrics do
       end
 
     add(state, {:http, status}, 1)
-    add(state, :http_time, micros(measurements[:duration]))
+    observe(state, :http_time, measurements[:duration])
   end
 
   def handle_event([:atoll, :repo, :query], measurements, _, state) do
     add(state, :queries, 1)
-    add(state, :query_time, micros(measurements[:total_time]))
-    add(state, :queue_time, micros(measurements[:queue_time]))
+    observe(state, :query_time, measurements[:total_time])
+    observe(state, :queue_time, measurements[:queue_time])
   end
 
   def handle_event([:atoll, :readiness, :check], _, metadata, state) do
@@ -136,7 +185,8 @@ defmodule Atoll.Metrics do
 
     output = [
       exposition(counters, "counter"),
-      exposition(gauges ++ deadlines ++ inventory, "gauge")
+      exposition(gauges ++ deadlines ++ inventory, "gauge"),
+      histograms(state)
     ]
 
     {:reply, IO.iodata_to_binary(output), state}
@@ -176,20 +226,59 @@ defmodule Atoll.Metrics do
     |> Enum.sort()
     |> Enum.map(fn {name, rows} ->
       [
-        "# TYPE ",
-        name,
-        " ",
-        type,
-        "\n",
+        metadata(name, type),
         Enum.map(rows, fn {sample, value} -> [sample, " ", to_string(value), "\n"] end)
       ]
     end)
   end
 
-  defp micros(n) when is_integer(n) and n >= 0,
-    do: System.convert_time_unit(n, :native, :microsecond)
+  defp observe(state, key, native) when is_integer(native) and native >= 0 do
+    micros = System.convert_time_unit(native, :native, :microsecond)
+    add(state, key, micros)
+    # One noncumulative bin per observation; render cumulative buckets from one
+    # bounded read of each bin so +Inf and count always agree within a scrape.
+    index =
+      Enum.find_index(@buckets, fn {bound, _} ->
+        native <= System.convert_time_unit(bound, :microsecond, :native)
+      end) || length(@buckets)
 
-  defp micros(_), do: 0
+    :counters.add(Map.fetch!(state.histograms, key), index + 1, 1)
+  end
+
+  defp observe(_, _, _), do: :ok
+
+  defp histograms(state) do
+    Enum.map(@histograms, fn {key, name} ->
+      bins = Map.fetch!(state.histograms, key)
+      labels = Enum.map(@buckets, &elem(&1, 1)) ++ ["+Inf"]
+
+      {rows, count} =
+        labels
+        |> Enum.with_index(1)
+        |> Enum.map_reduce(0, fn {label, index}, count ->
+          count = count + :counters.get(bins, index)
+          {[name, "_bucket{le=\"", label, "\"} ", Integer.to_string(count), "\n"], count}
+        end)
+
+      sum = :counters.get(state.counters, Map.fetch!(state.indexes, key)) / 1_000_000
+
+      [
+        metadata(name, "histogram"),
+        rows,
+        name,
+        "_sum ",
+        to_string(sum),
+        "\n",
+        name,
+        "_count ",
+        Integer.to_string(count),
+        "\n"
+      ]
+    end)
+  end
+
+  defp metadata(name, type),
+    do: ["# HELP ", name, " ", Map.fetch!(@help, name), "\n# TYPE ", name, " ", type, "\n"]
 
   defp add(state, key, n) when is_integer(n) and n >= 0,
     do: :counters.add(state.counters, Map.fetch!(state.indexes, key), n)

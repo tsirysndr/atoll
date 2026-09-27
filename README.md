@@ -997,6 +997,7 @@ observations do not produce duplicate events. The
 - [x] `GET /health/ready` database connectivity readiness with bounded queries and outcome telemetry.
 - [x] Opt-in supervised cleanup of expired sessions and service-token replay markers, with bounded batches and outcome telemetry.
 - [x] Opt-in operator-authenticated Prometheus endpoint with fixed-cardinality HTTP, database, readiness, worker and VM metrics.
+- [x] Fixed-bucket HTTP, database and pool-wait latency histograms, percentile query guidance and Prometheus exposition validation.
 - [x] Baseline Prometheus alert rules and operator runbook, with firing/recovery/counter-reset tests in CI.
 - [x] Scheduler progress-deadline gauges for all eight background workers, with an overdue-progress alert and rule tests.
 - [x] Configured-worker expectation and process-presence gauges with missing-worker alerts independent of prior heartbeat observations.
@@ -1059,6 +1060,9 @@ and collects these metric families:
 | `atoll_database_queries_total` | Ecto query telemetry events, including failed queries. |
 | `atoll_database_duration_seconds_total` | Accumulated Ecto total query duration in seconds. |
 | `atoll_database_queue_seconds_total` | Accumulated database pool queue duration in seconds. |
+| `atoll_http_latency_seconds` | Classic histogram of completed endpoint durations. |
+| `atoll_database_latency_seconds` | Classic histogram of total Ecto query-event durations. |
+| `atoll_database_pool_wait_seconds` | Classic histogram of Ecto connection-pool waits. |
 | `atoll_readiness_checks_total` | Readiness checks labeled by `ready`, `unavailable`, or `other`. |
 | `atoll_worker_runs_total` | Worker completion events labeled by a fixed worker name and result. |
 | `atoll_worker_items_failed_total` | Worker-reported failed item counts, separate from failed or timed-out runs. |
@@ -1100,15 +1104,25 @@ node separately and use Prometheus `rate()` or `increase()` before aggregating
 counters across nodes. Individual counters are concurrent; a scrape is not an
 atomic snapshot across all families. Endpoint counts include completed scrapes
 and probes, and omit requests that terminate without an endpoint stop event.
-Durations are totals, not latency histograms or percentiles. This exporter does
-not install Prometheus, configure alert delivery, or monitor disk capacity,
+Latency histograms expose cumulative `_bucket{le="…"}`, `_sum`, and `_count`
+series. Fixed upper bounds in seconds are 0.001, 0.005, 0.01, 0.025, 0.05, 0.1,
+0.25, 0.5, 1, 2.5, 5, 10 and +Inf: 45 additional series across three families.
+Zero durations count as observations; missing, negative or noninteger timings do
+not. Event counters still count those events, so they may differ from histogram
+counts. Durations are bucketed at native clock precision; sums retain the existing
+microsecond precision. Existing duration totals remain available. Each histogram's
++Inf bucket equals its count within a scrape; its sum is read independently.
+Histograms reset with the collector. The runbook includes a percentile query and
+its accuracy limits.
+
+This exporter does not install Prometheus, configure alert delivery, or monitor disk capacity,
 backlogs, external services, or backup freshness. Baseline scrape, server-error,
 readiness, database pool/total latency, worker-failure, missing-worker and overdue-progress alerts are available in
 [`ops/prometheus/alerts.yml`](ops/prometheus/alerts.yml), with setup instructions,
 limitations and first-response checks in the
 [operator runbook](ops/prometheus/README.md). Validate them with
 `bash scripts/test_monitoring.sh`; CI runs the same `promtool` checks and synthetic
-rule tests. Comprehensive monitoring and alerting remain on the checklist.
+rule tests, plus validation of the actual emitted metric format. Comprehensive monitoring and alerting remain on the checklist.
 
 ### Development configuration
 
