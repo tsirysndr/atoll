@@ -1,12 +1,12 @@
 # Atoll alert rules
 
 `alerts.yml` supplies baseline Prometheus alerts for the metrics described in the
-project README. These are starting thresholds for operators to tune, not a full
+project documentation (`docs/operations.md`). These are starting thresholds for operators to tune, not a full
 production monitoring system. Rules select `job="atoll"` and evaluate each
 instance independently. If you change the scrape job name, update every selector.
 
 Enable Atoll metrics, configure the authenticated HTTPS scrape described in the
-project README, copy `alerts.yml` onto the Prometheus host, and add its path to
+project documentation (`docs/operations.md`), copy `alerts.yml` onto the Prometheus host, and add its path to
 your Prometheus configuration:
 
 ```yaml

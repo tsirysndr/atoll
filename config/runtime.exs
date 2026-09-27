@@ -371,7 +371,7 @@ if config_env() == :prod do
     secret_key_base: secret_key_base
 
   # TLS is expected at a terminating reverse proxy; see the production
-  # deployment section of the README, including ATOLL_FORCE_SSL above.
+  # runbook in docs/deploy.md, including ATOLL_FORCE_SSL above.
 end
 
 case System.get_env("ATOLL_PASSKEYS_ENABLED") do
