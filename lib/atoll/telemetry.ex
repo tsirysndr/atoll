@@ -1,7 +1,6 @@
 defmodule Atoll.Telemetry do
   @moduledoc "OTLP traces, correlated Logger records and metrics; enabled by a collector endpoint."
   use GenServer
-  require Logger
   require OpenTelemetry.Tracer, as: Tracer
   alias Atoll.Telemetry.Metrics
 

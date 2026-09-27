@@ -3,6 +3,8 @@
 Atoll can export traces, logs and metrics to an OTLP collector over HTTP/protobuf.
 Set `OTEL_EXPORTER_OTLP_ENDPOINT` in the service environment to enable all three.
 Without it, no telemetry is exported. PostgreSQL and SQLite use the same integration.
+For the systemd deployment, put these settings in `/etc/atoll/atoll.env`, which
+the service already loads with `EnvironmentFile`. Restart Atoll after changes.
 
 ```sh
 OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4318
