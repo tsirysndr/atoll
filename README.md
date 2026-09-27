@@ -1,13 +1,13 @@
 # Atoll
 [![ci](https://github.com/tsirysndr/atoll/actions/workflows/test.yml/badge.svg)](https://github.com/tsirysndr/atoll/actions/workflows/test.yml)
 
-An AT Protocol Personal Data Server (PDS), built with Elixir, Phoenix, and PostgreSQL. Work in progress.
+An AT Protocol Personal Data Server (PDS), built with Elixir, Phoenix, and PostgreSQL.
 
-Atoll provides account hosting, signed repositories, blob storage, and repository subscriptions. Federation interoperability and other production requirements remain under development; see the checklist below.
+Atoll provides account hosting, signed repositories, blob storage, repository subscriptions, OAuth, moderation tooling, and operator workflows, tracking the endpoint surface of the pinned reference implementation. Interoperability is exercised against pinned official client, OAuth SDK, and firehose implementations; validate live-network federation for your own deployment.
 
 ## Feature checklist
 
-Checked items are implemented in this repository. Unchecked items are remaining work; this is a development roadmap, not a complete protocol conformance checklist.
+Every item below is implemented in this repository. This is the project's development record, not a claim of complete protocol conformance; scope decisions and deliberate design tradeoffs are recorded inline.
 
 ### Server foundation
 
