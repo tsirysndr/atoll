@@ -943,6 +943,7 @@ observations do not produce duplicate events. The
 - [x] Disposable full-schema PostgreSQL restore drill covering signed repositories, encrypted custody, sessions, blobs, audit history and replay boundaries.
 - [x] Offline S3 blob archives with CID verification, empty-prefix restoration, and a real MinIO round trip.
 - [x] Combined PostgreSQL/MinIO restore drill for published and staged blobs, retained credentials, signed repositories and post-restore publication.
+- [x] Paired offline recovery-set wrapper binding database/S3 archives, deployment revision and a nonsecret external-keyring reference.
 - [ ] Complete database/S3 recovery sets, broader restore drills, and backup / restore workflow.
 - [x] `GET /health/ready` database connectivity readiness with bounded queries and outcome telemetry.
 - [x] Opt-in supervised cleanup of expired sessions and service-token replay markers, with bounded batches and outcome telemetry.
@@ -1192,6 +1193,12 @@ mix precommit
 The test alias creates the test database and applies pending migrations. Database tests use Ecto's SQL sandbox to roll back their changes.
 
 ### Database backup and restore primitives
+
+`python3 scripts/recovery_set.py backup|verify|restore DIRECTORY` pairs the
+database and optional S3 archives with a checksum manifest. Backup and restore
+require `--offline`; backup also takes `--storage`, `--revision`, and
+`--keyring-reference`. See the runbook for exact commands, stopped-writer
+prerequisites, external key/config custody and partial-failure handling.
 
 See [the logical database archive runbook](ops/backup/README.md) for
 `scripts/database_backup.py backup|verify|restore DIRECTORY`, PostgreSQL version

@@ -7,7 +7,7 @@ alias Atoll.Repositories.{Events, Snapshot}
 [phase, evidence_path] = System.argv()
 database = System.fetch_env!("PGDATABASE")
 
-unless phase in ["seed", "verify", "backup_s3", "restore_s3", "missing_s3"] and
+unless phase in ["seed", "verify", "missing_s3"] and
          Regex.match?(~r/\Aatoll_backup_test_[a-f0-9]{32}\z/, database),
        do: raise("This fixture requires a disposable backup-test database")
 
@@ -75,12 +75,6 @@ try do
   path = "com.example.backup/record"
 
   cond do
-    phase == "backup_s3" ->
-      %{count: 3} = Atoll.Blobs.S3Archive.backup!(evidence_path, storage[:s3], 1)
-
-    phase == "restore_s3" ->
-      %{count: 3} = Atoll.Blobs.S3Archive.restore!(evidence_path, storage[:s3])
-
     phase == "missing_s3" ->
       # Database ownership alone must not serve an object from the old bucket.
       %{backend: :s3} = Repo.get_by!(Atoll.Blobs.Blob, did: did, cid: CID.create(bytes, :raw))

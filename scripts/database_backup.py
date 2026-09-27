@@ -88,9 +88,8 @@ def backup(directory):
             shutil.rmtree(directory)
 
 
-def restore(directory):
+def require_empty_target():
     database()
-    archive = verify(directory)
     # Also reject non-table objects and additional empty schemas. The target must
     # be a fresh template0 database, with no application connected to it.
     sql = """
@@ -113,6 +112,11 @@ def restore(directory):
     result = run("psql", "--no-password", "--dbname", database(), "-XAt", "--set=ON_ERROR_STOP=1", "-c", sql, capture=True)
     if result.strip() != b"f":
         raise BackupError("Restore target is not empty; create a dedicated database from template0")
+
+
+def restore(directory):
+    archive = verify(directory)
+    require_empty_target()
     run("pg_restore", "--no-password", "--exit-on-error", "--single-transaction",
         "--no-owner", "--no-privileges", "--dbname", database(), str(archive))
 

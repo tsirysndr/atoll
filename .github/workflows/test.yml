@@ -88,6 +88,7 @@ jobs:
           PGPASSWORD: postgres
         run: |
           pg_dump --version
+          python3 scripts/test_recovery_set.py
           python3 scripts/test_database_backup.py
           python3 scripts/test_atoll_database_backup.py
 

@@ -23,7 +23,17 @@ os.umask(0o077)
 
 
 def command(args, database, stage=None):
-    result = subprocess.run(args, cwd=ROOT, env={**env, 'PGDATABASE': database},
+    command_env = {**env, 'PGDATABASE': database}
+    if s3:
+        command_env.update({
+            'ATOLL_S3_ENDPOINT': env['ATOLL_MINIO_TEST_ENDPOINT'],
+            'ATOLL_S3_BUCKET': database.replace('atoll_backup_test_', 'atoll-backup-', 1),
+            'ATOLL_S3_ACCESS_KEY_ID': 'atoll-test',
+            'ATOLL_S3_SECRET_ACCESS_KEY': 'atoll-minio-test-only',
+            'ATOLL_S3_REGION': 'us-east-1',
+        })
+        command_env.pop('ATOLL_S3_SESSION_TOKEN', None)
+    result = subprocess.run(args, cwd=ROOT, env=command_env,
                             stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     if result.returncode:
         # Child exception data can contain synthetic credentials. Report only stage.
@@ -40,15 +50,25 @@ try:
         archive = str(Path(temporary) / 'archive')
         fixture = ['mix', 'run', '--no-start', 'scripts/database_restore_fixture.exs']
         command(fixture + ['seed', evidence], source, 'seed Atoll schema and data')
-        backup = [sys.executable, 'scripts/database_backup.py']
-        command(backup + ['backup', archive], source, 'archive source database')
+        recovery = [sys.executable, 'scripts/recovery_set.py']
+        revision = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip()
+        command(recovery + ['backup', archive, '--offline', '--storage', 's3' if s3 else 'postgres',
+                            '--revision', revision, '--keyring-reference', 'ephemeral-drill-keys'],
+                source, 'create paired recovery set')
+        assert Path(archive).stat().st_mode & 0o777 == 0o700
+        assert (Path(archive) / 'recovery.json').stat().st_mode & 0o777 == 0o600
+        command(recovery + ['verify', archive], source, 'verify paired recovery set')
         if s3:
-            blobs = str(Path(temporary) / 'blobs')
-            command(fixture + ['backup_s3', blobs], source, 'archive source S3 bytes')
-        command(backup + ['restore', archive], target, 'restore target database')
-        if s3:
+            # Demonstrate that restoring only metadata cannot serve source bytes.
+            command([sys.executable, 'scripts/database_backup.py', 'restore',
+                     str(Path(archive) / 'database')], target, 'restore metadata alone')
             command(fixture + ['missing_s3', evidence], target, 'reject missing target S3 bytes')
-            command(fixture + ['restore_s3', blobs], target, 'restore target S3 bytes')
+            # Return to a fresh target before exercising the complete wrapper.
+            command(['dropdb', '--no-password', target], 'postgres')
+            created.remove(target)
+            command(['createdb', '--no-password', '--template=template0', target], 'postgres')
+            created.append(target)
+        command(recovery + ['restore', archive, '--offline'], target, 'restore paired recovery set')
         command(fixture + ['verify', evidence], target, 'verify restored Atoll data')
     print('Atoll schema and data restore drill passed (' + ('S3' if s3 else 'PostgreSQL blobs') + ')')
 finally:

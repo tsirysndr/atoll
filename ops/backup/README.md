@@ -6,6 +6,62 @@ Atoll tables, PostgreSQL-backed blob bytes, revisions, events, replay floors,
 credentials, encrypted custody, pending jobs and audit history. This is a logical
 archive tool, not point-in-time recovery or a complete S3 backup system.
 
+## Paired offline recovery sets
+
+`scripts/recovery_set.py` wraps the database and S3 helpers into one private
+directory. Stop all source writers, workers and maintenance commands and suspend
+S3 lifecycle deletion before backup. For restoration, reserve an empty database
+and an empty target `blobs/` prefix and keep all applications disconnected. The
+`--offline` flag acknowledges these prerequisites; the tool cannot enforce them
+or stop processes on other hosts.
+
+```sh
+# Set libpq connection settings and PGDATABASE for the source database.
+# For S3, also set ATOLL_S3_* as described below.
+python3 scripts/recovery_set.py backup /secure/backups/atoll-set \
+  --offline --storage s3 --revision FULL_SOURCE_COMMIT_HASH \
+  --keyring-reference offline-vault/atoll-keys-and-config-2026-09
+python3 scripts/recovery_set.py verify /secure/backups/atoll-set
+# Select isolated target database/bucket settings and the matching app/config.
+python3 scripts/recovery_set.py restore /secure/backups/atoll-set --offline
+```
+
+Use `--storage postgres` for a deployment whose blobs are held in PostgreSQL.
+Use Python 3.9+, compatible PostgreSQL clients and, for S3, the prepared Mix
+project with dependencies. Run with the intended `MIX_ENV`. S3 operations use
+`mix run --no-start`; no endpoint or Atoll worker starts. Verification does not
+contact the database or S3, but needs `pg_restore` and the Mix project for an S3
+set. The wrapper explicitly selects the S3 backend for remote operations and the
+PostgreSQL backend for local-only verification, avoiding a requirement for S3
+credentials just to verify an archive.
+
+The destination must not exist. The wrapper writes `database/`, optional `s3/`,
+and `recovery.json`, which binds the component manifests by SHA-256 and records
+storage backend, creation time, source commit and a nonsecret keyring/config
+reference. The commit hash is operator-supplied deployment metadata, not a check
+of the current checkout. The keyring reference is a locator only: no encryption
+keys, credentials or configuration are copied or validated. Keep those separately
+and review the recorded revision/reference before restoring. Checksums detect
+accidental component swaps or corruption, not malicious manifest replacement.
+
+Backup verifies both components before completing. An ordinary failure removes
+only the newly created incomplete local set; abrupt termination may leave partial
+files. Verification validates the outer manifest, both component bindings, and
+the underlying archive checks. Restore completes all verification, checks that
+the database is empty, restores S3 objects with readback, then restores PostgreSQL
+transactionally (checking emptiness again). A populated database is refused before
+any S3 writes. S3 failure prevents database restoration; a later database failure
+can leave a populated target bucket. No remote rollback/deletion is attempted.
+Keep failed targets offline, investigate, and retry using fresh targets.
+
+The directory, its ancestors and targets must remain private and unchanged by
+other processes. Retain durable encrypted copies, keys and configuration outside
+this helper; it does not fsync, encrypt, replicate, enforce retention, verify
+database/S3 ownership completeness or prove that writers were actually stopped.
+Both Atoll restore drills below exercise this wrapper. Unit checks for component
+pairing, failure ordering and existing-directory protection run with
+`python3 scripts/test_recovery_set.py` and in push CI.
+
 Use Python 3.9+ and PostgreSQL client binaries compatible with the database server.
 In particular, pg_dump 14 cannot dump a PostgreSQL 18 server. Put the correct
 `pg_dump`, `pg_restore`, and `psql` on PATH. Configure connection settings through
@@ -94,8 +150,9 @@ encryption/KMS keys and permissions. Atoll's S3 inventory can describe current
 ownership but is not proof of a complete backup or permission to delete objects.
 The offline S3 helper below copies and verifies current Atoll blob objects.
 The combined PostgreSQL/MinIO drill below exercises selected application recovery
-across both stores. Coordinated production snapshot orchestration remains
-unimplemented; the main backup/restore checklist remains open.
+across both stores through the paired wrapper. Automatic production writer
+quiescence and deployment-specific recovery validation remain unimplemented;
+the main backup/restore checklist remains open.
 
 ### Archive and restore S3 blob bytes
 
@@ -226,15 +283,16 @@ disposable database names. Buckets are removed with the temporary MinIO containe
 the Python runner removes its databases and local archives.
 
 The fixture seeds an S3-backed published blob, an unpublished staged blob, and an
-untracked object. With the source fixture process stopped, it separately archives
-the database and all three S3 objects, restores the database, and points Atoll at
-the empty target bucket. It verifies that the published blob cannot be served
-until the S3 archive is restored, and that no PostgreSQL raw-block fallback exists.
-After restoration it performs the schema, signature, custody, session, quota,
+untracked object. With the source fixture process stopped, it creates and verifies
+a recovery set containing the database and all three S3 objects. It first restores
+only the database into the target and checks that the published blob cannot be
+served from the empty target bucket, with no PostgreSQL raw-block fallback. It
+then drops and recreates its own disposable target database and runs the full
+recovery-set restore. After restoration it performs the schema, signature, custody, session, quota,
 audit and replay checks above, retrieves the published blob, and confirms the
 staged blob remains private. It also verifies untracked bytes were retained, then
 publishes the staged blob in a new signed record and retrieves it publicly.
 
 This demonstrates an offline recovery sequence with synthetic state; it does not
-automatically quiesce production writers, bind archive pairs to a recovery-set
-manifest, or test provider versioning/KMS retention and every pending workflow.
+automatically quiesce production writers or test provider versioning/KMS retention
+and every pending workflow.

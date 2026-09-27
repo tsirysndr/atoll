@@ -22,6 +22,9 @@ erl_crash.dump
 # Temporary files, for example, from tests.
 /tmp/
 
+# Python operational-script bytecode.
+__pycache__/
+
 # Ignore package tarball (built via "mix hex.build").
 atoll-*.tar
 
