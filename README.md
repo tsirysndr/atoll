@@ -1041,7 +1041,7 @@ observations do not produce duplicate events. The
 - [x] The complete `com.atproto.admin` endpoint surface at the pinned upstream revision, with transactional audit history for every mutating operator action.
 - [ ] Production configuration, HTTPS deployment, and signing-key protection.
 - [x] Logical PostgreSQL archive/restore helper with checksums, empty-target protection, and disposable-database integration checks.
-- [x] Disposable full-schema PostgreSQL restore drill covering signed repositories, encrypted custody, sessions, blobs, audit history and replay boundaries.
+- [x] Disposable full-schema PostgreSQL restore drill covering signed repositories, encrypted custody, sessions, blobs, private preferences, audit history and replay boundaries.
 - [x] Offline S3 blob archives with CID verification, empty-prefix restoration, and a real MinIO round trip.
 - [x] Combined PostgreSQL/MinIO restore drill for published and staged blobs, retained credentials, signed repositories and post-restore publication.
 - [x] Paired offline recovery-set wrapper binding database/S3 archives, deployment revision and a nonsecret external-keyring reference.

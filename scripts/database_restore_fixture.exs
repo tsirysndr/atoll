@@ -174,6 +174,21 @@ try do
       {:ok, _} = Repositories.create_managed(did)
       {:ok, _} = Credentials.create(did, password)
       {:ok, pair} = Sessions.create(did, password)
+
+      {:ok, _} =
+        Atoll.Accounts.Preferences.put(pair.access_jwt, %{
+          "preferences" => [
+            %{"$type" => "app.bsky.actor.defs#adultContentPref", "enabled" => true},
+            %{
+              "$type" => "app.bsky.actor.defs#personalDetailsPref",
+              "birthDate" => "1999-02-03T00:00:00.000Z"
+            }
+          ]
+        })
+
+      {:ok, %{preferences: seeded_preferences}} =
+        Atoll.Accounts.Preferences.get(pair.access_jwt)
+
       {:ok, blob} = Blobs.stage(did, bytes, "application/octet-stream")
       {:ok, _} = Blobs.stage(did, pg_bytes, "text/plain", storage: [backend: :postgres])
 
@@ -291,6 +306,7 @@ try do
           unused_recovery: unused_recovery
         },
         public: Base.encode64(key.public),
+        preferences: seeded_preferences,
         car: Base.encode64(archive),
         access: pair.access_jwt,
         refresh: pair.refresh_jwt,
@@ -308,6 +324,12 @@ try do
       {:ok, %{did: ^did}} = Credentials.verify(did, password)
       {:ok, %{did: ^did}} = Sessions.authenticate(evidence["access"])
       {:ok, _} = Sessions.refresh(evidence["refresh"])
+
+      {:ok, %{preferences: restored_preferences}} =
+        Atoll.Accounts.Preferences.get(evidence["access"])
+
+      true = restored_preferences == evidence["preferences"]
+      true = Enum.any?(restored_preferences, &(&1["$type"] =~ "declaredAgePref"))
       passkey = evidence["passkey"]
       credential = Repo.get!(Passkey, passkey["id"])
       true = credential.did == did and credential.sign_count == 7
