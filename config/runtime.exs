@@ -76,6 +76,14 @@ if value = System.get_env("ATOLL_APPVIEW_PROXY") do
   config :atoll, :appview_proxy, AtollWeb.ProxyPlug.appview_from_env!(value)
 end
 
+if value = System.get_env("ATOLL_MOD_SERVICE_PROXY") do
+  config :atoll, :mod_service_proxy, AtollWeb.ProxyPlug.appview_from_env!(value)
+end
+
+if value = System.get_env("ATOLL_REPORT_SERVICE_PROXY") do
+  config :atoll, :report_service_proxy, AtollWeb.ProxyPlug.appview_from_env!(value)
+end
+
 case Integer.parse(System.get_env("ATOLL_HANDLE_CACHE_TTL_SECONDS", "60")) do
   {ttl, ""} when ttl in 0..300 -> config :atoll, :handle_cache_ttl_seconds, ttl
   _ -> raise "ATOLL_HANDLE_CACHE_TTL_SECONDS must be an integer from 0 to 300"

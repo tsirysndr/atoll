@@ -18,9 +18,18 @@ defmodule AtollWeb.ProxyPlug do
   @doc false
   def candidate?(conn, nsid, local?) do
     get_req_header(conn, "atproto-proxy") != [] or proxy_preflight?(conn) or
-      (not local? and String.starts_with?(nsid, "app.bsky.") and
-         not is_nil(Application.get_env(:atoll, :appview_proxy)))
+      (not local? and not is_nil(default_audience(nsid)))
   end
+
+  @doc "Configured destination for supported methods without an explicit proxy header."
+  def default_audience("com.atproto.moderation.createReport") do
+    Application.get_env(:atoll, :report_service_proxy) ||
+      Application.get_env(:atoll, :mod_service_proxy)
+  end
+
+  def default_audience("tools.ozone." <> _), do: Application.get_env(:atoll, :mod_service_proxy)
+  def default_audience("app.bsky." <> _), do: Application.get_env(:atoll, :appview_proxy)
+  def default_audience(_), do: nil
 
   defp proxy_preflight?(conn) do
     AtollWeb.XRPCCORS.preflight?(conn) and
@@ -74,7 +83,7 @@ defmodule AtollWeb.ProxyPlug do
     opts = Application.get_env(:atoll, :proxy_options, [])
     oauth? = AtollWeb.OAuthResource.attempt?(conn)
 
-    with {:ok, audience} <- audience(conn),
+    with {:ok, audience} <- audience(conn, nsid),
          {:ok, _} <- Target.parse(audience),
          {:ok, {prepared, jwt}} <-
            authorize(conn, audience, nsid, oauth?, fn ->
@@ -105,9 +114,9 @@ defmodule AtollWeb.ProxyPlug do
       error(conn, 503, "ServiceUnavailable", "Proxy authorization is temporarily unavailable.")
   end
 
-  defp audience(conn) do
+  defp audience(conn, nsid) do
     case get_req_header(conn, "atproto-proxy") do
-      [] -> {:ok, Application.get_env(:atoll, :appview_proxy)}
+      [] -> {:ok, default_audience(nsid)}
       [value] -> {:ok, value}
       _ -> {:error, :invalid_proxy_target}
     end

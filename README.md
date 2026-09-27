@@ -826,6 +826,7 @@ locking protects shared objects when collectors overlap.
 - [x] Service-authenticated migration account creation.
 - [x] Internal proxy service resolution and bounded, public-IP-pinned HTTPS transport.
 - [x] Authenticated request proxying to AppViews and other services, with an optional default AppView.
+- [x] Default moderation-report and ozone method routing to configured moderation/report services.
 
 The internal `Atoll.Proxy.Target` resolver requires a concrete DID with a service
 fragment and exactly one matching service entry in the resolved DID document.
@@ -6872,3 +6873,22 @@ authorization recheck; reads run inside resource authorization locks. Requests
 with an `Atproto-Proxy` header still proxy to the named service instead of the
 local store. Run the migration creating the account-preferences table before
 use; deleting an account removes its stored preferences.
+
+### Default moderation service routing
+
+`ATOLL_MOD_SERVICE_PROXY` and `ATOLL_REPORT_SERVICE_PROXY` name `DID#service`
+references validated at startup, like `ATOLL_APPVIEW_PROXY`. When configured,
+authenticated requests without an `Atproto-Proxy` header are forwarded:
+`com.atproto.moderation.createReport` goes to the report service (falling back
+to the moderation service when no separate report service is set), and every
+`tools.ozone.*` method goes to the moderation service, mirroring the
+[upstream default-service table](https://github.com/bluesky-social/atproto/blob/7a857989751ae31518509d69ab7194a922064f3d/packages/pds/src/pipethrough.ts).
+Atoll routes the whole `tools.ozone.*` prefix rather than the upstream method
+enumeration, so new ozone methods reach the same operator-chosen service.
+
+These defaults use the existing authenticated proxy path: an active session or
+an OAuth grant with a matching `rpc:` permission, fresh service resolution,
+short-lived account-signed service tokens, the shared body/response bounds, and
+the protected account-management method refusals. An explicit `Atproto-Proxy`
+header still overrides the default destination, and unconfigured destinations
+keep returning `501 MethodNotImplemented`.

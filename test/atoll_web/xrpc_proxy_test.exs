@@ -15,6 +15,8 @@ defmodule AtollWeb.XRPCProxyTest do
       :key_encryption_key,
       :proxy_options,
       :appview_proxy,
+      :mod_service_proxy,
+      :report_service_proxy,
       :record_write_rate_limit,
       :xrpc_rate_limit
     ]
@@ -24,7 +26,8 @@ defmodule AtollWeb.XRPCProxyTest do
     for key <- [:session_signing_key, :key_encryption_key],
         do: Application.put_env(:atoll, key, :crypto.strong_rand_bytes(32))
 
-    Application.delete_env(:atoll, :appview_proxy)
+    for key <- [:appview_proxy, :mod_service_proxy, :report_service_proxy],
+        do: Application.delete_env(:atoll, key)
 
     on_exit(fn ->
       for {key, value} <- previous do
@@ -330,6 +333,27 @@ defmodule AtollWeb.XRPCProxyTest do
     assert request |> get("/xrpc/com.example.unknown") |> json_response(501)
     Application.delete_env(:atoll, :appview_proxy)
     assert request |> get(@path) |> json_response(501)
+  end
+
+  test "default moderation services route reports and ozone methods without a proxy header",
+       c do
+    report = "/xrpc/com.atproto.moderation.createReport"
+    ozone = "/xrpc/tools.ozone.moderation.queryStatuses"
+    request = legacy(c) |> delete_req_header("atproto-proxy")
+    assert request |> post(report, "{}") |> json_response(501)
+
+    Application.put_env(:atoll, :mod_service_proxy, @aud)
+    assert request |> post(report, "{}") |> json_response(200) == %{"proxied" => true}
+    assert request |> get(ozone) |> json_response(200) == %{"proxied" => true}
+    assert request |> get(@path) |> json_response(501)
+
+    Application.delete_env(:atoll, :mod_service_proxy)
+    Application.put_env(:atoll, :report_service_proxy, @aud)
+    assert request |> post(report, "{}") |> json_response(200) == %{"proxied" => true}
+    assert request |> get(ozone) |> json_response(501)
+
+    {:ok, _} = Repositories.set_status(@did, :deactivated)
+    assert request |> post(report, "{}") |> json_response(400)
   end
 
   test "preflight needs no authentication or resolution and allows only GET and POST", c do
