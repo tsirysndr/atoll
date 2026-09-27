@@ -52,6 +52,56 @@ defmodule Atoll.RepositoryKeyRotationTest do
              ])
   end
 
+  test "rotation stages complete deduplicated membership across batches without trusting old indexes",
+       c do
+    writes =
+      for i <- 1..1200,
+          do:
+            {:put, "com.example.record/r#{i}",
+             %{"$type" => "com.example.record", "shared" => true}}
+
+    head =
+      Enum.reduce(Enum.chunk_every(writes, 200), c.head, fn batch, _ ->
+        {:ok, head} = Repositories.apply_managed_writes(@did, batch)
+        head
+      end)
+
+    {:ok, archive} = Repositories.export(@did)
+    {:ok, %{blocks: blocks}} = Atoll.CAR.decode(archive)
+    assert map_size(blocks) > 256
+    {:ok, foreign} = Storage.put_node(%{"unrelated" => true})
+    revision = Repo.get_by!(Revision, did: @did, rev: head.rev)
+    revision |> Ecto.Changeset.change(blocks: [head.head, foreign]) |> Repo.update!()
+
+    assert {:ok, updated} = Repositories.rotate_signing_key(@did, c.new, head.head)
+    retained = Repo.get_by!(Revision, did: @did, rev: updated.rev).blocks
+
+    expected =
+      blocks |> Map.keys() |> MapSet.new() |> MapSet.delete(head.head) |> MapSet.put(updated.head)
+
+    assert MapSet.new(retained) == expected
+    assert length(retained) == MapSet.size(expected)
+    refute foreign in retained
+    assert {:ok, next} = Repositories.rotate_signing_key(@did, c.old, updated.head)
+    assert KeyVault.fetch(@did) == {:ok, c.old}
+    assert next.rev > updated.rev
+  end
+
+  test "rotation rejects damaged stored MST nodes before changing custody", c do
+    {:ok, commit} = Storage.get_node(c.head.head)
+    envelope = Repo.get!(EncryptedKey, @did).envelope
+    seq = Events.latest_seq()
+    node = Repo.get!(Atoll.Storage.Block, commit["data"].cid)
+    node |> Ecto.Changeset.change(data: "corrupt") |> Repo.update!()
+
+    assert {:error, :invalid_repository} =
+             Repositories.rotate_signing_key(@did, c.new, c.head.head)
+
+    assert Repo.get!(EncryptedKey, @did).envelope == envelope
+    assert Repositories.get_head(@did) == {:ok, c.head}
+    assert Events.latest_seq() == seq
+  end
+
   test "stale expected heads and mismatched private keys cannot mutate the vault", c do
     envelope = Repo.get!(EncryptedKey, @did).envelope
     assert {:error, :invalid_swap} = Repositories.rotate_signing_key(@did, c.new, <<0>>)

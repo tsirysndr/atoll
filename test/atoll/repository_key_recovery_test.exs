@@ -130,6 +130,19 @@ defmodule Atoll.RepositoryKeyRecoveryTest do
     assert Repositories.get_head(@did) == {:ok, c.head}
   end
 
+  test "same-key recovery rejects missing stored tree nodes before restoring custody", c do
+    corrupt!()
+    envelope = Repo.get!(EncryptedKey, @did).envelope
+    {:ok, commit} = Storage.get_node(c.head.head)
+    Repo.delete!(Repo.get!(Atoll.Storage.Block, commit["data"].cid))
+
+    assert {:error, :invalid_repository} =
+             Repositories.recover_signing_key(@did, c.old, c.head.head)
+
+    assert Repo.get!(EncryptedKey, @did).envelope == envelope
+    assert Repositories.get_head(@did) == {:ok, c.head}
+  end
+
   test "restoration requires an active master key and rolls back with caller recovery state", c do
     corrupt!()
     envelope = Repo.get!(EncryptedKey, @did).envelope

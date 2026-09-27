@@ -66,7 +66,7 @@ defmodule Atoll.Repositories do
           do: Repo.rollback({:repo_inactive, head.status})
 
         if head.head != expected_head, do: Repo.rollback(:invalid_swap)
-        {_head, tree, _commit} = snapshot!(did, false)
+        {_head, root, _commit} = streaming_snapshot!(did, false)
 
         case mode do
           :rotate ->
@@ -76,7 +76,9 @@ defmodule Atoll.Repositories do
             end
 
           :recover ->
-            tree.records |> Map.values() |> Enum.uniq() |> Enum.each(&block!/1)
+            from(r in Record, where: r.did == ^did, distinct: r.cid, select: r.cid)
+            |> Repo.stream(max_rows: 1)
+            |> Enum.each(&block!/1)
 
             unless Atoll.KeyVault.fetch(did) == {:ok, key},
               do: Atoll.KeyVault.restore!(head, key)
@@ -87,7 +89,8 @@ defmodule Atoll.Repositories do
         else
           if mode == :rotate, do: Atoll.KeyVault.replace!(head, key)
           {:ok, rev} = TID.next(head.rev)
-          commit = persist_commit!(did, tree, rev, key)
+          {:ok, commit} = Commit.create(did, root, rev, key)
+          :ok = Storage.put_block(commit.cid, commit.bytes)
 
           updated =
             head
@@ -99,7 +102,14 @@ defmodule Atoll.Repositories do
             )
             |> Repo.update!()
 
-          remember_revision!(updated, Map.keys(tree.blocks) ++ Map.values(tree.records))
+          cids =
+            MST.Traversal.stream(root, &Storage.get_block/1)
+            |> Stream.map(fn
+              {:node, cid, _} -> cid
+              {:record, _, cid} -> cid
+            end)
+
+          Atoll.Repositories.RevisionMembership.insert!(updated, cids)
           Events.append!(:sync, updated, event_head(updated, head))
           updated
         end
@@ -819,19 +829,6 @@ defmodule Atoll.Repositories do
     end)
   rescue
     Atoll.MST.TraversalError -> Repo.rollback(:invalid_repository)
-  end
-
-  defp snapshot!(did, require_active) do
-    head = locked_head!(did, "FOR SHARE", require_active)
-    bytes = block!(head.head)
-
-    with {:ok, tree} <- MST.new(record_map(did)),
-         {:ok, commit} <- Commit.verify(bytes, did, head.curve, head.public_key),
-         true <- commit["data"].cid == tree.root and commit["rev"] == head.rev do
-      {head, tree, bytes}
-    else
-      _ -> Repo.rollback(:invalid_repository)
-    end
   end
 
   defp block!(cid) do

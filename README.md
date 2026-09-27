@@ -185,6 +185,7 @@ record Lexicons or grant access to account data.
 - [ ] Bounded-memory repository metadata traversal.
 - [x] Bounded canonical MST traversal and streamed metadata validation for full/incremental HTTP and buffered exports.
 - [x] Bounded signed-tree membership verification for current and historical `getBlocks` exports.
+- [x] Bounded metadata verification and revision-membership staging for signing-key rotation/recovery.
 - [x] Bounded search-path loading for individual signed record proof exports.
 - [x] Incremental CARv1 decoding with bounded framing buffers and verified block callbacks.
 - [x] Request-scoped private disk staging for incrementally validated CAR blocks.
@@ -3390,7 +3391,19 @@ Tests compare fetched paths with constructed canonical trees, enforce exact byte
 budgets, and distinguish unrelated damage from selected-path corruption.
 
 Whole-tree traversal is available for streamed HTTP exports as described below.
-Imports, operator workflows and repository mutations still hold metadata in memory. Compact commit-event inversion proofs remain pending.
+Signing-key rotation and recovery also validate the stored tree against the streamed
+record index. Recovery reads and verifies distinct record bodies one at a time
+before repairing custody, including same-key restoration. Changed-key transitions
+stage authenticated tree/record CIDs in batches of 256 in a transaction-local
+PostgreSQL temporary table, deduplicate there, and construct the retained revision
+array inside PostgreSQL. They do not copy potentially damaged old membership
+indexes or accumulate tree/membership maps in Elixir. The database role needs the
+`TEMP` privilege. Temporary tables are dropped after insertion or at transaction
+end; quota checks, custody changes and sync events remain atomic. PostgreSQL still
+materializes the revision array and its indexes, and large repositories incur
+multiple traversal passes while holding the write lock.
+Imports and ordinary record mutations still hold metadata in memory. Compact
+commit-event inversion proofs remain pending.
 
 `Atoll.Repositories.RecordProof.verify/5` accepts a CAR of at most 2 MiB, an
 expected DID/path, and a trusted signing curve/public key. It checks the first CAR
@@ -3468,7 +3481,7 @@ collecting chunks. It retains the encoded output but does not reconstruct a whol
 MST, record map or revision membership set. Its CAR now uses the stream's block
 order (commit first), and corrupt stored nodes fail rather than being rebuilt from
 the record index. Lazy corruption becomes an error result without returning partial
-bytes. Imports, key-recovery workflows and mutations retain their existing metadata costs. The streaming callback must finish
+bytes. Imports and ordinary record mutations retain their existing metadata costs. The streaming callback must finish
 consuming the enumerable before returning. The legacy `CAR.decode/1` and `import_archive/3` APIs remain buffered;
 HTTP imports use incremental decoding and staging. Tests compare full and incremental block sets with the buffered codec,
 exercise cancellation/corruption, and stream a repository larger than 64 MiB.
