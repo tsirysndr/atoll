@@ -144,12 +144,59 @@ defmodule AtollWeb.ProxyPlug do
     end
   end
 
-  defp authorize(conn, audience, nsid, true, prepare),
+  # Push registration names its service in the body; the token audience is
+  # that service and the request goes to the AppView or the service itself.
+  defp authorize(conn, audience, nsid, oauth?, prepare)
+       when nsid in ["app.bsky.notification.registerPush", "app.bsky.notification.unregisterPush"] do
+    if get_req_header(conn, "atproto-proxy") == [] do
+      opts = Application.get_env(:atoll, :proxy_options, [])
+      prepare = fn -> push_prepare(conn, audience, opts) end
+
+      if oauth? do
+        AtollWeb.OAuthResource.with_proxy(conn, audience, nsid, prepare, grants: :deferred)
+      else
+        with {:ok, token} <- AtollWeb.BearerToken.get(conn),
+             do: Atoll.Accounts.ServiceAuth.with_proxy(token, audience, nsid, prepare)
+      end
+    else
+      generic_authorize(conn, audience, nsid, oauth?, prepare)
+    end
+  end
+
+  defp authorize(conn, audience, nsid, oauth?, prepare),
+    do: generic_authorize(conn, audience, nsid, oauth?, prepare)
+
+  defp generic_authorize(conn, audience, nsid, true, prepare),
     do: AtollWeb.OAuthResource.with_proxy(conn, audience, nsid, prepare)
 
-  defp authorize(conn, audience, nsid, false, prepare) do
+  defp generic_authorize(conn, audience, nsid, false, prepare) do
     with {:ok, token} <- AtollWeb.BearerToken.get(conn),
          do: Atoll.Accounts.ServiceAuth.with_proxy(token, audience, nsid, prepare)
+  end
+
+  defp push_prepare(conn, appview, opts) do
+    with {:ok, body, conn} <-
+           read_body(conn, length: 65_536, read_length: 65_536, read_timeout: 5000),
+         {:ok, %{"serviceDid" => service_did}} <- Jason.decode(body),
+         true <- is_binary(service_did) and Atoll.Syntax.did?(service_did) do
+      destination =
+        if service_did == Atoll.Accounts.ServiceAuth.bare_audience(appview),
+          do: appview,
+          else: service_did <> "#bsky_notif"
+
+      case Target.resolve(destination, opts) do
+        {:ok, target} ->
+          {:ok, %{target: target, body: body, conn: conn},
+           %{"aud" => service_did <> "#bsky_notif", "token_aud" => service_did}}
+
+        {:error, _} ->
+          {:error, :proxy_resolution_failed}
+      end
+    else
+      {:more, _, _} -> {:error, :proxy_request_too_large}
+      {:error, :timeout} -> {:error, :proxy_body_unavailable}
+      _ -> {:error, :invalid_proxy_request}
+    end
   end
 
   defp feed_reference(conn) do

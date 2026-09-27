@@ -833,6 +833,7 @@ locking protects shared objects when collectors overlap.
 - [x] Authenticated request proxying to AppViews and other services, with an optional default AppView.
 - [x] Phase-1 service-auth audiences: proxied grants are checked against the `did#service` form while outbound JWTs carry the bare DID the receiving services verify.
 - [x] `app.bsky.feed.getFeed` proxying that resolves the feed's published generator record and mints `getFeedSkeleton` tokens for the generator DID, with dual RPC grant checks for OAuth callers.
+- [x] Push-notification registration whose token audience is the body's `serviceDid`, delivered to the AppView or directly to the named notification service.
 - [x] Default moderation-report and ozone method routing to configured moderation/report services.
 
 The internal `Atoll.Proxy.Target` resolver requires a concrete DID with a service
@@ -7072,3 +7073,12 @@ requested through the AppView. OAuth callers need RPC grants for both
 asserts. Missing, malformed, or unresolvable feed references return
 `400 UnknownFeed` after authorization, and the feed lookup happens only for
 admitted callers.
+
+`app.bsky.notification.registerPush` and `unregisterPush` follow the same
+upstream model: the service is named by the request body's `serviceDid`, so
+OAuth grant assertion is deferred to token issuance with audience
+`serviceDid#bsky_notif`, the signed token carries the bare service DID, and
+the request is delivered to the default AppView when it is that service or
+directly to the named service's resolved `#bsky_notif` endpoint otherwise. An
+explicit `Atproto-Proxy` header keeps its ordinary generic behavior on these
+routes.

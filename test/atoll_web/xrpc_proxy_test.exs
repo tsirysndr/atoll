@@ -425,6 +425,99 @@ defmodule AtollWeb.XRPCProxyTest do
            }
   end
 
+  test "push registration binds tokens to the body service DID", c do
+    Application.put_env(:atoll, :appview_proxy, @aud)
+    notif = "did:web:notif.example.com"
+    path = "/xrpc/app.bsky.notification.registerPush"
+    body = %{"serviceDid" => notif, "platform" => "web", "token" => "t", "appId" => "app"}
+
+    stub = fn upstream ->
+      Application.put_env(:atoll, :proxy_options,
+        resolver: [
+          lookup: fn _ -> {:ok, {8, 8, 8, 8}} end,
+          request:
+            Req.new(
+              plug: fn conn ->
+                if "notif.example.com" in [conn.host | get_req_header(conn, "host")] do
+                  Req.Test.json(conn, %{
+                    "id" => notif,
+                    "service" => [
+                      %{
+                        "id" => "#bsky_notif",
+                        "type" => "BskyNotificationService",
+                        "serviceEndpoint" => "https://push.example.com"
+                      }
+                    ]
+                  })
+                else
+                  Req.Test.json(conn, %{
+                    "id" => @service,
+                    "service" => [
+                      %{
+                        "id" => "#bsky_appview",
+                        "type" => "BskyAppView",
+                        "serviceEndpoint" => "https://api.example.com"
+                      }
+                    ]
+                  })
+                end
+              end
+            )
+        ],
+        lookup: fn
+          "push.example.com" -> {:ok, {2, 2, 2, 2}}
+          "api.example.com" -> {:ok, {1, 1, 1, 1}}
+        end,
+        request: Req.new(plug: upstream)
+      )
+    end
+
+    stub.(fn conn ->
+      claims(conn, c.key, "app.bsky.notification.registerPush", notif)
+      assert conn.host == "2.2.2.2"
+      assert {:ok, bytes, conn} = read_body(conn)
+      assert Jason.decode!(bytes)["serviceDid"] == notif
+      send_resp(conn, 200, "")
+    end)
+
+    request = legacy(c) |> delete_req_header("atproto-proxy")
+    assert request |> post(path, Jason.encode!(body)) |> response(200) == ""
+
+    stub.(fn conn ->
+      claims(conn, c.key, "app.bsky.notification.registerPush", @service)
+      assert conn.host == "1.1.1.1"
+      send_resp(conn, 200, "")
+    end)
+
+    assert request
+           |> post(path, Jason.encode!(%{body | "serviceDid" => @service}))
+           |> response(200) == ""
+
+    assert request |> post(path, Jason.encode!(%{"platform" => "web"})) |> json_response(400)
+    assert request |> post(path, "not json") |> json_response(400)
+
+    stub.(fn conn ->
+      claims(conn, c.key, "app.bsky.notification.registerPush", notif)
+      send_resp(conn, 200, "")
+    end)
+
+    scoped =
+      OAuthFixture.grant(
+        c.pair,
+        "atproto rpc:app.bsky.notification.registerPush?aud=#{URI.encode_www_form(notif <> "#bsky_notif")}"
+      )
+
+    assert OAuthFixture.conn(scoped, path)
+           |> post(path, Jason.encode!(body))
+           |> response(200) == ""
+
+    base = OAuthFixture.grant(c.pair, "atproto")
+
+    assert OAuthFixture.conn(base, path)
+           |> post(path, Jason.encode!(body))
+           |> json_response(403) == %{"error" => "insufficient_scope"}
+  end
+
   test "preflight needs no authentication or resolution and allows only GET and POST", c do
     configure(fn _ -> flunk("must not send") end, fn -> flunk("must not resolve") end)
 

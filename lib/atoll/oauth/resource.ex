@@ -33,8 +33,13 @@ defmodule Atoll.OAuth.Resource do
       when is_function(prepare, 0) do
     issuer = Keyword.get(opts, :issuer, AtollWeb.Endpoint.url())
 
+    # :deferred leaves the grant assertion to issuance, for endpoints whose
+    # real audience is only known after the prepared body is parsed.
     grants =
-      for lxm <- [nsid | Keyword.get(opts, :grants, [])], do: %{"aud" => audience, "lxm" => lxm}
+      case Keyword.get(opts, :grants, []) do
+        :deferred -> []
+        extra -> for lxm <- [nsid | extra], do: %{"aud" => audience, "lxm" => lxm}
+      end
 
     params = %{
       "aud" => audience,
