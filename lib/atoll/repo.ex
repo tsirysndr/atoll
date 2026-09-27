@@ -12,7 +12,11 @@ defmodule Atoll.Repo do
   """
   use Ecto.Repo,
     otp_app: :atoll,
-    adapter: Ecto.Adapters.Postgres
+    adapter:
+      (case Application.compile_env(:atoll, :database, :postgres) do
+         :sqlite -> Ecto.Adapters.SQLite3
+         _ -> Ecto.Adapters.Postgres
+       end)
 
   @before_compile Atoll.RepoSQLRouting
 
@@ -44,7 +48,12 @@ defmodule Atoll.Repo do
     defoverridable [{name, arity}]
 
     def unquote(name)(unquote_splicing(args)) do
-      case reader(unquote(query), unquote(opts)) do
+      # Routing classifies the original query; SQLite then drops the row lock it
+      # cannot express, which its single-writer model already guarantees.
+      target = reader(unquote(query), unquote(opts))
+      unquote(query) = Atoll.Database.strip_lock(unquote(query))
+
+      case target do
         __MODULE__ -> super(unquote_splicing(args))
         repo -> apply(repo, unquote(name), [unquote_splicing(args)])
       end
