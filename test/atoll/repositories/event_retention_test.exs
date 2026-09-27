@@ -1,5 +1,6 @@
 defmodule Atoll.Repositories.EventRetentionTest do
   use Atoll.DataCase, async: false
+  alias Atoll.Moderation.AuditEntry
   alias Atoll.CBOR
   alias Atoll.Repositories.{Event, EventRetention, Events}
   alias AtollWeb.RepoStreamSocket, as: Socket
@@ -77,6 +78,7 @@ defmodule Atoll.Repositories.EventRetentionTest do
 
     assert Repo.get!(Event, row.seq)
     assert EventRetention.bounds().floor == 0
+    assert Repo.aggregate(AuditEntry, :count) == 0
 
     for {limit, seconds} <- [{0, 3600}, {1001, 3600}, {1, 3599}, {1, 31_536_001}, {"1", 3600}] do
       assert {:error, :invalid_retention_options} = EventRetention.prune(limit, seconds)
@@ -96,6 +98,53 @@ defmodule Atoll.Repositories.EventRetentionTest do
     assert_raise Mix.Error, fn ->
       Mix.Tasks.Atoll.Events.Prune.run(["--limit", "1", "--limit", "2"])
     end
+  end
+
+  test "operator batches record lossless boundaries and no-op results without event contents" do
+    row = event(-7200)
+    assert {:ok, %{deleted: 1}} = EventRetention.prune(1, 3600)
+    entry = Repo.one!(AuditEntry)
+    assert entry.operation == "atoll.events.prune"
+    assert entry.actor == "operator"
+    assert entry.did == nil
+    assert entry.subject == %{"kind" => "eventHistory"}
+    assert entry.requested == %{"limit" => 1, "retentionSeconds" => 3600}
+    assert entry.before_state == %{"cursorFloor" => "0"}
+    assert entry.after_state == %{"cursorFloor" => Integer.to_string(row.seq), "deleted" => 1}
+    assert {:ok, %{deleted: 0}} = EventRetention.prune(1, 3600)
+    [_, idle] = Repo.all(from a in AuditEntry, order_by: a.id)
+    assert idle.before_state == %{"cursorFloor" => Integer.to_string(row.seq)}
+    assert idle.after_state == %{"cursorFloor" => Integer.to_string(row.seq), "deleted" => 0}
+  end
+
+  test "audit failure preserves event dependencies and the replay floor" do
+    row = event(-7200)
+    key = Atoll.SigningKey.generate()
+    {:ok, head} = Atoll.Repositories.create("did:plc:auditretention", key)
+
+    Repo.insert!(%Atoll.Repositories.EventDependency{
+      seq: row.seq,
+      did: head.did,
+      head: head.head
+    })
+
+    Repo.query!(
+      "ALTER TABLE moderation_audit_entries ADD CONSTRAINT reject_retention_audit CHECK (operation <> 'atoll.events.prune')"
+    )
+
+    assert_raise Ecto.ConstraintError, fn -> EventRetention.prune(1, 3600) end
+
+    assert Repo.get!(Event, row.seq)
+    assert Repo.get_by!(Atoll.Repositories.EventDependency, seq: row.seq)
+    assert EventRetention.bounds().floor == 0
+    assert Repo.aggregate(AuditEntry, :count) == 0
+  end
+
+  test "invalid attribution is rejected before pruning" do
+    row = event(-7200)
+    assert {:error, :invalid_retention_options} = EventRetention.prune(1, 3600, "unknown")
+    assert Repo.get!(Event, row.seq)
+    assert Repo.aggregate(AuditEntry, :count) == 0
   end
 
   defp event(offset) do

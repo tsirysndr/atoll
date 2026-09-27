@@ -45,6 +45,10 @@ defmodule Atoll.EventRetentionWorkerTest do
     tick(worker)
     assert_receive {:retention, :completed, %{deleted: 0, floor: ^second, runs: 1}}, 2000
     assert Atoll.Repositories.EventRetention.bounds().floor == second
+    audits = Repo.all(from a in Atoll.Moderation.AuditEntry, order_by: a.id)
+    assert Enum.map(audits, & &1.actor) == ["worker", "worker"]
+    assert Enum.map(audits, & &1.after_state["deleted"]) == [1000, 1]
+    assert Enum.all?(audits, &(&1.operation == "atoll.events.prune"))
   end
 
   test "configuration is opt-in, bounded and always disables scheduling during tests" do

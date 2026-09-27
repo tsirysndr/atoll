@@ -4,6 +4,19 @@ defmodule Atoll.Moderation.Audit do
   alias Atoll.{Repo, Syntax}
   alias Atoll.Moderation.AuditEntry
 
+  @doc "Records event deletion and the replay boundary without retaining event payloads."
+  def event_retention!(limit, seconds, floor, result, actor) do
+    insert!(
+      "atoll.events.prune",
+      nil,
+      %{kind: "eventHistory"},
+      %{limit: limit, retentionSeconds: seconds},
+      %{cursorFloor: Integer.to_string(floor)},
+      %{cursorFloor: Integer.to_string(result.floor), deleted: result.deleted},
+      actor
+    )
+  end
+
   @doc "Records bounded revision pruning and dependency backfill in the maintenance transaction."
   def revision_compaction!(head, limit, seconds, revisions, result) do
     state = %{head: Atoll.CID.to_base32(head.head), rev: head.rev}

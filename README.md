@@ -2948,6 +2948,13 @@ sequencing lock, with one-second lock and five-second statement deadlines. Migra
 rows. Pruning every event therefore preserves the stream's last committed position.
 Rollback preserves both events and the prior boundary. Retention does not delete
 repository revisions, blocks, account records, or operator audit history.
+Every successful operator batch, including a no-op, records an `atoll.events.prune`
+audit entry in that transaction. Scheduled batches that delete events record the
+same operation with actor `worker`; idle scheduled checks create no audit rows.
+Entries contain the requested limit/retention, deletion count, and previous/new
+cursor floors as lossless strings, without retaining event payloads or account
+identifiers. Audit insertion failure rolls back deletion and the replay boundary.
+View server-wide entries with `mix atoll.moderation.history` (without a DID filter).
 
 An explicit positive cursor below that boundary receives the protocol's
 `#info` / `OutdatedCursor` message before replay resumes above the boundary.

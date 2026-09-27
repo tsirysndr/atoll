@@ -46,11 +46,11 @@ defmodule Atoll.Repositories.EventRetention do
     floor
   end
 
-  def prune(limit \\ 1000, retention_seconds \\ 604_800)
+  def prune(limit \\ 1000, retention_seconds \\ 604_800, actor \\ "operator")
 
-  def prune(limit, retention_seconds)
+  def prune(limit, retention_seconds, actor)
       when is_integer(limit) and limit in 1..1000 and is_integer(retention_seconds) and
-             retention_seconds in 3600..31_536_000 do
+             retention_seconds in 3600..31_536_000 and actor in ["operator", "worker"] do
     Repo.transaction(fn ->
       Repo.query!("SET LOCAL lock_timeout = '1s'")
       Repo.query!("SET LOCAL statement_timeout = '5s'")
@@ -68,17 +68,26 @@ defmodule Atoll.Repositories.EventRetention do
         )
         |> Enum.take_while(&(DateTime.compare(&1.time, cutoff) == :lt))
 
-      if prefix == [] do
-        %{deleted: 0, floor: floor}
-      else
-        last = List.last(prefix).seq
-        {count, _} = Repo.delete_all(from e in Event, where: e.seq <= ^last)
-        new_floor = max(floor, last)
+      result =
+        if prefix == [] do
+          %{deleted: 0, floor: floor}
+        else
+          last = List.last(prefix).seq
+          {count, _} = Repo.delete_all(from e in Event, where: e.seq <= ^last)
+          new_floor = max(floor, last)
 
-        Repo.query!("UPDATE event_retention_state SET cursor_floor = $1 WHERE id = 1", [new_floor])
+          Repo.query!("UPDATE event_retention_state SET cursor_floor = $1 WHERE id = 1", [
+            new_floor
+          ])
 
-        %{deleted: count, floor: new_floor}
+          %{deleted: count, floor: new_floor}
+        end
+
+      if actor == "operator" or result.deleted > 0 do
+        Atoll.Moderation.Audit.event_retention!(limit, retention_seconds, floor, result, actor)
       end
+
+      result
     end)
   rescue
     e in Postgrex.Error ->
@@ -87,5 +96,5 @@ defmodule Atoll.Repositories.EventRetention do
         else: reraise(e, __STACKTRACE__)
   end
 
-  def prune(_, _), do: {:error, :invalid_retention_options}
+  def prune(_, _, _), do: {:error, :invalid_retention_options}
 end

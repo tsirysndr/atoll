@@ -69,7 +69,8 @@ defmodule Atoll.Repositories.EventRetentionWorker do
   defp run_batch do
     Atoll.Repositories.EventRetention.prune(
       1000,
-      Application.get_env(:atoll, :event_retention_seconds, 604_800)
+      Application.get_env(:atoll, :event_retention_seconds, 604_800),
+      "worker"
     )
   end
 
