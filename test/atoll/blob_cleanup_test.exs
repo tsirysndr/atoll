@@ -2,6 +2,7 @@ defmodule Atoll.BlobCleanupTest do
   use Atoll.DataCase, async: true
   alias Atoll.{Blobs, CID, Repositories, SigningKey, Storage}
   alias Atoll.Blobs.{Blob, Cleanup, CleanupJob}
+  alias Atoll.Moderation.AuditEntry
   @did "did:plc:cleanup"
   @path "com.example.record/one"
 
@@ -89,6 +90,92 @@ defmodule Atoll.BlobCleanupTest do
     age([a, b])
     assert Cleanup.expire_staged(limit: 1) == {:ok, 1}
     assert Repo.aggregate(Blob, :count) == 1
+  end
+
+  test "operator expiration records bounded ownership and queues cleanup without deleting bytes" do
+    {_, first} = stage("first private body")
+    {_, second} = stage("second private body")
+    age([first, second])
+
+    output =
+      ExUnit.CaptureIO.capture_io(fn ->
+        Mix.Tasks.Atoll.Blobs.Expire.run(["--limit", "1", "--grace-seconds", "3600"])
+      end)
+
+    assert Jason.decode!(String.trim(output)) == %{"expired" => 1, "limit" => 1}
+    [audit] = Repo.all(AuditEntry)
+    assert audit.operation == "atoll.blobs.expire"
+    assert audit.actor == "operator"
+    assert audit.did == nil
+    assert audit.subject == %{"kind" => "stagedBlobs"}
+    assert audit.requested["limit"] == 1
+    assert audit.requested["graceSeconds"] == 3600
+    assert {:ok, _, 0} = DateTime.from_iso8601(audit.requested["cutoff"])
+    assert audit.after_state == %{"expired" => 1}
+    [entry] = audit.before_state["expiredOwnership"]
+    assert entry["did"] == @did
+    assert entry["backend"] == "postgres"
+    assert {:ok, cid} = CID.from_base32(entry["cid"])
+    assert cid in [first, second]
+    assert Repo.get_by(CleanupJob, cid: cid, backend: :postgres)
+    assert Repo.aggregate(Blob, :count) == 1
+    assert {:ok, _} = Storage.get_block(first)
+    assert {:ok, _} = Storage.get_block(second)
+
+    refute Jason.encode!([audit.requested, audit.before_state, audit.after_state]) =~
+             "private body"
+  end
+
+  test "operator no-ops are recorded while empty worker batches are quiet" do
+    assert Cleanup.expire_staged(actor: "worker") == {:ok, 0}
+    assert Repo.aggregate(AuditEntry, :count) == 0
+    assert Cleanup.expire_staged() == {:ok, 0}
+    [audit] = Repo.all(AuditEntry)
+    assert audit.actor == "operator"
+    assert audit.after_state == %{"expired" => 0}
+
+    {_, cid} = stage("worker expiry")
+    age([cid])
+    assert Cleanup.expire_staged(actor: "worker") == {:ok, 1}
+    worker = Repo.one!(from a in AuditEntry, where: a.actor == "worker")
+    assert worker.after_state == %{"expired" => 1}
+  end
+
+  test "audit failure rolls back expired ownership and cleanup queue insertion" do
+    {_, cid} = stage("retained on audit failure")
+    age([cid])
+    before = Repo.get_by!(Blob, did: @did, cid: cid)
+
+    Repo.query!(
+      "ALTER TABLE moderation_audit_entries ADD CONSTRAINT reject_expiration_audit CHECK (operation <> 'atoll.blobs.expire')"
+    )
+
+    assert_raise Ecto.ConstraintError, fn -> Cleanup.expire_staged() end
+    assert Repo.get_by!(Blob, did: @did, cid: cid) == before
+    assert Repo.aggregate(CleanupJob, :count) == 0
+    assert Repo.aggregate(AuditEntry, :count) == 0
+    assert {:ok, "retained on audit failure"} = Storage.get_block(cid)
+  end
+
+  test "invalid actors and CLI options leave ownership untouched" do
+    {_, cid} = stage("invalid arguments")
+    age([cid])
+    assert Cleanup.expire_staged(actor: "anonymous") == {:error, :invalid_cleanup_options}
+
+    for args <- [
+          ["--limit", "0"],
+          ["--limit", "1", "--limit", "2"],
+          ["--grace-seconds", "3599"],
+          ["--grace-seconds", "31536001"],
+          ["--actor", "worker"],
+          ["unexpected"]
+        ] do
+      assert_raise Mix.Error, fn -> Mix.Tasks.Atoll.Blobs.Expire.run(args) end
+    end
+
+    assert Repo.get_by!(Blob, did: @did, cid: cid)
+    assert Repo.aggregate(CleanupJob, :count) == 0
+    assert Repo.aggregate(AuditEntry, :count) == 0
   end
 
   defp stage(bytes) do

@@ -618,6 +618,7 @@ inventory to assess transfer progress first.
 - [x] Public `com.atproto.sync.getBlob` and paginated `listBlobs`, with `since` filtering, repository status checks, and restrictive content headers.
 - [x] Authenticated `com.atproto.repo.listMissingBlobs` with account-scoped CID pagination and referencing record URIs.
 - [x] Internal staged-blob expiration with a 24-hour default grace period and a one-hour minimum.
+- [x] Bounded operator staged-blob expiration command with atomic ownership/queue audit records and worker attribution.
 - [x] Durable cleanup queue for withdrawn/expired blob ownership, shared-owner checks, PostgreSQL/S3 deletion, and retryable S3 failures.
 - [x] Opt-in supervised cleanup scheduling with bounded batches, task deadlines, failure recovery, and outcome telemetry.
 - [x] Transactional per-account blob byte and object-count quotas across both storage backends.
@@ -714,6 +715,24 @@ Trusted operators can run bounded cleanup batches:
 Atoll.Blobs.Cleanup.expire_staged(limit: 100, grace_seconds: 86_400)
 Atoll.Blobs.Cleanup.collect(limit: 100)
 ```
+
+The operator CLI expires one page of staging ownership:
+
+```sh
+mix atoll.blobs.expire --limit 100 --grace-seconds 86400
+```
+
+Its limit is 1–1000 and grace is 3600–31536000 seconds. It prints the expired count
+as JSON and queues byte cleanup without performing collection. Expiration records
+`atoll.blobs.expire` in the same transaction as ownership removal and cleanup
+enqueueing, including the cutoff, bounded DID/CID/backend list and count, without
+blob contents. Audit failure rolls back the entire expiration page. Lock and SQL
+statement deadlines are one and five seconds respectively. Read this server-wide
+history with `mix atoll.moderation.history` without a DID filter.
+
+Internal expiration defaults to actor `operator`, including no-op audit entries.
+The scheduler explicitly uses actor `worker` and records only nonempty expiration
+pages. Actor labels are trusted internal metadata, not an authorization interface.
 
 Expiration removes only old, unreferenced ownership metadata and queues its bytes.
 Re-uploading renews the staging grace period. Collection rechecks all accounts for

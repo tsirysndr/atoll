@@ -23,11 +23,15 @@ defmodule Atoll.Blobs.Cleanup do
   def expire_staged(opts \\ []) do
     grace = Keyword.get(opts, :grace_seconds, 86_400)
     limit = Keyword.get(opts, :limit, 100)
+    actor = Keyword.get(opts, :actor, "operator")
 
-    if is_integer(grace) and grace >= 3600 and is_integer(limit) and limit in 1..1000 do
+    if is_integer(grace) and grace >= 3600 and is_integer(limit) and limit in 1..1000 and
+         actor in ["operator", "worker"] do
       cutoff = DateTime.add(DateTime.utc_now(), -grace, :second)
 
       Repo.transaction(fn ->
+        Repo.query!("SET LOCAL lock_timeout = '1s'")
+        Repo.query!("SET LOCAL statement_timeout = '5s'")
         Events.lock!()
 
         referenced =
@@ -47,6 +51,10 @@ defmodule Atoll.Blobs.Cleanup do
 
         enqueue!(blobs)
         Enum.each(blobs, &Repo.delete!/1)
+
+        if actor == "operator" or blobs != [],
+          do: Atoll.Moderation.Audit.staged_blob_expiration!(limit, grace, cutoff, blobs, actor)
+
         length(blobs)
       end)
     else

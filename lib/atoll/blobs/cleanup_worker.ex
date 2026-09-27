@@ -68,7 +68,7 @@ defmodule Atoll.Blobs.CleanupWorker do
   end
 
   defp run_batch do
-    with {:ok, expired} <- Cleanup.expire_staged(limit: 100),
+    with {:ok, expired} <- Cleanup.expire_staged(limit: 100, actor: "worker"),
          {:ok, counts} <- Cleanup.collect(limit: 10) do
       {:ok, Map.put(counts, :expired, expired)}
     end

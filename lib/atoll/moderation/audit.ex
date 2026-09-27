@@ -4,6 +4,24 @@ defmodule Atoll.Moderation.Audit do
   alias Atoll.{Repo, Syntax}
   alias Atoll.Moderation.AuditEntry
 
+  @doc "Records staged ownership expiry atomically with removal and durable cleanup enqueueing."
+  def staged_blob_expiration!(limit, grace, cutoff, blobs, actor) do
+    ownership =
+      Enum.map(blobs, fn blob ->
+        %{did: blob.did, cid: Atoll.CID.to_base32(blob.cid), backend: blob.backend}
+      end)
+
+    insert!(
+      "atoll.blobs.expire",
+      nil,
+      %{kind: "stagedBlobs"},
+      %{limit: limit, graceSeconds: grace, cutoff: DateTime.to_iso8601(cutoff)},
+      %{expiredOwnership: ownership},
+      %{expired: length(blobs)},
+      actor
+    )
+  end
+
   @doc "Records the normalized public targets before an operator crawl batch is sent."
   def relay_crawl_attempt!(hostname, origins) do
     insert!(
