@@ -2,11 +2,13 @@ defmodule Atoll.Proxy.LocalRecords do
   @moduledoc """
   Recent local record writes newer than an AppView's indexed revision.
 
-  Reads the durable commit outbox instead of live repository state, bounded to
-  the newest thirty commits and ten records, mirroring the reference reader's
-  ten-row page. A revision at or before the AppView's reported revision must
-  exist locally, so a rebuilt or migrated repository is never munged from an
-  unrelated clock. Failures degrade to an empty result.
+  Folds the durable commit outbox chronologically, so an updated path appears
+  once at its newest content and a deleted path disappears, matching the
+  reference reader over current rows. Bounded to the newest thirty commits and
+  ten records, mirroring the reference ten-row page. A revision at or before
+  the AppView's reported revision must exist locally, so a rebuilt or migrated
+  repository is never munged from an unrelated clock. Failures degrade to an
+  empty result.
   """
   import Ecto.Query
   alias Atoll.{CBOR, CID, DataModel, Repo, Storage, TID}
@@ -26,9 +28,15 @@ defmodule Atoll.Proxy.LocalRecords do
             order_by: [desc: e.seq],
             limit: @scan_limit
         )
-        |> Enum.flat_map(&decode(&1, rev))
         |> Enum.reverse()
+        |> Enum.flat_map(&decode_ops(&1, rev))
+        |> Enum.reduce(%{}, fn op, acc ->
+          if op.action == "delete", do: Map.delete(acc, op.path), else: Map.put(acc, op.path, op)
+        end)
+        |> Map.values()
+        |> Enum.sort_by(& &1.rev)
         |> Enum.take(@record_limit)
+        |> Enum.flat_map(&descript(did, &1))
 
       %{
         posts: Enum.filter(records, &String.starts_with?(&1.path, "app.bsky.feed.post/")),
@@ -44,28 +52,28 @@ defmodule Atoll.Proxy.LocalRecords do
     _ in [Postgrex.Error, DBConnection.ConnectionError] -> %{posts: [], profile: nil}
   end
 
-  defp decode(event, since) do
-    with {:ok, %{"rev" => rev, "ops" => ops}} when rev > since <- CBOR.decode(event.payload) do
-      ops
-      |> Enum.filter(&(&1["action"] in ["create", "update"]))
-      |> Enum.flat_map(&descript(event, rev, &1))
-      |> Enum.reverse()
+  defp decode_ops(event, since) do
+    with {:ok, %{"rev" => rev, "ops" => ops}} when rev > since and is_list(ops) <-
+           CBOR.decode(event.payload) do
+      for %{"action" => action, "path" => path} = op <- ops,
+          is_binary(action) and is_binary(path) do
+        %{action: action, path: path, cid: op["cid"], rev: rev, time: event.time}
+      end
     else
       _ -> []
     end
   end
 
-  defp descript(event, _rev, %{"path" => path, "cid" => %CBOR.Link{cid: cid}})
-       when is_binary(path) do
+  defp descript(did, %{path: path, cid: %CBOR.Link{cid: cid}} = op) do
     with {:ok, bytes} <- Storage.get_block(cid),
          {:ok, decoded} <- CBOR.decode(bytes),
          {:ok, record} <- DataModel.to_json(decoded) do
       [
         %{
-          uri: "at://" <> event.did <> "/" <> path,
+          uri: "at://" <> did <> "/" <> path,
           path: path,
           cid: CID.to_base32(cid),
-          indexed_at: event.time |> DateTime.truncate(:millisecond) |> DateTime.to_iso8601(),
+          indexed_at: op.time |> DateTime.truncate(:millisecond) |> DateTime.to_iso8601(),
           record: record
         }
       ]
@@ -74,5 +82,5 @@ defmodule Atoll.Proxy.LocalRecords do
     end
   end
 
-  defp descript(_, _, _), do: []
+  defp descript(_, _), do: []
 end

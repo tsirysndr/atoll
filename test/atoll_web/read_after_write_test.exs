@@ -84,6 +84,7 @@ defmodule AtollWeb.ReadAfterWriteTest do
     %{
       conn: %{conn | remote_ip: {10, 71, div(id, 256), rem(id, 256)}},
       pair: pair,
+      key: key,
       genesis_rev: genesis.rev,
       head_rev: head.rev,
       root_uri: root_uri,
@@ -161,6 +162,44 @@ defmodule AtollWeb.ReadAfterWriteTest do
     # A revision before all local history is never munged from a foreign clock.
     upstream("2222222222222", %{"feed" => []})
     assert fetch(c, "/xrpc/app.bsky.feed.getTimeline") |> json_response(200) == %{"feed" => []}
+  end
+
+  test "updated paths appear once at their newest content and deletions never resurface", c do
+    post = fn text ->
+      %{
+        "$type" => "app.bsky.feed.post",
+        "text" => text,
+        "createdAt" => "2026-09-27T01:00:00.000Z"
+      }
+    end
+
+    {:ok, _} =
+      Repositories.apply_writes(
+        @did,
+        [{:put, "app.bsky.feed.post/temp1", post.("temporary")}],
+        c.key
+      )
+
+    {:ok, _} =
+      Repositories.apply_writes(
+        @did,
+        [{:put, "app.bsky.feed.post/edit1", post.("first draft")}],
+        c.key
+      )
+
+    {:ok, _} =
+      Repositories.apply_writes(
+        @did,
+        [{:put, "app.bsky.feed.post/edit1", post.("final draft")}],
+        c.key
+      )
+
+    {:ok, _} = Repositories.apply_writes(@did, [{:delete, "app.bsky.feed.post/temp1"}], c.key)
+
+    upstream(c.genesis_rev, %{"feed" => []})
+    body = fetch(c, "/xrpc/app.bsky.feed.getTimeline") |> json_response(200)
+    texts = Enum.map(body["feed"], & &1["post"]["record"]["text"])
+    assert texts == ["final draft", "fresh reply", "root post"]
   end
 
   test "profiles gain local edits only for the requester", c do

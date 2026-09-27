@@ -118,6 +118,18 @@ try {
   assert.equal(read.data.cid, updated.data.cid)
   assert.deepEqual(read.data.value, changed)
 
+  stage = 'read-after-write timeline'
+  const timeline = (await agent.app.bsky.feed.getTimeline()).data
+  const uris = timeline.feed.map(item => item.post.uri)
+  assert.ok(uris.includes(`at://${did}/${collection}/${firstKey}`))
+  const newest = timeline.feed[0].post
+  assert.equal(newest.author.did, did)
+  assert.equal(newest.likeCount, 0)
+  assert.equal(newest.record.text, 'updated upstream client')
+  stage = 'read-after-write own thread'
+  const thread = (await agent.app.bsky.feed.getPostThread({ uri: newest.uri })).data.thread
+  assert.equal(thread.post.uri, newest.uri)
+
   stage = 'putPreferences'
   const preferences = [
     { $type: 'app.bsky.actor.defs#adultContentPref', enabled: true },
