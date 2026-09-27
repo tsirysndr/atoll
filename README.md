@@ -735,7 +735,24 @@ locking protects shared objects when collectors overlap.
 - [x] `com.atproto.server.getServiceAuth` issues short-lived account-signed service JWTs.
 - [x] Internal incoming account service-JWT verification with exact audience/method checks and persistent replay protection.
 - [x] Service-authenticated migration account creation.
+- [x] Internal proxy service resolution and bounded, public-IP-pinned HTTPS transport.
 - [ ] Request proxying to AppViews and other services.
+
+The internal `Atoll.Proxy.Target` resolver requires a concrete DID with a service
+fragment and exactly one matching service entry in the resolved DID document.
+Relative and absolute service identifiers are accepted; duplicate entries are
+rejected. The endpoint must be an HTTPS origin without credentials, query,
+fragment or path prefix. Its independently checked public IP address is pinned
+for the outbound connection while preserving the hostname for TLS and HTTP.
+
+`Atoll.Proxy.Transport` preserves repeated query parameters and raw POST bytes,
+accepts a separately minted service JWT, and filters request/response headers.
+Caller access tokens, DPoP proofs and cookies are not forwarded. Redirects,
+compressed responses and oversized responses are rejected. Request bodies are
+bounded to 2 MiB, query strings to 8 KiB and streamed responses to 8 MiB, with
+connection and request deadlines. These modules do not authorize users or expose
+proxy routes: active-account admission, OAuth RPC permission checks, final grant
+rechecks, rate limits and default AppView routing still need integration.
 
 Historical `getBlocks` reads are limited to active repositories and return only
 requested blocks in a rootless CAR. Deleted record bytes remain publicly retrievable
@@ -5415,7 +5432,8 @@ permission failures. Browser consent tests exercise RPC selection alongside
 repository and MIME permissions. The policy follows the
 [RPC permission specification](https://atproto.com/specs/permission#rpc) and the
 [reference RPC matcher](https://github.com/bluesky-social/atproto/blob/main/packages/oauth/oauth-scopes/src/scopes/rpc-permission.ts).
-Request proxying and permission-set expansion remain separate unfinished features.
+Request proxying remains unfinished; permission-set expansion is implemented
+through the frozen authorization snapshots described above.
 
 ### DPoP public exports
 
