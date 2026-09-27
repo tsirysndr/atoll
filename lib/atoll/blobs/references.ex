@@ -20,14 +20,28 @@ defmodule Atoll.Blobs.References do
   end
 
   def import!(did, records, blocks, rev) do
-    prior = Repo.all(from r in Reference, where: r.did == ^did, select: r.cid)
-    Repo.delete_all(from r in Reference, where: r.did == ^did)
-
+    # Import revisions advance the locked head. Refresh surviving reference rows
+    # with the new revision, leaving old rows available for database-side cleanup.
     Enum.each(records, fn {path, cid} ->
       insert_record!(did, path, read_block!(blocks, cid), rev, true)
     end)
 
-    withdraw!(did, prior)
+    prior = from r in Reference, where: r.did == ^did and r.rev != ^rev, select: r.cid
+    current = from r in Reference, where: r.did == ^did and r.rev == ^rev, select: r.cid
+
+    withdrawn =
+      from b in Blob,
+        where: b.did == ^did and b.cid in subquery(prior),
+        where: b.cid not in subquery(current)
+
+    withdrawn
+    |> select([b], %{cid: b.cid, backend: b.backend})
+    |> Repo.stream(max_rows: 256)
+    |> Stream.chunk_every(256)
+    |> Enum.each(&Atoll.Blobs.Cleanup.enqueue!/1)
+
+    Repo.delete_all(withdrawn)
+    Repo.delete_all(from r in Reference, where: r.did == ^did and r.rev != ^rev)
   end
 
   defp read_block!(blocks, cid) when is_map(blocks), do: Map.fetch!(blocks, cid)
@@ -60,9 +74,16 @@ defmodule Atoll.Blobs.References do
         end
       end
 
-      Repo.insert!(
-        struct!(Reference, Map.merge(metadata, %{did: did, path: path, cid: cid, rev: rev}))
-      )
+      row = struct!(Reference, Map.merge(metadata, %{did: did, path: path, cid: cid, rev: rev}))
+
+      if allow_missing do
+        Repo.insert!(row,
+          on_conflict: {:replace, [:mime_type, :size, :rev]},
+          conflict_target: [:did, :path, :cid]
+        )
+      else
+        Repo.insert!(row)
+      end
     end
   end
 

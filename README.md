@@ -192,6 +192,7 @@ record Lexicons or grant access to account data.
 - [x] Supervised staging cleanup on request exit and configurable per-node concurrency admission.
 - [x] Signed repository snapshot validation over staged block readers without collecting record bodies.
 - [x] Bounded MST validation and lazy record/CID enumeration for staged import publication.
+- [x] Database-side import blob-reference reconciliation with bounded cleanup-job batches.
 - [x] Transactional staged snapshot publication with migration re-signing and quota rollback.
 - [x] Lazy CARv1 encoding with per-block validation and upstream cancellation cleanup.
 
@@ -1032,8 +1033,8 @@ length must match the actual bytes. Imports allow ten attempts per peer IP per
 five minutes using the configured memory, PostgreSQL, or Redis request limiter.
 Blob bytes must be transferred separately. Record bodies are read individually
 from private staging during validation and atomic publication. Tree traversal and
-record publication are bounded; the stage CID/offset index and prior blob-reference
-cleanup lists still scale with repository size. Normal
+record publication and blob-reference reconciliation are bounded; the stage
+CID/offset index still scales with repository size. Normal
 completion, malformed input, read errors, and publication failures close and remove
 the staging files. A VM/host crash may leave private files behind; monitor
 temporary-disk capacity and clean stale files operationally.
@@ -3413,8 +3414,17 @@ publication, verifies record hashes/types/data-model limits, and rejects missing
 blocks even when public storage contains them. Repeated traversal trades extra
 reads for bounded tree metadata. The stage must remain open through publication.
 
-Import memory work remains: the private CAR staging file's CID/offset index and
-prior blob-reference cleanup lists still scale with repository size. The legacy
+Import blob-reference reconciliation marks imported rows with the advancing
+revision, including surviving path/CID pairs. PostgreSQL finds previously referenced
+owned blobs absent from the new revision, queues byte cleanup in batches of 256,
+and deletes stale ownership and reference rows in the publication transaction.
+Moving a reference preserves ownership; uploads never referenced by the old
+repository remain staged. Other accounts' ownership is preserved, and physical
+byte deletion remains the cleanup worker's responsibility. Rollback restores the
+previous references and ownership without leaving cleanup jobs.
+
+Import memory work remains: the private CAR staging file's CID/offset index still
+scales with repository size. The legacy
 buffered snapshot API deliberately collects its archive, records and blocks.
 Ordinary record mutations also retain whole-tree metadata. Compact commit-event
 inversion proofs remain pending.
@@ -3495,7 +3505,7 @@ collecting chunks. It retains the encoded output but does not reconstruct a whol
 MST, record map or revision membership set. Its CAR now uses the stream's block
 order (commit first), and corrupt stored nodes fail rather than being rebuilt from
 the record index. Lazy corruption becomes an error result without returning partial
-bytes. Import staging indexes, blob cleanup and ordinary record mutations retain
+bytes. Import staging indexes and ordinary record mutations retain
 the metadata costs described above. The streaming callback must finish
 consuming the enumerable before returning. The legacy `CAR.decode/1` and `import_archive/3` APIs remain buffered;
 HTTP imports use incremental decoding and staging. Tests compare full and incremental block sets with the buffered codec,
