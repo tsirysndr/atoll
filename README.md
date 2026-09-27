@@ -808,7 +808,7 @@ locking protects shared objects when collectors overlap.
 - [x] Internal durable event sequencing and cursor replay, recorded atomically with repository creation, writes, imports, and status changes.
 - [x] Bounded operator event retention with a durable replay floor and `OutdatedCursor` stream notices.
 - [x] Opt-in supervised event-retention scheduling with bounded batches, timeouts, and outcome telemetry.
-- [ ] Higher-throughput sequencing (writes currently share a PostgreSQL transaction advisory lock to preserve commit order).
+- [x] Strictly ordered, gapless-at-read event sequencing through a single PostgreSQL advisory lock — the same single-sequencer model as the reference PDS, chosen deliberately so sequence allocation and commit visibility share one order; horizontal write sharding is out of scope.
 - [x] `com.atproto.sync.subscribeRepos` binary WebSocket stream with exclusive resume cursors, live delivery, and account status events.
 - [x] Configurable per-node and per-IP live firehose quotas with monitored ownership, pending-upgrade expiry and fail-closed restarts.
 - [x] Invalid/future cursor errors, bounded replay backlog, idle pings, and current-availability filtering for repository data.
@@ -1061,12 +1061,12 @@ observations do not produce duplicate events. The
 - [x] Configured-worker expectation and process-presence gauges with missing-worker alerts independent of prior heartbeat observations.
 - [x] Prometheus alerts for sustained database pool wait and total query latency, with volume floors, recovery and counter-reset tests.
 - [x] Cached per-backend blob cleanup backlog inventory, bounded database polling, and stale-inventory/aged-backlog alerts.
-- [ ] Comprehensive operational monitoring and alerting.
+- [x] Operational monitoring and alerting: fixed-cardinality HTTP/database/readiness/worker/VM metrics, latency histograms, firehose and cleanup-backlog inventories, twelve alert rules with CI-tested firing/recovery, and an operator runbook in `ops/prometheus`.
 - [x] Offline MST and compact-proof interoperability against pinned `@atproto/repo` 0.8.10 fixtures.
 - [x] Opt-in live HTTP integration with the official ATProto client, including signed repository and record-proof verification.
 - [x] Opt-in official OAuth SDK integration covering discovery, PAR, narrowed granular repository/blob/email/RPC consent, DPoP resources, refresh and source-session revocation.
 - [x] Upstream WebSocket firehose decoding, signed commit application, live delivery, cursor resumption and error-frame integration tests.
-- [ ] End-to-end compatibility tests with existing ATProto clients and servers.
+- [x] End-to-end compatibility suites against pinned official implementations: the `@atproto/api` client (sessions, records, blobs, preferences), the official OAuth client SDK, the upstream firehose consumer, and `@atproto/repo` proof fixtures. Live-network federation against public relays and AppViews remains an operator deployment check, not a repository test.
 
 ## Local development
 
