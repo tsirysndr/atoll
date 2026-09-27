@@ -947,7 +947,7 @@ observations do not produce duplicate events. The
 - [ ] Comprehensive operational monitoring and alerting.
 - [x] Offline MST and compact-proof interoperability against pinned `@atproto/repo` 0.8.10 fixtures.
 - [x] Opt-in live HTTP integration with the official ATProto client, including signed repository and record-proof verification.
-- [x] Opt-in official OAuth SDK integration covering discovery, PAR, narrowed granular repository/blob/email consent, DPoP resources, refresh and source-session revocation.
+- [x] Opt-in official OAuth SDK integration covering discovery, PAR, narrowed granular repository/blob/email/RPC consent, DPoP resources, refresh and source-session revocation.
 - [x] Upstream WebSocket firehose decoding, signed commit application, live delivery, cursor resumption and error-frame integration tests.
 - [ ] End-to-end compatibility tests with existing ATProto clients and servers.
 
@@ -1209,8 +1209,9 @@ accounts, tokens and keys are disposable and database changes roll back.
 
 Identity resolution uses a fixed synthetic DID document pointing at the temporary
 server; the SDK still checks that document's PDS against discovered issuer metadata.
-Four scenarios cover a localhost public client with base `atproto` scope, a
-granular repository grant, a granular blob grant, and an email-read grant. The base grant cannot write records. The granular flow
+Six cases cover a localhost public client with base `atproto` scope, a
+granular repository grant, a granular blob grant, an email-read grant, and an RPC
+grant using each repository signing curve (secp256k1 and P-256). The base grant cannot write records. The granular flow
 requests create/update access to one collection but approves only create; the SDK
 receives the narrowed scope and can create records before and after refresh.
 Updates, deletes, cross-collection creates, and batches mixing permitted and
@@ -1234,8 +1235,21 @@ with `insufficient_scope`, before and after refresh. The full account profile,
 including pending challenge fields, remains unchanged. Email delivery is disabled
 for the harness; no external Worker receives messages.
 
+The RPC cases approve one method on one service audience and decline a second
+requested method. SDK requests obtain service JWTs before and after refresh;
+Node's crypto verifier independently checks each signature against the fixture's
+public key, plus issuer, exact audience/method, one-minute lifetime, and distinct
+nonces. Omitted methods, declined methods, changed service fragments, bare audiences,
+and foreign hosts are rejected. Other grant families cannot mint these tokens;
+source-session logout prevents further issuance. Already issued service JWTs remain
+valid until their expiry. The test does not send these tokens to an external service.
+
+The harness uses the PostgreSQL rate limiter so counters roll back with each test;
+this preserves real admission limits without sharing a loopback IP budget across
+independent scenarios. Prior limiter and application settings are restored afterward.
+
 These tests do not establish live DID/handle resolution, confidential-client
-interoperability, RPC/identity permissions, email management or repository import, browser rendering, or
+interoperability, RPC proxying, identity permissions, email management or repository import, browser rendering, or
 complete OAuth profile compliance.
 The development-only HTTP identity exception is enabled only for this test and
 restored afterward. The `interop` tag remains excluded from default tests and CI

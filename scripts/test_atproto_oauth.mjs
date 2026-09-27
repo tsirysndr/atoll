@@ -2,8 +2,9 @@ import assert from 'node:assert/strict'
 import { createRequire } from 'node:module'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
+import { ECDH, createPublicKey, verify } from 'node:crypto'
 
-const [packagePath, origin, did, password, scenario = 'base'] = process.argv.slice(2)
+const [packagePath, origin, did, password, scenario = 'base', publicHex, curve] = process.argv.slice(2)
 let stage = 'setup'
 const deadline = setTimeout(() => { console.error(`OAuth interop timeout at ${stage}`); process.exit(1) }, 45000)
 try {
@@ -27,13 +28,17 @@ try {
     requests.push({ path: url.pathname, status: response.status })
     return response
   }
-  assert.ok(['base', 'granular', 'blobs', 'email'].includes(scenario))
+  assert.ok(['base', 'granular', 'blobs', 'email', 'rpc'].includes(scenario))
   const collection = 'com.example.oauthrecord'
+  const audience = 'did:web:appview.example.com#bsky_appview'
+  const method = 'app.bsky.feed.getTimeline'
+  const rpcScope = `rpc:${method}?aud=${encodeURIComponent(audience).replaceAll('%3A', ':')}`
   const grants = {
     base: ['atproto', 'atproto'],
     granular: [`atproto repo:${collection}?action=create`, `atproto repo:${collection}?action=create repo:${collection}?action=update`],
     blobs: ['atproto blob:text/plain', 'atproto blob:text/plain blob:image/png'],
     email: ['atproto account:email', 'atproto account:email account:email?action=manage'],
+    rpc: [`atproto ${rpcScope}`, `atproto ${rpcScope} rpc:app.bsky.feed.getFeed?aud=*`],
   }
   const [grantedScope, requestedScope] = grants[scenario]
   const redirect = 'http://127.0.0.1:8750/callback'
@@ -107,6 +112,11 @@ try {
     assert.ok(html.includes('Read and change your email address'))
     consent.permission_1 = 'yes'
   }
+  if (scenario === 'rpc') {
+    assert.ok(html.includes(`Call application services: ${method} on ${audience}`))
+    assert.ok(html.includes('app.bsky.feed.getFeed on any service'))
+    consent.permission_1 = 'yes'
+  }
   response = await browser('/oauth/authorize', consent)
   assert.equal(response.status, 303)
   const callback = new URL(response.headers.get('location'))
@@ -130,6 +140,47 @@ try {
     assert.equal(result.status, 403)
     assert.equal((await result.json()).error, 'insufficient_scope')
   }
+  const serviceToken = params => session.fetchHandler(`/xrpc/com.atproto.server.getServiceAuth?${new URLSearchParams(params)}`)
+  const nonces = new Set()
+  const checkRpcPermissions = async () => {
+    const params = { aud: audience, lxm: method }
+    if (scenario !== 'rpc') {
+      await denied(serviceToken(params))
+      return
+    }
+    const result = await serviceToken(params)
+    assert.equal(result.status, 200)
+    const { token } = await result.json()
+    const parts = token.split('.')
+    assert.equal(parts.length, 3)
+    const header = JSON.parse(Buffer.from(parts[0], 'base64url'))
+    const claims = JSON.parse(Buffer.from(parts[1], 'base64url'))
+    assert.ok(['k256', 'p256'].includes(curve))
+    assert.deepEqual(header, { typ: 'JWT', alg: curve === 'k256' ? 'ES256K' : 'ES256' })
+    const publicBytes = ECDH.convertKey(Buffer.from(publicHex, 'hex'), curve === 'k256' ? 'secp256k1' : 'prime256v1', undefined, undefined, 'uncompressed')
+    const key = createPublicKey({ format: 'jwk', key: {
+      kty: 'EC', crv: curve === 'k256' ? 'secp256k1' : 'P-256',
+      x: publicBytes.subarray(1, 33).toString('base64url'), y: publicBytes.subarray(33).toString('base64url'),
+    } })
+    assert.ok(verify('sha256', Buffer.from(`${parts[0]}.${parts[1]}`), { key, dsaEncoding: 'ieee-p1363' }, Buffer.from(parts[2], 'base64url')))
+    assert.equal(claims.iss, did)
+    assert.equal(claims.aud, audience)
+    assert.equal(claims.lxm, method)
+    assert.equal(claims.exp - claims.iat, 60)
+    assert.ok(claims.exp > Date.now() / 1000)
+    assert.match(claims.jti, /^[a-f0-9]{32}$/)
+    assert.ok(!nonces.has(claims.jti))
+    nonces.add(claims.jti)
+    for (const changed of [
+      { aud: audience },
+      { ...params, lxm: 'app.bsky.feed.getFeed' },
+      { ...params, aud: 'did:web:appview.example.com#other' },
+      { ...params, aud: 'did:web:appview.example.com' },
+      { ...params, aud: 'did:web:other.example.com#bsky_appview' },
+    ]) await denied(serviceToken(changed))
+  }
+  stage = 'RPC audience and method permissions'
+  await checkRpcPermissions()
   const checkEmailPrivacy = async () => {
     const result = await session.fetchHandler('/xrpc/com.atproto.server.getSession')
     assert.equal(result.status, 200)
@@ -218,12 +269,14 @@ try {
   }
   stage = 'account email permissions after refresh'
   await checkEmailPrivacy()
+  stage = 'RPC permissions after refresh'
+  await checkRpcPermissions()
   stage = 'source session logout'
   response = await browser('/account/sessions')
   html = await response.text()
   response = await browser('/account/logout', { _csrf_token: value(html, '_csrf_token') })
   assert.equal(response.status, 303)
-  response = await session.fetchHandler('/xrpc/com.atproto.server.getSession')
+  response = scenario === 'rpc' ? await serviceToken({ aud: audience, lxm: method }) : await session.fetchHandler('/xrpc/com.atproto.server.getSession')
   assert.equal(response.status, 401)
   for (const path of ['/.well-known/oauth-protected-resource', '/.well-known/oauth-authorization-server']) {
     assert.ok(requests.some(r => r.path === path && r.status === 200))

@@ -2,11 +2,20 @@ defmodule AtollWeb.AtprotoOAuthE2ETest do
   use Atoll.DataCase, async: false
   @moduletag :interop
 
-  for scenario <- ["base", "granular", "blobs", "email"] do
-    @tag scenario: scenario
-    test "official OAuth SDK verifies #{scenario} grants through refresh and revocation", %{
-      scenario: scenario
-    } do
+  for {scenario, curve} <- [
+        {"base", :k256},
+        {"granular", :k256},
+        {"blobs", :k256},
+        {"email", :k256},
+        {"rpc", :k256},
+        {"rpc", :p256}
+      ] do
+    @tag scenario: scenario, curve: curve
+    test "official OAuth SDK verifies #{scenario} #{curve} grants through refresh and revocation",
+         %{
+           scenario: scenario,
+           curve: curve
+         } do
       package = System.fetch_env!("ATOLL_ATPROTO_OAUTH_CLIENT_PATH") |> Path.expand()
 
       keys = [
@@ -15,7 +24,8 @@ defmodule AtollWeb.AtprotoOAuthE2ETest do
         :oauth_nonce_secret,
         :localhost_dids_enabled,
         :blob_storage,
-        :email_worker
+        :email_worker,
+        :rate_limit_backend
       ]
 
       previous = Map.new(keys, &{&1, Application.fetch_env(:atoll, &1)})
@@ -38,6 +48,8 @@ defmodule AtollWeb.AtprotoOAuthE2ETest do
       Application.put_env(:atoll, :localhost_dids_enabled, true)
       Application.put_env(:atoll, :blob_storage, backend: :postgres)
       Application.put_env(:atoll, :email_worker, [])
+      # Each loopback scenario gets real rate-limit rows rolled back with its sandbox.
+      Application.put_env(:atoll, :rate_limit_backend, :postgres)
       server = start_supervised!({Bandit, plug: AtollWeb.Endpoint, port: 0, ip: {127, 0, 0, 1}})
       {:ok, {_, port}} = ThousandIsland.listener_info(server)
 
@@ -51,7 +63,7 @@ defmodule AtollWeb.AtprotoOAuthE2ETest do
 
       did = "did:plc:abcdefghijklmnopqrstuvwx"
       password = "disposable upstream OAuth password"
-      {:ok, _} = Atoll.Repositories.create_managed(did)
+      {:ok, _} = Atoll.Repositories.create_managed(did, curve)
       {:ok, _} = Atoll.Accounts.Credentials.create(did, password)
 
       profile =
@@ -62,6 +74,8 @@ defmodule AtollWeb.AtprotoOAuthE2ETest do
           email_confirmed_at: DateTime.utc_now()
         })
 
+      {:ok, signing_key} = Atoll.KeyVault.fetch(did)
+
       {output, status} =
         System.cmd(
           "node",
@@ -71,7 +85,9 @@ defmodule AtollWeb.AtprotoOAuthE2ETest do
             AtollWeb.Endpoint.url(),
             did,
             password,
-            scenario
+            scenario,
+            Base.encode16(signing_key.public, case: :lower),
+            Atom.to_string(curve)
           ],
           stderr_to_stdout: true
         )
