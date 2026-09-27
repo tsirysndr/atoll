@@ -183,7 +183,7 @@ record Lexicons or grant access to account data.
 - [x] Chunked repository exports with lazy record-body reads.
 - [x] Streamed HTTP imports with private staging and atomic publication.
 - [ ] Bounded-memory repository metadata traversal.
-- [x] Bounded canonical MST traversal and streamed metadata validation for full/incremental HTTP exports.
+- [x] Bounded canonical MST traversal and streamed metadata validation for full/incremental HTTP and buffered exports.
 - [x] Bounded signed-tree membership verification for current and historical `getBlocks` exports.
 - [x] Bounded search-path loading for individual signed record proof exports.
 - [x] Incremental CARv1 decoding with bounded framing buffers and verified block callbacks.
@@ -3390,8 +3390,7 @@ Tests compare fetched paths with constructed canonical trees, enforce exact byte
 budgets, and distinguish unrelated damage from selected-path corruption.
 
 Whole-tree traversal is available for streamed HTTP exports as described below.
-Imports, buffered exports, operator workflows and
-repository mutations still hold metadata in memory. Compact commit-event inversion proofs remain pending.
+Imports, operator workflows and repository mutations still hold metadata in memory. Compact commit-event inversion proofs remain pending.
 
 `Atoll.Repositories.RecordProof.verify/5` accepts a CAR of at most 2 MiB, an
 expected DID/path, and a trusted signing curve/public key. It checks the first CAR
@@ -3463,8 +3462,13 @@ traversal remain possible optimizations. Full exports still inspect all metadata
 before sending, and large repositories can reach the transaction deadline.
 
 The complete archive, record/CID map and whole MST are not accumulated by this
-HTTP export path. Buffered exports, imports, key-recovery
-workflows and mutations retain their existing metadata costs. The streaming callback must finish
+HTTP export path. The buffered `Repositories.export/3` API consumes the same
+validated stream, rejecting archives above 64 MiB or 100,000 block sections while
+collecting chunks. It retains the encoded output but does not reconstruct a whole
+MST, record map or revision membership set. Its CAR now uses the stream's block
+order (commit first), and corrupt stored nodes fail rather than being rebuilt from
+the record index. Lazy corruption becomes an error result without returning partial
+bytes. Imports, key-recovery workflows and mutations retain their existing metadata costs. The streaming callback must finish
 consuming the enumerable before returning. The legacy `CAR.decode/1` and `import_archive/3` APIs remain buffered;
 HTTP imports use incremental decoding and staging. Tests compare full and incremental block sets with the buffered codec,
 exercise cancellation/corruption, and stream a repository larger than 64 MiB.

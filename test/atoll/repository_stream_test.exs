@@ -47,6 +47,7 @@ defmodule Atoll.RepositoryStreamTest do
       set: [data: "corrupt"]
     )
 
+    assert Repositories.export(@did) == {:error, :invalid_repository}
     assert {:ok, [_header]} = Repositories.stream_export(@did, nil, nil, &Enum.take(&1, 1))
 
     assert_raise ArgumentError, "Invalid CAR stream block", fn ->
@@ -71,6 +72,7 @@ defmodule Atoll.RepositoryStreamTest do
              end)
 
     assert size > 64 * 1024 * 1024
+    assert Repositories.export(@did) == {:error, :car_too_large}
   end
 
   test "preflight rejects missing, extra or mismatched index rows before invoking the consumer",
@@ -120,6 +122,8 @@ defmodule Atoll.RepositoryStreamTest do
     {:ok, commit} = Atoll.Storage.get_node(head.head)
     root = commit["data"].cid
     Repo.update_all(from(b in Atoll.Storage.Block, where: b.cid == ^root), set: [data: "corrupt"])
+
+    assert Repositories.export(@did) == {:error, :invalid_repository}
 
     assert {:error, :invalid_repository} =
              Repositories.stream_export(@did, nil, nil, fn _ ->

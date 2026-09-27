@@ -579,39 +579,32 @@ defmodule Atoll.Repositories do
   end
 
   @doc """
-  Exports a consistent snapshot or the current blocks absent from a retained revision.
-  Unknown revisions fall back to a full export. The current commit is always included.
-  Deleted records are not sent; the new MST proves the current state. Revision block
-  sets remain until operator compaction; streaming remains pending.
+  Buffers a consistent CAR using the same validated traversal as HTTP exports.
+  Unknown revisions fall back to a full export; the current commit is always
+  included. Retains at most 64 MiB of encoded chunks and 100,000 block sections,
+  matching the buffered CAR codec's limits, without rebuilding whole-tree maps.
   """
   def export(did, since \\ nil, token \\ nil) do
-    Repo.transaction(fn ->
-      unless is_nil(since) or TID.valid?(since), do: Repo.rollback(:invalid_request)
+    stream_export(did, since, token, &buffer_export!/1)
+  end
 
-      if not is_nil(token) do
-        case Atoll.Accounts.Sessions.authenticate_export(token, did) do
-          {:ok, _} -> :ok
-          {:error, reason} -> Repo.rollback(reason)
-        end
-      end
+  defp buffer_export!(chunks) do
+    {parts, _bytes, _sections} =
+      Enum.reduce(chunks, {[], 0, -1}, fn chunk, {parts, bytes, sections} ->
+        bytes = bytes + byte_size(chunk)
+        sections = sections + 1
 
-      {head, tree, commit} = snapshot!(did, is_nil(token))
+        # encode_stream emits exactly one header chunk and one chunk per block.
+        if bytes > 64 * 1024 * 1024 or sections > 100_000,
+          do: Repo.rollback(:car_too_large)
 
-      known =
-        case since && Repo.get_by(Revision, did: did, rev: since) do
-          %Revision{blocks: blocks} -> MapSet.new(blocks)
-          _ -> MapSet.new()
-        end
+        {[chunk | parts], bytes, sections}
+      end)
 
-      tree_blocks = Map.reject(tree.blocks, fn {cid, _} -> MapSet.member?(known, cid) end)
-
-      blocks =
-        Enum.reduce(Map.values(tree.records), tree_blocks, fn cid, acc ->
-          if MapSet.member?(known, cid), do: acc, else: Map.put(acc, cid, block!(cid))
-        end)
-
-      archive!([head.head], Map.put(blocks, head.head, commit))
-    end)
+    parts |> Enum.reverse() |> IO.iodata_to_binary()
+  rescue
+    ArgumentError -> Repo.rollback(:invalid_repository)
+    Atoll.MST.TraversalError -> Repo.rollback(:invalid_repository)
   end
 
   @doc """
