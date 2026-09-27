@@ -72,4 +72,74 @@ defmodule Atoll.RepositoryStreamTest do
 
     assert size > 64 * 1024 * 1024
   end
+
+  test "preflight rejects missing, extra or mismatched index rows before invoking the consumer",
+       c do
+    {:ok, _} =
+      Repositories.apply_writes(
+        @did,
+        [{:create, @collection <> "/one", %{"$type" => @collection}}],
+        c.key
+      )
+
+    row = Repo.get_by!(Atoll.Repositories.Record, did: @did, path: @collection <> "/one")
+    Repo.delete!(row)
+
+    assert {:error, :invalid_repository} =
+             Repositories.stream_export(@did, nil, nil, fn _ ->
+               flunk("inconsistent snapshot must not send headers")
+             end)
+
+    Repo.insert!(row)
+    changed = row |> Ecto.Changeset.change(cid: c.initial.head) |> Repo.update!()
+
+    assert {:error, :invalid_repository} =
+             Repositories.stream_export(@did, nil, nil, fn _ -> flunk("wrong CID") end)
+
+    changed |> Ecto.Changeset.change(cid: row.cid) |> Repo.update!()
+
+    Repo.insert!(%Atoll.Repositories.Record{
+      did: @did,
+      path: @collection <> "/unexpected",
+      cid: row.cid
+    })
+
+    assert {:error, :invalid_repository} =
+             Repositories.stream_export(@did, nil, nil, fn _ -> flunk("extra key") end)
+  end
+
+  test "corrupt stored MST nodes fail before sending, even if the record index could rebuild them",
+       c do
+    {:ok, head} =
+      Repositories.apply_writes(
+        @did,
+        [{:create, @collection <> "/one", %{"$type" => @collection}}],
+        c.key
+      )
+
+    {:ok, commit} = Atoll.Storage.get_node(head.head)
+    root = commit["data"].cid
+    Repo.update_all(from(b in Atoll.Storage.Block, where: b.cid == ^root), set: [data: "corrupt"])
+
+    assert {:error, :invalid_repository} =
+             Repositories.stream_export(@did, nil, nil, fn _ ->
+               flunk("bad stored MST must not send headers")
+             end)
+  end
+
+  test "deduplicates shared records and handles current and unknown incremental cursors", c do
+    record = %{"$type" => @collection, "shared" => true}
+    writes = for n <- 1..200, do: {:create, @collection <> "/key#{n}", record}
+    {:ok, head} = Repositories.apply_writes(@did, writes, c.key)
+    {:ok, unknown} = Atoll.TID.next(head.rev)
+
+    for since <- [nil, c.initial.rev, head.rev, unknown] do
+      {:ok, expected} = Repositories.export(@did, since)
+      {:ok, actual} = Repositories.stream_export(@did, since, nil, &Enum.to_list/1)
+      assert CAR.decode(IO.iodata_to_binary(actual)) == CAR.decode(expected)
+      {:ok, %{blocks: blocks}} = CAR.decode(expected)
+      # Header plus exactly one section for each distinct block.
+      assert length(actual) == map_size(blocks) + 1
+    end
+  end
 end

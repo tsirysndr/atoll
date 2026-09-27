@@ -1,7 +1,8 @@
 defmodule Atoll.MST.Proof do
   @moduledoc "Verifies a bounded MST search path against a caller-authenticated root, without requiring sibling subtrees."
-  alias Atoll.{CBOR, CID, MST, Syntax}
-  alias Atoll.CBOR.{Bytes, Link}
+  alias Atoll.Syntax
+  alias Atoll.MST.Node
+  alias Atoll.CBOR.Link
 
   def verify(root, key, blocks) when is_map(blocks) do
     case fetch(root, key, &Map.fetch(blocks, &1)) do
@@ -40,67 +41,27 @@ defmodule Atoll.MST.Proof do
     if depth > 128, do: invalid!()
     {bytes, state} = read!(cid, state)
 
-    with {:ok, %{"l" => left, "e" => entries} = node} <- CBOR.decode(bytes),
-         true <- map_size(node) == 2 and is_list(entries) and length(entries) <= 10_000,
-         true <- CBOR.encode!(node) == bytes and child?(left) do
-      {entries, level} = entries(entries, low, high, expected_level)
-
-      cond do
-        entries == [] and depth == 0 ->
-          if left != nil, do: invalid!()
-          {nil, state}
-
-        entries == [] ->
-          if left == nil or not is_integer(level) or level < 0, do: invalid!()
-          descend(left, key, state, low, high, level, depth)
-
-        true ->
-          search(entries, left, key, state, low, high, level, depth)
-      end
-    else
-      _ -> invalid!()
-    end
-  end
-
-  defp read!(cid, state) do
-    unless dag?(cid) and not Map.has_key?(state.blocks, cid), do: invalid!()
-
-    case state.reader.(cid) do
-      {:ok, bytes} when is_binary(bytes) and byte_size(bytes) <= 1_048_576 ->
-        total = state.bytes + byte_size(bytes)
-        if total > state.limit, do: throw(:mst_proof_too_large)
-        if CID.verify(cid, bytes) != :ok, do: invalid!()
-        {bytes, %{state | blocks: Map.put(state.blocks, cid, bytes), bytes: total}}
+    case Node.decode(cid, bytes, low, high, expected_level, depth == 0) do
+      {:ok, %{left: left, entries: entries, level: level}} ->
+        search(entries, left, key, state, low, high, level, depth)
 
       _ ->
         invalid!()
     end
   end
 
-  defp entries(entries, low, high, expected) do
-    {decoded, _, level} =
-      Enum.reduce(entries, {[], "", expected}, fn entry, {acc, previous, level} ->
-        case entry do
-          %{"p" => prefix, "k" => %Bytes{data: suffix}, "v" => %Link{cid: value}, "t" => right}
-          when map_size(entry) == 4 and is_integer(prefix) and prefix >= 0 and
-                 prefix <= byte_size(previous) ->
-            current = binary_part(previous, 0, prefix) <> suffix
-            height = MST.height(current)
+  defp read!(cid, state) do
+    unless Node.dag?(cid) and not Map.has_key?(state.blocks, cid), do: invalid!()
 
-            unless Syntax.repo_path?(current) and current > previous and
-                     (is_nil(low) or current > low) and (is_nil(high) or current < high) and
-                     prefix == common(previous, current, 0) and dag?(value) and child?(right) and
-                     (is_nil(level) or level == height),
-                   do: invalid!()
+    case state.reader.(cid) do
+      {:ok, bytes} when is_binary(bytes) and byte_size(bytes) <= 1_048_576 ->
+        total = state.bytes + byte_size(bytes)
+        if total > state.limit, do: throw(:mst_proof_too_large)
+        {bytes, %{state | blocks: Map.put(state.blocks, cid, bytes), bytes: total}}
 
-            {[{current, value, right} | acc], current, height}
-
-          _ ->
-            invalid!()
-        end
-      end)
-
-    {Enum.reverse(decoded), level}
+      _ ->
+        invalid!()
+    end
   end
 
   defp search([], child, key, state, low, high, level, depth),
@@ -119,12 +80,5 @@ defmodule Atoll.MST.Proof do
   defp descend(%Link{cid: cid}, key, state, low, high, level, depth),
     do: walk(cid, key, state, low, high, level - 1, depth + 1)
 
-  defp child?(nil), do: true
-  defp child?(%Link{cid: cid}), do: dag?(cid)
-  defp child?(_), do: false
-  defp dag?(cid) when is_binary(cid), do: match?({:ok, %{codec: :dag_cbor}}, CID.decode(cid))
-  defp dag?(_), do: false
-  defp common(<<c, a::binary>>, <<c, b::binary>>, n), do: common(a, b, n + 1)
-  defp common(_, _, n), do: n
   defp invalid!, do: throw(:invalid_mst_proof)
 end

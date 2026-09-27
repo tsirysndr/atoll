@@ -617,59 +617,123 @@ defmodule Atoll.Repositories do
   @doc """
   Consumes a lazy CAR inside a consistent, authorized snapshot transaction.
 
-  The callback must consume the enumerable before returning. Repository metadata
-  and MST nodes remain in memory; record bodies are read one at a time. A shared
-  head lock pins the snapshot until completion or cancellation. Lazy read failures
-  raise to abort an already-started transfer, rather than returning a JSON error.
+  Validates canonical stored MST nodes against a streamed record index before
+  invoking the callback. Metadata traversal retains only bounded pending branches;
+  record bodies are read one at a time. The callback must consume the enumerable
+  before returning. Shared head/revision locks pin the snapshot until cancellation
+  or completion. Lazy read failures abort an already-started transfer.
   """
   def stream_export(did, since, token, consume) when is_function(consume, 1) do
     Repo.transaction(
       fn ->
         unless is_nil(since) or TID.valid?(since), do: Repo.rollback(:invalid_request)
-
-        if not is_nil(token) do
-          case Atoll.Accounts.Sessions.authenticate_export(token, did) do
-            {:ok, _} -> :ok
-            {:error, reason} -> Repo.rollback(reason)
-          end
-        end
-
-        {head, tree, commit} = snapshot!(did, is_nil(token))
-
-        if not is_nil(token) do
-          case Atoll.Accounts.Sessions.authenticate_export(token, did) do
-            {:ok, _} -> :ok
-            {:error, reason} -> Repo.rollback(reason)
-          end
-        end
+        authorize_export!(token, did)
+        {head, root, commit} = streaming_snapshot!(did, is_nil(token))
+        authorize_export!(token, did)
 
         known =
-          case since && Repo.get_by(Revision, did: did, rev: since) do
-            %Revision{blocks: blocks} -> MapSet.new(blocks)
-            _ -> MapSet.new()
+          if since do
+            Repo.one(
+              from r in Revision,
+                where: r.did == ^did and r.rev == ^since,
+                select: r.rev,
+                lock: "FOR SHARE"
+            )
           end
 
-        nodes = Stream.reject(tree.blocks, fn {cid, _} -> MapSet.member?(known, cid) end)
+        nodes =
+          MST.Traversal.stream(root, &Storage.get_block/1)
+          |> Stream.flat_map(fn
+            {:node, cid, bytes} -> if known_block?(did, known, cid), do: [], else: [{cid, bytes}]
+            {:record, _, _} -> []
+          end)
+
+        records = from r in Record, where: r.did == ^did, distinct: r.cid, select: r.cid
 
         records =
-          tree.records
-          |> Map.values()
-          |> Enum.uniq()
-          |> Stream.reject(
-            &(MapSet.member?(known, &1) or Map.has_key?(tree.blocks, &1) or &1 == head.head)
+          if known do
+            from r in records,
+              where:
+                fragment(
+                  "NOT EXISTS (SELECT 1 FROM repository_revisions AS known WHERE known.did = ? AND known.rev = ? AND ? = ANY(known.blocks))",
+                  ^did,
+                  ^known,
+                  r.cid
+                )
+          else
+            records
+          end
+
+        records =
+          from(r in subquery(records),
+            left_join: b in Atoll.Storage.Block,
+            on: b.cid == r.cid,
+            order_by: r.cid,
+            select: {r.cid, b.data}
           )
-          |> Stream.map(fn cid ->
-            case Storage.get_block(cid) do
-              {:ok, bytes} -> {cid, bytes}
-              _ -> raise "Repository stream contains a missing block"
-            end
-          end)
+          |> Repo.stream(max_rows: 1)
 
         blocks = Stream.concat([[{head.head, commit}], nodes, records])
         {:ok, stream} = CAR.encode_stream([head.head], blocks)
         consume.(stream)
       end,
       timeout: 60_000
+    )
+  end
+
+  defp authorize_export!(nil, _did), do: :ok
+
+  defp authorize_export!(token, did) do
+    case Atoll.Accounts.Sessions.authenticate_export(token, did) do
+      {:ok, _} -> :ok
+      {:error, reason} -> Repo.rollback(reason)
+    end
+  end
+
+  defp streaming_snapshot!(did, require_active) do
+    head = locked_head!(did, "FOR SHARE", require_active)
+    bytes = block!(head.head)
+
+    with {:ok, commit} <- Commit.verify(bytes, did, head.curve, head.public_key),
+         true <- commit["rev"] == head.rev do
+      root = commit["data"].cid
+
+      indexed =
+        from(r in Record,
+          where: r.did == ^did,
+          order_by: fragment("? COLLATE \"C\"", r.path),
+          select: {r.path, r.cid}
+        )
+        |> Repo.stream(max_rows: 128)
+
+      signed =
+        MST.Traversal.stream(root, &Storage.get_block/1)
+        |> Stream.flat_map(fn
+          {:record, path, cid} -> [{path, cid}]
+          {:node, _, _} -> []
+        end)
+
+      # Sentinels detect either side ending early, including an empty repository.
+      Stream.zip(Stream.concat(signed, [:end]), Stream.concat(indexed, [:end]))
+      |> Enum.each(fn
+        {entry, entry} -> :ok
+        _ -> Repo.rollback(:invalid_repository)
+      end)
+
+      {head, root, bytes}
+    else
+      _ -> Repo.rollback(:invalid_repository)
+    end
+  rescue
+    Atoll.MST.TraversalError -> Repo.rollback(:invalid_repository)
+  end
+
+  defp known_block?(_did, nil, _cid), do: false
+
+  defp known_block?(did, rev, cid) do
+    Repo.exists?(
+      from r in Revision,
+        where: r.did == ^did and r.rev == ^rev and fragment("? = ANY(?)", ^cid, r.blocks)
     )
   end
 

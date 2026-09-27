@@ -182,6 +182,7 @@ record Lexicons or grant access to account data.
 - [x] Chunked repository exports with lazy record-body reads.
 - [x] Streamed HTTP imports with private staging and atomic publication.
 - [ ] Bounded-memory repository metadata traversal.
+- [x] Bounded canonical MST traversal and streamed metadata validation for full/incremental HTTP exports.
 - [x] Bounded search-path loading for individual signed record proof exports.
 - [x] Incremental CARv1 decoding with bounded framing buffers and verified block callbacks.
 - [x] Request-scoped private disk staging for incrementally validated CAR blocks.
@@ -3375,8 +3376,9 @@ index inconsistencies still fail closed. Inactive repositories remain unavailabl
 Tests compare fetched paths with constructed canonical trees, enforce exact byte
 budgets, and distinguish unrelated damage from selected-path corruption.
 
-Whole-repository metadata traversal and compact commit-event inversion proofs
-remain pending; this change bounds individual record proof construction.
+Whole-tree traversal is available for streamed HTTP exports as described below.
+Imports, buffered/history/operator paths and repository mutations still hold
+metadata in memory. Compact commit-event inversion proofs remain pending.
 
 `Atoll.Repositories.RecordProof.verify/5` accepts a CAR of at most 2 MiB, an
 expected DID/path, and a trusted signing curve/public key. It checks the first CAR
@@ -3421,9 +3423,35 @@ A shared repository-head lock prevents mutation, deletion, or revision compactio
 from invalidating the snapshot while the callback consumes it. Export credentials
 are rechecked after acquiring the snapshot lock. The transaction has a 60-second
 timeout; slow readers hold a database connection and can delay repository writes.
-Snapshot construction still holds the record/CID map and reconstructed MST in
-memory, so metadata memory scales with repository size. Record bodies and the
-complete archive are no longer accumulated. The streaming callback must finish
+Snapshot validation uses `Atoll.MST.Traversal.stream/3` to read the stored signed
+tree without rebuilding it or retaining a complete record map. Canonical nodes
+are checked with the same node validator used by individual proofs: CID hashes,
+encoding, prefix compression, strict key ranges, hash-derived levels and required
+intermediate nodes. Every signed record entry is compared with the database index
+in bytewise order using a 128-row cursor. Missing/extra index entries, wrong CIDs
+and corrupt stored nodes reject the snapshot before the consumer sends headers.
+The previous ability to reconstruct a missing stored node from the index is not
+used by streamed exports.
+
+Traversal retains pending branches, with defaults of 129 levels, 100,000 nodes,
+1,000,000 records and a 16 MiB metadata accounting budget. Each node is limited to
+1 MiB and 10,000 entries. The accounting budget charges serialized node bytes,
+expanded key bytes and a fixed per-entry allowance; it is not an exact BEAM heap
+measurement. Completed branches release their charge, so total tree size need not
+fit this budget. Trusted internal callers can adjust traversal count/accounting
+limits; malformed or over-budget traversal raises `Atoll.MST.TraversalError`.
+
+After validation, delivery walks the nodes again and streams distinct record CIDs
+and bodies from PostgreSQL one row at a time. Incremental exports pin the selected
+revision and query membership in PostgreSQL instead of loading its entire block
+array into application memory. This adds node reads and, for incremental exports,
+membership queries; normalized per-revision membership and higher-throughput
+traversal remain possible optimizations. Full exports still inspect all metadata
+before sending, and large repositories can reach the transaction deadline.
+
+The complete archive, record/CID map and whole MST are not accumulated by this
+HTTP export path. Buffered exports, imports, historical block proofs, key-recovery
+workflows and mutations retain their existing metadata costs. The streaming callback must finish
 consuming the enumerable before returning. The legacy `CAR.decode/1` and `import_archive/3` APIs remain buffered;
 HTTP imports use incremental decoding and staging. Tests compare full and incremental block sets with the buffered codec,
 exercise cancellation/corruption, and stream a repository larger than 64 MiB.
