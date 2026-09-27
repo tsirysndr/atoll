@@ -942,6 +942,7 @@ observations do not produce duplicate events. The
 - [x] Logical PostgreSQL archive/restore helper with checksums, empty-target protection, and disposable-database integration checks.
 - [x] Disposable full-schema PostgreSQL restore drill covering signed repositories, encrypted custody, sessions, blobs, audit history and replay boundaries.
 - [x] Offline S3 blob archives with CID verification, empty-prefix restoration, and a real MinIO round trip.
+- [x] Combined PostgreSQL/MinIO restore drill for published and staged blobs, retained credentials, signed repositories and post-restore publication.
 - [ ] Complete database/S3 recovery sets, broader restore drills, and backup / restore workflow.
 - [x] `GET /health/ready` database connectivity readiness with bounded queries and outcome telemetry.
 - [x] Opt-in supervised cleanup of expired sessions and service-token replay markers, with bounded batches and outcome telemetry.
@@ -1352,7 +1353,8 @@ remains on the checklist.
 
 ### MinIO integration tests
 
-With Docker running and the local test PostgreSQL database available:
+With Docker running, the local test PostgreSQL database available, Python 3.9+,
+matching PostgreSQL client tools on PATH, and a database role with CREATEDB:
 
 ```sh
 bash scripts/test_minio.sh
@@ -1360,7 +1362,10 @@ bash scripts/test_minio.sh
 
 The script builds a test image from MinIO's pinned
 `RELEASE.2025-09-07T16-13-09Z` source release, starts a disposable container on a
-random localhost port, waits for readiness, and runs the `minio`-tagged tests.
+random localhost port, waits for readiness, and runs the `minio`-tagged tests and
+the combined database/S3 restore drill. The latter uses explicit
+`PGHOST`/`PGPORT`/`PGUSER`/`PGPASSWORD` settings (local defaults otherwise), creates
+two disposable databases, and removes them after the drill.
 The first build downloads Go dependencies and can take several minutes; Docker
 caches the image for subsequent runs. Test credentials are fixed and only used
 in this loopback-bound container. Objects live in temporary memory-backed storage;

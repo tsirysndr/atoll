@@ -112,6 +112,11 @@ jobs:
           cache-to: type=gha,scope=atoll-minio-linux-amd64,mode=max
 
       - name: Run MinIO integration tests
+        env:
+          PGHOST: localhost
+          PGPORT: "5432"
+          PGUSER: postgres
+          PGPASSWORD: postgres
         run: bash scripts/test_minio.sh --skip-build
 
       - name: Ensure checks did not modify tracked files

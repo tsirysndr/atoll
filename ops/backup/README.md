@@ -93,9 +93,9 @@ cleanup. Preserve object keys and account for provider versioning, retention,
 encryption/KMS keys and permissions. Atoll's S3 inventory can describe current
 ownership but is not proof of a complete backup or permission to delete objects.
 The offline S3 helper below copies and verifies current Atoll blob objects.
-Coordinated database/S3 snapshots and cross-store application restore drills remain
-unimplemented; the main backup/restore checklist remains open. The PostgreSQL
-Atoll-schema drill below covers selected application state.
+The combined PostgreSQL/MinIO drill below exercises selected application recovery
+across both stores. Coordinated production snapshot orchestration remains
+unimplemented; the main backup/restore checklist remains open.
 
 ### Archive and restore S3 blob bytes
 
@@ -210,6 +210,31 @@ only failure stages to avoid printing credentials in exception values. Matching
 keys remain a separately retained requirement for real recovery.
 
 This is selected application coverage, not proof of every pending PLC/OAuth/signup
-state, S3 recovery, rolling-version migration compatibility, production grants,
+state, rolling-version migration compatibility, production grants,
 large-database performance or point-in-time recovery. Continue to perform deployment-
 specific restore drills before relying on an archive for recovery.
+
+### Combined PostgreSQL and S3 drill
+
+`bash scripts/test_minio.sh` also runs
+`python3 scripts/test_atoll_database_backup.py --s3` against its disposable MinIO
+container. Use matching PostgreSQL client binaries on PATH and a role with CREATEDB
+as above. Push CI includes this drill. The `--s3` mode requires the script's
+`ATOLL_MINIO_TEST_ENDPOINT`, restricted to HTTP on 127.0.0.1, and uses only fixed
+test credentials. It creates separate source/target buckets named from its unique
+disposable database names. Buckets are removed with the temporary MinIO container;
+the Python runner removes its databases and local archives.
+
+The fixture seeds an S3-backed published blob, an unpublished staged blob, and an
+untracked object. With the source fixture process stopped, it separately archives
+the database and all three S3 objects, restores the database, and points Atoll at
+the empty target bucket. It verifies that the published blob cannot be served
+until the S3 archive is restored, and that no PostgreSQL raw-block fallback exists.
+After restoration it performs the schema, signature, custody, session, quota,
+audit and replay checks above, retrieves the published blob, and confirms the
+staged blob remains private. It also verifies untracked bytes were retained, then
+publishes the staged blob in a new signed record and retrieves it publicly.
+
+This demonstrates an offline recovery sequence with synthetic state; it does not
+automatically quiesce production writers, bind archive pairs to a recovery-set
+manifest, or test provider versioning/KMS retention and every pending workflow.

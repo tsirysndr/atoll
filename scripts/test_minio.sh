@@ -46,3 +46,7 @@ fi
 # Keep unrelated runtime options from enabling external services during this test.
 ATOLL_BLOB_CLEANUP_ENABLED=false ATOLL_IDENTITY_REFRESH_ENABLED=false ATOLL_BLOB_STORAGE=postgres \
   mix test --only minio test/atoll/blobs_minio_test.exs test/atoll_web/controllers/blob_upload_controller_test.exs
+
+# Exercise a full database restore paired with separately archived S3 objects.
+# Both buckets exist only inside this script's disposable MinIO container.
+ATOLL_BLOB_STORAGE=postgres python3 scripts/test_atoll_database_backup.py --s3
