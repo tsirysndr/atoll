@@ -347,3 +347,7 @@ case System.get_env("ATOLL_PASSKEYS_ENABLED") do
   "false" -> config :atoll, :passkeys_enabled, false
   _ -> raise "ATOLL_PASSKEYS_ENABLED must be true or false"
 end
+
+if value = System.get_env("ATOLL_METRICS_ENABLED") do
+  config :atoll, :metrics_enabled, Atoll.Metrics.enabled_from_env!(value)
+end

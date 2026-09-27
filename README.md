@@ -922,6 +922,7 @@ observations do not produce duplicate events. The
 - [ ] Database and blob backup / restore workflow.
 - [x] `GET /health/ready` database connectivity readiness with bounded queries and outcome telemetry.
 - [x] Opt-in supervised cleanup of expired sessions and service-token replay markers, with bounded batches and outcome telemetry.
+- [x] Opt-in operator-authenticated Prometheus endpoint with fixed-cardinality HTTP, database, readiness, worker and VM metrics.
 - [ ] Comprehensive operational monitoring and alerting.
 - [x] Offline MST and compact-proof interoperability against pinned `@atproto/repo` 0.8.10 fixtures.
 - [ ] End-to-end compatibility tests with existing ATProto clients and servers.
@@ -938,6 +939,71 @@ external identity services. Configure deployment probe intervals and failure
 thresholds accordingly; it is not a complete production-readiness assessment.
 The `[:atoll, :readiness, :check]` telemetry event includes `count`, `duration`
 (native monotonic time units), and an `outcome` of `ready` or `unavailable`.
+
+### Prometheus monitoring
+
+Set `ATOLL_METRICS_ENABLED=true` or `config :atoll, :metrics_enabled, true`
+to expose `GET /metrics`. It is disabled by default (HTTP 404). An explicitly
+set environment variable overrides application configuration and accepts only
+`true` or `false`; invalid values fail startup. When enabled, the endpoint uses
+the existing operator HTTP Basic credentials: username `admin` and the configured
+`ATOLL_ADMIN_PASSWORD`. Missing or incorrect credentials return 401; missing
+operator configuration or an unavailable collector returns 503. Responses disable
+caching. Use HTTPS when scraping across a network and protect the credential file:
+these credentials also grant administrative access.
+
+Example [Prometheus scrape configuration](https://prometheus.io/docs/prometheus/latest/configuration/configuration/)
+(replace the hostname and secret path):
+
+```yaml
+scrape_configs:
+  - job_name: atoll
+    scheme: https
+    metrics_path: /metrics
+    scrape_interval: 30s
+    basic_auth:
+      username: admin
+      password_file: /run/secrets/atoll_admin_password
+    static_configs:
+      - targets: [pds.example.com:443]
+```
+
+The endpoint serves [Prometheus text format 0.0.4](https://prometheus.io/docs/instrumenting/exposition_formats/)
+and collects these metric families:
+
+| Metric | Meaning |
+| --- | --- |
+| `atoll_http_requests_total` | Completed Phoenix endpoint requests, labeled only by HTTP status class. |
+| `atoll_http_duration_seconds_total` | Accumulated completed endpoint duration in seconds. |
+| `atoll_database_queries_total` | Ecto query telemetry events, including failed queries. |
+| `atoll_database_duration_seconds_total` | Accumulated Ecto total query duration in seconds. |
+| `atoll_database_queue_seconds_total` | Accumulated database pool queue duration in seconds. |
+| `atoll_readiness_checks_total` | Readiness checks labeled by `ready`, `unavailable`, or `other`. |
+| `atoll_worker_runs_total` | Worker completion events labeled by a fixed worker name and result. |
+| `atoll_worker_items_failed_total` | Worker-reported failed item counts, separate from failed or timed-out runs. |
+| `atoll_collector_start_time_seconds` | Collector start time as Unix seconds. |
+| `atoll_vm_memory_bytes` | Current total Erlang VM memory. |
+| `atoll_vm_run_queue` | Current Erlang run queue length. |
+
+Worker names cover identity refresh, blob cleanup, account cleanup, signup cleanup,
+signup retry, OAuth key checks, event retention, and relay announcement. Results
+use a fixed allowlist; unrecognized values become `other`. Disabled workers retain
+zero-valued series. Labels never contain account IDs, handles, request paths,
+query text, credentials, or external URLs. Collection is always active in memory;
+the setting controls HTTP exposure. Scrapes read counters and VM state without
+querying PostgreSQL or contacting blob storage.
+
+Counters are local to each node and reset when the collector restarts. Scrape each
+node separately and use Prometheus `rate()` or `increase()` before aggregating
+counters across nodes. Individual counters are concurrent; a scrape is not an
+atomic snapshot across all families. Endpoint counts include completed scrapes
+and probes, and omit requests that terminate without an endpoint stop event.
+Durations are totals, not latency histograms or percentiles. This exporter does
+not install Prometheus, configure alert delivery, or monitor disk capacity,
+backlogs, external services, or backup freshness. Comprehensive monitoring and
+alerting remain on the checklist.
+
+### Development configuration
 
 Install Elixir / Erlang and PostgreSQL. The project declares Elixir `~> 1.17`; see `mix.exs` for dependency requirements.
 
@@ -5872,7 +5938,7 @@ URL. This starts the account-creation UI as described by the
 [Prompt Create extension](https://openid.net/specs/openid-connect-prompt-create-1_0.html).
 Atoll uses its ATProto authorization-code/DPoP flow, not OpenID ID tokens. Other
 prompt values and combinations are currently rejected with `invalid_request`.
-Discovery advertisement remains part of the pending authorization-server metadata work.
+Authorization-server metadata advertises `prompt_values_supported: ["create"]`.
 
 `/account/signup` uses the shared purple Tailwind account shell. It requires a
 live browser-bound creation request, CSRF token and matching form identifier.

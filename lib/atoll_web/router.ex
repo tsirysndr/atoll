@@ -7,6 +7,7 @@ defmodule AtollWeb.Router do
 
   scope "/", AtollWeb do
     get "/", HomeController, :show
+    get "/metrics", MetricsController, :show
     get "/.well-known/did.json", ServerController, :identity
     get "/.well-known/atproto-did", IdentityController, :hosted_handle
   end
