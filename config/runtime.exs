@@ -366,7 +366,9 @@ if config_env() == :prod do
   config :atoll, AtollWeb.Endpoint,
     url: [host: host, port: 443, scheme: "https"],
     http: [
-      ip: {0, 0, 0, 0, 0, 0, 0, 0}
+      # Behind a same-host reverse proxy set ATOLL_LISTEN_IP=127.0.0.1 so the
+      # plain-HTTP listener is not reachable from the public interface.
+      ip: Atoll.ServerConfig.listen_ip_from_env!(System.get_env("ATOLL_LISTEN_IP"))
     ],
     secret_key_base: secret_key_base
 

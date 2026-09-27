@@ -79,6 +79,7 @@ rather than on first use.
 | [docs/development.md](docs/development.md) | Local development and dev-only behavior |
 | [docs/testing.md](docs/testing.md) | Opt-in integration suites, interoperability checks, restore drills |
 | [ops/backup/README.md](ops/backup/README.md) | Backup, recovery sets, and restore runbook |
+| [ops/email-worker/README.md](ops/email-worker/README.md) | Deployable Cloudflare email Worker |
 | [ops/prometheus/README.md](ops/prometheus/README.md) | Alert rules and operator runbook |
 
 ## Testing

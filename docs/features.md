@@ -12,6 +12,8 @@ Every item below is implemented in this repository. This is the project's develo
 - [x] Database migrations and isolated database tests.
 - [x] `GET /health` HTTP liveness endpoint (does not check database readiness).
 - [x] `GET /xrpc/_health` version and database probe, plus the reference `robots.txt` allowing public-API crawling.
+- [x] `GET /tls-check` on-demand certificate approval for the server host and completed hosted-handle hosts, mirroring the reference PDS.
+- [x] Configurable production listen address (`ATOLL_LISTEN_IP`) for loopback-only binding behind a same-host proxy.
 - [x] `GET /` plain-text ATProto ASCII banner and API location.
 - [x] `GET /xrpc/com.atproto.server.describeServer` with configurable `did`, `availableUserDomains`, invite requirement, blob limit, and optional policy links and operator contact (`ATOLL_PRIVACY_POLICY_URL`, `ATOLL_TERMS_OF_SERVICE_URL`, `ATOLL_CONTACT_EMAIL`).
 - [x] Controller test for unauthenticated server description.
@@ -401,10 +403,12 @@ mutation. Deletes and empty batches need no record schema, even with `validate: 
 - [x] Opt-in automatic signup retries with database leases, durable delay and activation fencing.
 - [x] Operator signup activation from verified directory advancement that preserves local identity and authority.
 - [x] Opt-in self-service custom-domain DID reservation during OAuth signup, with bounded pending state, password-bound retries, DNS/HTTPS setup instructions and transactional audit attribution.
+- [x] Configurable reserved handle labels (`ATOLL_RESERVED_HANDLES`) refused by self-service signup and handle claims while operator endpoints and existing owners keep them.
 - [x] Authenticated signup-queue status reporting live accounts as activated without a queue.
 - [x] Documented signup-recovery decision tree mapping each verified directory state to its operator tool; phone verification is an entryway service in the reference deployment, outside a standalone PDS at the pinned revision.
 - [x] Internal DID-scoped password credentials with salted Argon2id hashes, bounded input, redacted inspection, and duplicate protection.
 - [x] Shared configurable Cloudflare Worker email delivery client.
+- [x] Reference Cloudflare email Worker implementation (`ops/email-worker`) on Email Service with bearer auth and KV idempotency.
 - [x] `requestPlcOperationSignature` email authorization with atomic single-use challenge consumption.
 - [x] Email-authorized `signPlcOperation` with fresh verified predecessor lookup and atomic code consumption.
 - [x] `submitPlcOperation` with local key/service/handle constraints, durable retries, and identity-event reconciliation.

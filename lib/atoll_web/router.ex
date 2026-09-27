@@ -9,6 +9,7 @@ defmodule AtollWeb.Router do
     get "/", HomeController, :show
     get "/metrics", MetricsController, :show
     get "/.well-known/did.json", ServerController, :identity
+    get "/tls-check", ServerController, :tls_check
     get "/.well-known/atproto-did", IdentityController, :hosted_handle
   end
 

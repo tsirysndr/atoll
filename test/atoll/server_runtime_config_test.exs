@@ -61,6 +61,22 @@ defmodule Atoll.ServerRuntimeConfigTest do
     end
   end
 
+  test "the production listen address is configurable and validated" do
+    config = Config.Reader.read!("config/runtime.exs", env: :prod, target: :host)
+    assert config[:atoll][AtollWeb.Endpoint][:http][:ip] == {0, 0, 0, 0, 0, 0, 0, 0}
+
+    System.put_env("ATOLL_LISTEN_IP", "127.0.0.1")
+    on_exit(fn -> System.delete_env("ATOLL_LISTEN_IP") end)
+    config = Config.Reader.read!("config/runtime.exs", env: :prod, target: :host)
+    assert config[:atoll][AtollWeb.Endpoint][:http][:ip] == {127, 0, 0, 1}
+
+    System.put_env("ATOLL_LISTEN_IP", "not-an-address")
+
+    assert_raise RuntimeError, "ATOLL_LISTEN_IP must be an IPv4 or IPv6 address", fn ->
+      Config.Reader.read!("config/runtime.exs", env: :prod, target: :host)
+    end
+  end
+
   test "production HSTS enforcement is opt-in and validated" do
     config = Config.Reader.read!("config/runtime.exs", env: :prod, target: :host)
     refute config[:atoll][AtollWeb.Endpoint][:force_ssl]

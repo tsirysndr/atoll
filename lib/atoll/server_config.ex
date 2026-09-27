@@ -41,6 +41,16 @@ defmodule Atoll.ServerConfig do
     %{pds: pds, host: host && String.downcase(host)}
   end
 
+  @doc "Production HTTP bind address; defaults to all interfaces like the generated endpoint."
+  def listen_ip_from_env!(nil), do: {0, 0, 0, 0, 0, 0, 0, 0}
+
+  def listen_ip_from_env!(value) when is_binary(value) do
+    case :inet.parse_address(String.to_charlist(value)) do
+      {:ok, address} -> address
+      _ -> raise "ATOLL_LISTEN_IP must be an IPv4 or IPv6 address"
+    end
+  end
+
   defp url!(env, name) do
     case env[name] do
       nil ->

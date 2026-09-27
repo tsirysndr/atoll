@@ -107,7 +107,14 @@ ATOLL_IMAGE_CDN_URL_PATTERN=https://cdn.bsky.app/img/%s/plain/%s/%s@jpeg
 # Signup policy (leave signup off until step 10)
 ATOLL_SIGNUP_ENABLED=false
 ATOLL_INVITE_CODE_REQUIRED=true
+
+# Bind only to loopback when the reverse proxy shares the host
+ATOLL_LISTEN_IP=127.0.0.1
 ```
+
+Self-service signup refuses operational first labels (`www`, `admin`, `mail`,
+`pds`, `cdn`, ...) beneath the handle domains; tune the list with
+`ATOLL_RESERVED_HANDLES` (see `docs/accounts.md`).
 
 Verify the moderation-service DIDs yourself before relying on them; service
 DIDs are operator configuration, not protocol constants.
@@ -124,7 +131,8 @@ Optional subsystems, each documented under [docs/](./): S3 blob storage
 limits for multi-node deployments (`ATOLL_RATE_LIMIT_BACKEND=redis`,
 `ATOLL_REDIS_URL`), the Cloudflare email Worker
 (`ATOLL_EMAIL_WORKER_URL`/`ATOLL_EMAIL_WORKER_TOKEN` — without it email
-confirmation, password reset, and email-authorized PLC signing cannot send),
+confirmation, password reset, and email-authorized PLC signing cannot send;
+a ready-to-deploy Worker lives in `ops/email-worker`),
 passkeys (`ATOLL_PASSKEYS_ENABLED=true`), verified PLC resolution
 (`ATOLL_PLC_RESOLUTION_MODE=audit`), quotas, cache TTLs, rate limits,
 `ATOLL_PRIVACY_POLICY_URL`, `ATOLL_TERMS_OF_SERVICE_URL`, and
@@ -142,8 +150,27 @@ pds.example.com, *.users.example.com {
 }
 ```
 
-The wildcard site needs a wildcard certificate (Caddy: DNS challenge plugin
-for your DNS provider) or on-demand TLS. Every user handle host must serve
+The wildcard site needs either a wildcard certificate (Caddy: DNS challenge
+plugin for your DNS provider) or on-demand TLS guarded by Atoll's
+`GET /tls-check` endpoint, which approves only the server host and completed
+hosted-handle hosts:
+
+```
+{
+	on_demand_tls {
+		ask http://127.0.0.1:4000/tls-check
+	}
+}
+
+pds.example.com, *.users.example.com {
+	tls {
+		on_demand
+	}
+	reverse_proxy 127.0.0.1:4000
+}
+```
+
+Every user handle host must serve
 both `/.well-known/atproto-did` and the XRPC routes. If you use nginx
 instead, enable `proxy_http_version 1.1` with `Upgrade`/`Connection` headers
 for `/xrpc/com.atproto.sync.subscribeRepos`, forward `X-Forwarded-For` and

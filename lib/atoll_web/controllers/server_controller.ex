@@ -21,6 +21,27 @@ defmodule AtollWeb.ServerController do
     end
   end
 
+  @doc "Caddy on-demand TLS ask endpoint, mirroring the reference PDS's /tls-check."
+  def tls_check(conn, params) do
+    domain = params["domain"]
+    conn = put_resp_header(conn, "cache-control", "no-store")
+
+    approved =
+      is_binary(domain) and byte_size(domain) <= 253 and
+        (String.downcase(domain) == URI.parse(AtollWeb.Endpoint.url()).host or
+           handle_host?(String.downcase(domain)))
+
+    if approved, do: send_resp(conn, 200, ""), else: send_resp(conn, 404, "")
+  end
+
+  defp handle_host?(domain) do
+    Atoll.Accounts.Signup.hosted_handle?(domain) and
+      case Atoll.Repo.get_by(Atoll.Accounts.Profile, handle: domain) do
+        %{did: did} -> not Atoll.Accounts.Signup.pending?(did)
+        nil -> false
+      end
+  end
+
   def describe(conn, _params) do
     config = Application.fetch_env!(:atoll, :pds)
 
