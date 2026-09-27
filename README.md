@@ -404,7 +404,7 @@ mutation. Deletes and empty batches need no record schema, even with `validate: 
 - [x] Operator signup activation from verified directory advancement that preserves local identity and authority.
 - [x] Opt-in self-service custom-domain DID reservation during OAuth signup, with bounded pending state, password-bound retries, DNS/HTTPS setup instructions and transactional audit attribution.
 - [x] Authenticated signup-queue status reporting live accounts as activated without a queue.
-- [ ] Phone verification and signup recovery requiring changed local identity or keys.
+- [x] Documented signup-recovery decision tree mapping each verified directory state to its operator tool; phone verification is an entryway service in the reference deployment, outside a standalone PDS at the pinned revision.
 - [x] Internal DID-scoped password credentials with salted Argon2id hashes, bounded input, redacted inspection, and duplicate protection.
 - [x] Shared configurable Cloudflare Worker email delivery client.
 - [x] `requestPlcOperationSignature` email authorization with atomic single-use challenge consumption.
@@ -7004,3 +7004,30 @@ are taken (see `ops/backup`). The switch is per node and read at boot; restart
 nodes into and out of maintenance rather than reconfiguring a live system, and
 quiesce every node that shares the database before calling a snapshot
 consistent.
+
+### Signup recovery decision tree
+
+A pending signup is recovered by matching the fresh verified directory state to
+the tool built for it. With no recorded submission, `mix
+atoll.accounts.resume_signup` retries the exact stored registration, and the
+bounded cleanup command releases reservations that were never sent. When the
+directory holds exactly the retained genesis, resume completes activation.
+When the directory has advanced but the current identity still authorizes the
+retained keys and matches the local handle and PDS, `mix
+atoll.accounts.reconcile_signup` activates without posting anything.
+
+A `did:plc` identity is derived from its genesis operation and controlled by
+its rotation keys, so a directory head that no longer authorizes the retained
+authority key — or a tombstone — cannot be recovered by any local action once
+PLC's 72-hour fork window has passed. Recovery then means a changed identity:
+register a fresh signup (new DID and keys) for the same handle after closing
+the stranded state with the existing audited tools — `mix
+atoll.plc.reconcile_nullified` or `mix atoll.plc.reconcile_absent` for pending
+operations, and the signup cleanup path for the reservation. Nothing is deleted
+implicitly and every closure keeps its journal history and audit entry.
+
+Phone verification (`com.atproto.temp.requestPhoneVerification`) is served by
+Bluesky's entryway, not by the reference PDS at the pinned revision, whose only
+local `temp` route is the signup-queue check implemented above. Atoll matches
+that surface; fresh signups gate on invite codes, email confirmation and rate
+limits instead.
