@@ -620,6 +620,7 @@ inventory to assess transfer progress first.
 - [x] Internal staged-blob expiration with a 24-hour default grace period and a one-hour minimum.
 - [x] Bounded operator staged-blob expiration command with atomic ownership/queue audit records and worker attribution.
 - [x] Durable cleanup queue for withdrawn/expired blob ownership, shared-owner checks, PostgreSQL/S3 deletion, and retryable S3 failures.
+- [x] Audited operator blob collection with durable batch intent, transactional item outcomes, and explicit partial-progress handling.
 - [x] Opt-in supervised cleanup scheduling with bounded batches, task deadlines, failure recovery, and outcome telemetry.
 - [x] Transactional per-account blob byte and object-count quotas across both storage backends.
 - [x] Read-only paginated S3 inventory of owned, queued, untracked, and unrecognized objects.
@@ -742,6 +743,32 @@ be rolled back. Collection does not discover objects orphaned before this queue
 was introduced. Versioned S3 buckets retain
 older object versions behind delete markers; bucket lifecycle/version cleanup is
 separate from this collector.
+
+For queued byte cleanup, run one operator batch:
+
+```sh
+mix atoll.blobs.collect --limit 10
+```
+
+The command accepts 1–1000 jobs (default 10), prints deleted/retained/failed/skipped
+counts as JSON, and exits unsuccessfully if any deletion failed. Collection now
+records a server-wide `atoll.blobs.collect` attempt before processing, per-item
+outcomes in the same transactions as local queue changes, and a final batch
+summary. Records contain CID/backend identifiers, fixed outcome labels and a
+link to the attempt ID; they exclude blob bytes, credentials and S3 error bodies.
+Operator no-op batches are recorded. The scheduler supplies actor `worker` and
+does not record empty collection batches.
+
+An audit failure before batch processing prevents deletion. Each PostgreSQL byte
+deletion rolls back with its item audit if that transaction fails. S3 deletion
+cannot roll back: a failure after a remote delete may leave the queue job for a
+later idempotent retry, with only the batch intent recorded. Earlier item
+transactions remain committed if a later item fails. An attempt without a final
+summary therefore means incomplete or uncertain processing, not that nothing
+happened. Inspect `mix atoll.moderation.history` and queue state before retrying.
+Collection keeps the shared write lock during each ownership check and S3 delete;
+audit SQL uses one-second lock and five-second statement deadlines. Batch size
+does not imply a single all-or-nothing transaction or a total wall-clock deadline.
 
 Set `ATOLL_BLOB_CLEANUP_ENABLED=true` before starting Atoll to enable the cleanup
 worker. It starts after one minute, expires up to 100 staged uploads using the

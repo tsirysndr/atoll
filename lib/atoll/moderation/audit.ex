@@ -4,6 +4,48 @@ defmodule Atoll.Moderation.Audit do
   alias Atoll.{Repo, Syntax}
   alias Atoll.Moderation.AuditEntry
 
+  @doc "Records bounded queued byte-cleanup intent before any per-item transaction."
+  def blob_collection_attempt!(limit, jobs, actor) do
+    insert!(
+      "atoll.blobs.collect",
+      nil,
+      %{kind: "blobCollection"},
+      %{
+        limit: limit,
+        jobs: Enum.map(jobs, &%{cid: Atoll.CID.to_base32(&1.cid), backend: &1.backend})
+      },
+      %{},
+      %{phase: "attempt"},
+      actor
+    )
+  end
+
+  @doc "Records collection outcome atomically with each local queue/byte change."
+  def blob_collection_item!(attempt_id, job, outcome, actor) do
+    insert!(
+      "atoll.blobs.collect",
+      nil,
+      %{kind: "blobCollection", cid: Atoll.CID.to_base32(job.cid), backend: job.backend},
+      %{attemptId: Integer.to_string(attempt_id)},
+      %{},
+      %{phase: "item", outcome: outcome},
+      actor
+    )
+  end
+
+  @doc "Records a completed collection batch; absent completion can mean partial progress."
+  def blob_collection_completed!(attempt_id, counts, actor) do
+    insert!(
+      "atoll.blobs.collect",
+      nil,
+      %{kind: "blobCollection"},
+      %{attemptId: Integer.to_string(attempt_id)},
+      %{},
+      %{phase: "completed", counts: counts},
+      actor
+    )
+  end
+
   @doc "Records staged ownership expiry atomically with removal and durable cleanup enqueueing."
   def staged_blob_expiration!(limit, grace, cutoff, blobs, actor) do
     ownership =

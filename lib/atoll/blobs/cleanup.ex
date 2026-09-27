@@ -65,12 +65,13 @@ defmodule Atoll.Blobs.Cleanup do
   @doc "Delete queued unowned bytes, using one transaction per item. Must not run inside a caller transaction."
   def collect(opts \\ []) do
     limit = Keyword.get(opts, :limit, 100)
+    actor = Keyword.get(opts, :actor, "operator")
 
     cond do
       Repo.in_transaction?() ->
         {:error, :cleanup_requires_own_transaction}
 
-      not is_integer(limit) or limit not in 1..1000 ->
+      not is_integer(limit) or limit not in 1..1000 or actor not in ["operator", "worker"] ->
         {:error, :invalid_cleanup_options}
 
       true ->
@@ -84,41 +85,70 @@ defmodule Atoll.Blobs.Cleanup do
         jobs =
           Repo.all(from j in CleanupJob, order_by: [j.queued_at, j.cid, j.backend], limit: ^limit)
 
-        counts =
-          Enum.reduce(jobs, %{deleted: 0, retained: 0, failed: 0, skipped: 0}, fn job, counts ->
-            {:ok, result} = collect_one(job, config)
-            Map.update!(counts, result, &(&1 + 1))
-          end)
-
-        {:ok, counts}
+        if jobs == [] and actor == "worker" do
+          {:ok, %{deleted: 0, retained: 0, failed: 0, skipped: 0}}
+        else
+          collect_batch(jobs, limit, config, actor)
+        end
     end
   end
 
-  defp collect_one(job, config) do
+  defp collect_batch(jobs, limit, config, actor) do
+    with {:ok, attempt} <-
+           audit_transaction(fn ->
+             Atoll.Moderation.Audit.blob_collection_attempt!(limit, jobs, actor)
+           end) do
+      counts =
+        Enum.reduce(jobs, %{deleted: 0, retained: 0, failed: 0, skipped: 0}, fn job, counts ->
+          {:ok, result} = collect_one(job, config, attempt.id, actor)
+          Map.update!(counts, result, &(&1 + 1))
+        end)
+
+      with {:ok, _} <-
+             audit_transaction(fn ->
+               Atoll.Moderation.Audit.blob_collection_completed!(attempt.id, counts, actor)
+             end),
+           do: {:ok, counts}
+    end
+  end
+
+  defp audit_transaction(function) do
     Repo.transaction(fn ->
+      Repo.query!("SET LOCAL lock_timeout = '1s'")
+      Repo.query!("SET LOCAL statement_timeout = '5s'")
+      function.()
+    end)
+  end
+
+  defp collect_one(job, config, attempt_id, actor) do
+    audit_transaction(fn ->
       Events.lock!()
       current = Repo.get_by(CleanupJob, cid: job.cid, backend: job.backend)
 
-      cond do
-        is_nil(current) ->
-          :skipped
+      result =
+        cond do
+          is_nil(current) ->
+            :skipped
 
-        Repo.exists?(from b in Blob, where: b.cid == ^job.cid and b.backend == ^job.backend) ->
-          Repo.delete!(current)
-          :retained
+          Repo.exists?(from b in Blob, where: b.cid == ^job.cid and b.backend == ^job.backend) ->
+            Repo.delete!(current)
+            :retained
 
-        true ->
-          case delete_bytes(job, config) do
-            :ok ->
-              Repo.delete!(current)
-              :deleted
+          true ->
+            case delete_bytes(job, config) do
+              :ok ->
+                Repo.delete!(current)
+                :deleted
 
-            {:error, _} ->
-              # Move failures behind older work so one bad object cannot starve the queue.
-              current |> Ecto.Changeset.change(queued_at: DateTime.utc_now()) |> Repo.update!()
-              :failed
-          end
-      end
+              {:error, _} ->
+                # Move failures behind older work so one bad object cannot starve the queue.
+                current |> Ecto.Changeset.change(queued_at: DateTime.utc_now()) |> Repo.update!()
+                :failed
+            end
+        end
+
+      Atoll.Moderation.Audit.blob_collection_item!(attempt_id, job, result, actor)
+      result
     end)
   end
 
