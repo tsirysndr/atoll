@@ -82,6 +82,7 @@ defmodule Atoll.Blobs.CleanupWorker do
 
   defp schedule(state, delay) do
     if state.timer, do: Process.cancel_timer(state.timer)
+    Atoll.WorkerProgress.scheduled("blob_cleanup", delay, state.timeout)
     %{state | timer: :erlang.start_timer(delay, self(), :tick)}
   end
 end

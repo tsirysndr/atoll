@@ -182,3 +182,62 @@ tests:
       - eval_time: "15m"
         alertname: "AtollWorkerFailures"
         exp_alerts: []
+  - name: "Observed worker stalls, fires after grace, and clears on reschedule"
+    interval: "1m"
+    input_series:
+      - series: 'atoll_worker_progress_deadline_seconds{job="atoll",instance="pds:443",worker="blob_cleanup"}'
+        values: "60x4 1000x3"
+      - series: 'up{job="atoll",instance="pds:443"}'
+        values: "1x8"
+    alert_rule_test:
+      - eval_time: "3m"
+        alertname: "AtollWorkerProgressOverdue"
+        exp_alerts: []
+      - eval_time: "4m"
+        alertname: "AtollWorkerProgressOverdue"
+        exp_alerts:
+          - exp_labels:
+              job: "atoll"
+              instance: "pds:443"
+              worker: "blob_cleanup"
+              severity: "warning"
+            exp_annotations:
+              summary: "Atoll worker has stopped reporting scheduled progress"
+      - eval_time: "5m"
+        alertname: "AtollWorkerProgressOverdue"
+        exp_alerts: []
+  - name: "Idle schedules, unobserved workers, down targets and unrelated jobs stay quiet"
+    interval: "1m"
+    input_series:
+      - series: 'atoll_worker_progress_deadline_seconds{job="atoll",instance="pds:443",worker="identity_refresh"}'
+        values: "60+60x10"
+      - series: 'atoll_worker_progress_deadline_seconds{job="atoll",instance="pds:443",worker="blob_cleanup"}'
+        values: "0x10"
+      - series: 'up{job="atoll",instance="pds:443"}'
+        values: "1x10"
+      - series: 'atoll_worker_progress_deadline_seconds{job="atoll",instance="down:443",worker="blob_cleanup"}'
+        values: "60x10"
+      - series: 'up{job="atoll",instance="down:443"}'
+        values: "0x10"
+      - series: 'atoll_worker_progress_deadline_seconds{job="other",instance="other:443",worker="blob_cleanup"}'
+        values: "60x10"
+      - series: 'up{job="other",instance="other:443"}'
+        values: "1x10"
+    alert_rule_test:
+      - eval_time: "10m"
+        alertname: "AtollWorkerProgressOverdue"
+        exp_alerts: []
+  - name: "Collector reset clears a pending worker deadline"
+    interval: "1m"
+    input_series:
+      - series: 'atoll_worker_progress_deadline_seconds{job="atoll",instance="pds:443",worker="blob_cleanup"}'
+        values: "60x3 0x4"
+      - series: 'up{job="atoll",instance="pds:443"}'
+        values: "1x8"
+    alert_rule_test:
+      - eval_time: "4m"
+        alertname: "AtollWorkerProgressOverdue"
+        exp_alerts: []
+      - eval_time: "7m"
+        alertname: "AtollWorkerProgressOverdue"
+        exp_alerts: []

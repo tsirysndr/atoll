@@ -998,6 +998,7 @@ observations do not produce duplicate events. The
 - [x] Opt-in supervised cleanup of expired sessions and service-token replay markers, with bounded batches and outcome telemetry.
 - [x] Opt-in operator-authenticated Prometheus endpoint with fixed-cardinality HTTP, database, readiness, worker and VM metrics.
 - [x] Baseline Prometheus alert rules and operator runbook, with firing/recovery/counter-reset tests in CI.
+- [x] Scheduler progress-deadline gauges for all eight background workers, with an overdue-progress alert and rule tests.
 - [ ] Comprehensive operational monitoring and alerting.
 - [x] Offline MST and compact-proof interoperability against pinned `@atproto/repo` 0.8.10 fixtures.
 - [x] Opt-in live HTTP integration with the official ATProto client, including signed repository and record-proof verification.
@@ -1059,17 +1060,30 @@ and collects these metric families:
 | `atoll_readiness_checks_total` | Readiness checks labeled by `ready`, `unavailable`, or `other`. |
 | `atoll_worker_runs_total` | Worker completion events labeled by a fixed worker name and result. |
 | `atoll_worker_items_failed_total` | Worker-reported failed item counts, separate from failed or timed-out runs. |
+| `atoll_worker_progress_deadline_seconds` | Expected next scheduler progress, as Unix seconds, labeled by fixed worker name; zero means not yet observed since collector startup. |
 | `atoll_collector_start_time_seconds` | Collector start time as Unix seconds. |
 | `atoll_vm_memory_bytes` | Current total Erlang VM memory. |
 | `atoll_vm_run_queue` | Current Erlang run queue length. |
 
 Worker names cover identity refresh, blob cleanup, account cleanup, signup cleanup,
 signup retry, OAuth key checks, event retention, and relay announcement. Results
-use a fixed allowlist; unrecognized values become `other`. Disabled workers retain
+use a fixed allowlist; unrecognized values become `other`. Workers disabled at startup retain
 zero-valued series. Labels never contain account IDs, handles, request paths,
 query text, credentials, or external URLs. Collection is always active in memory;
 the setting controls HTTP exposure. Scrapes read counters and VM state without
 querying PostgreSQL or contacting blob storage.
+
+Each worker updates its progress deadline when scheduling its next tick, using
+the actual delay plus its task timeout, rounded up to seconds. Idle rescheduling
+also updates the deadline, so an empty queue is not treated as a stalled worker.
+The `AtollWorkerProgressOverdue` alert fires when an observed deadline stays
+overdue for two minutes while the target remains scrapeable. It clears when the
+worker reschedules. Synchronize PDS and Prometheus clocks: these gauges use wall
+time. A collector restart resets deadlines to zero until the next scheduling
+event; never-started workers and workers already stalled at that reset need
+independent expected-worker/liveness monitoring. Intentionally stopping a worker
+after it has been observed leaves its deadline in place until restart or another
+scheduling event; account for planned maintenance in alert routing/silences.
 
 Counters are local to each node and reset when the collector restarts. Scrape each
 node separately and use Prometheus `rate()` or `increase()` before aggregating
@@ -1079,7 +1093,7 @@ and probes, and omit requests that terminate without an endpoint stop event.
 Durations are totals, not latency histograms or percentiles. This exporter does
 not install Prometheus, configure alert delivery, or monitor disk capacity,
 backlogs, external services, or backup freshness. Baseline scrape, server-error,
-readiness and worker-failure alerts are available in
+readiness, worker-failure and overdue-progress alerts are available in
 [`ops/prometheus/alerts.yml`](ops/prometheus/alerts.yml), with setup instructions,
 limitations and first-response checks in the
 [operator runbook](ops/prometheus/README.md). Validate them with

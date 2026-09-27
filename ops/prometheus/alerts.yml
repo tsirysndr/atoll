@@ -2,6 +2,19 @@ groups:
   - name: atoll
     interval: 1m
     rules:
+      - alert: AtollWorkerProgressOverdue
+        expr: |
+          (atoll_worker_progress_deadline_seconds{job="atoll"} > 0)
+          and
+          (atoll_worker_progress_deadline_seconds{job="atoll"} < time())
+          and on (job, instance)
+          (up{job="atoll"} == 1)
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: Atoll worker has stopped reporting scheduled progress
+
       - alert: AtollScrapeUnavailable
         expr: up{job="atoll"} == 0
         for: 2m

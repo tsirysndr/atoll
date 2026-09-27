@@ -86,6 +86,7 @@ defmodule Atoll.Repositories.EventRetentionWorker do
 
   defp schedule(state, delay) do
     if state.timer, do: Process.cancel_timer(state.timer)
+    Atoll.WorkerProgress.scheduled("event_retention", delay, state.timeout)
     %{state | timer: :erlang.start_timer(delay, self(), :tick)}
   end
 end

@@ -105,6 +105,7 @@ defmodule Atoll.Accounts.SignupCleanupWorker do
 
   defp schedule(state, delay) do
     if state.timer, do: Process.cancel_timer(state.timer)
+    Atoll.WorkerProgress.scheduled("signup_cleanup", delay, state.timeout)
     %{state | timer: :erlang.start_timer(delay, self(), :tick)}
   end
 end

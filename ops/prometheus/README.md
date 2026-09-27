@@ -29,6 +29,7 @@ Prometheus documents [alert rules and delivery](https://prometheus.io/docs/prome
 | `AtollHighServerErrorRate` | More than 5% of completed requests are 5xx over five minutes, with at least one request/second, sustained for five minutes. | Inspect application errors, database connectivity/pool saturation and recent changes. Tune the volume floor for small servers. |
 | `AtollReadinessFailures` | At least half of recorded readiness probes fail over five minutes, sustained for two minutes. | Check PostgreSQL reachability and pool contention. Schedule regular `/health/ready` probes: scraping `/metrics` does not run readiness probes. |
 | `AtollWorkerFailures` | At least one failed/timed-out worker run or failed item appears in the ten-minute counter increase. | Use the `worker` label to inspect the corresponding worker settings and dependencies. Check retry state and relevant external services before intervening. A successful retry does not immediately clear the historical failure window. |
+| `AtollWorkerProgressOverdue` | An observed worker's scheduled progress deadline stays overdue for two minutes while `up=1`. | Inspect worker/supervisor state, mailbox congestion, VM pressure and database/dependency contention. Compare PDS and Prometheus clocks and account for intentional maintenance. |
 
 The delays above are pending periods after the expression first becomes true;
 rolling windows add recovery lag. Counters are processed with `rate()`/`increase()`
@@ -42,9 +43,23 @@ Missing readiness/worker series or an idle worker do not trigger a failure alert
 Disabled workers emit no completion events. A removed scrape target disappears
 instead of setting `up=0`; use an independent inventory or absent-series rule for
 your expected deployment. These rules do not detect Prometheus itself stopping,
-stalled workers, missing probes, disk exhaustion, stale backups, or failures in
+never-observed workers, missing probes, disk exhaustion, stale backups, or failures in
 dependencies not represented by these counters. Test your notification path and
 cover those gaps separately.
+
+Progress deadlines come from each scheduler's actual next delay plus task timeout,
+including startup delays and empty-work rescheduling. They are not last-success
+timestamps or proof that a queue is draining. An overdue-progress alert retains
+the worker and instance labels, ignores zero/missing deadlines and unrelated jobs,
+and defers to scrape-unavailable alerting when the target is down. Rescheduling
+clears it without a historical failure window. Progress timestamps use wall time;
+clock skew or clock jumps can affect this rule. Keep clocks synchronized.
+
+The collector initializes each deadline to zero and forgets observations on its
+own restart. A worker that never starts, or stays stuck across a collector restart,
+cannot be detected until it emits another scheduling event. Monitor your expected
+worker inventory separately. Stopping an observed worker without resetting the
+collector leaves its last deadline; use planned-maintenance silences as needed.
 
 ## Validation
 
@@ -61,7 +76,8 @@ database or credentials are used. GitHub Actions runs the same check on pushes.
 
 `alerts.test.yml` exercises firing delays, recovery, instance isolation, unrelated
 jobs, low volume, idle and missing series, failed items, failed/timed-out runs,
-duplicate suppression, and counter resets. These are synthetic rule tests, not a
+duplicate suppression, counter resets, stalled progress, idle scheduling and
+deadline resets. These are synthetic rule tests, not a
 live scrape or notification delivery test. With a compatible local `promtool`,
 you can also run `promtool check rules alerts.yml` and
 `promtool test rules alerts.test.yml` from this directory.

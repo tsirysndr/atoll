@@ -1,5 +1,5 @@
 defmodule Atoll.Metrics do
-  @moduledoc "Fixed-cardinality process-local Prometheus counters; never retains request or account metadata."
+  @moduledoc "Fixed-cardinality local Prometheus counters and progress gauges; no request or account metadata."
   use GenServer
 
   @workers %{
@@ -14,7 +14,12 @@ defmodule Atoll.Metrics do
   }
   @outcomes ~w(ok complete completed published unchanged skipped failed timeout other)a
   @classes ~w(1xx 2xx 3xx 4xx 5xx unknown)
-  @events [[:phoenix, :endpoint, :stop], [:atoll, :repo, :query], [:atoll, :readiness, :check]] ++
+  @events [
+            [:phoenix, :endpoint, :stop],
+            [:atoll, :repo, :query],
+            [:atoll, :readiness, :check],
+            [:atoll, :worker, :scheduled]
+          ] ++
             Map.keys(@workers)
 
   def start_link(opts),
@@ -33,6 +38,8 @@ defmodule Atoll.Metrics do
     indexes = definitions |> Enum.with_index(1) |> Map.new(fn {{key, _, _}, n} -> {key, n} end)
 
     state = %{
+      deadlines: :atomics.new(map_size(@workers), []),
+      worker_indexes: @workers |> Map.values() |> Enum.sort() |> Enum.with_index(1) |> Map.new(),
       counters: :counters.new(length(definitions), [:write_concurrency]),
       indexes: indexes,
       definitions: definitions,
@@ -47,7 +54,7 @@ defmodule Atoll.Metrics do
         state.handler,
         @events,
         &__MODULE__.handle_event/4,
-        Map.take(state, [:counters, :indexes])
+        Map.take(state, [:counters, :indexes, :deadlines, :worker_indexes])
       )
 
     {:ok, state}
@@ -76,6 +83,17 @@ defmodule Atoll.Metrics do
     add(state, {:readiness, result}, 1)
   end
 
+  def handle_event([:atoll, :worker, :scheduled], measurements, metadata, state) do
+    with {:ok, index} <- Map.fetch(state.worker_indexes, metadata[:worker]),
+         deadline
+         when is_integer(deadline) and deadline > 0 and deadline <= 9_223_372_036_854_775_807 <-
+           measurements[:deadline_seconds] do
+      :atomics.put(state.deadlines, index, deadline)
+    else
+      _ -> :ok
+    end
+  end
+
   def handle_event(event, measurements, metadata, state) do
     case @workers[event] do
       nil ->
@@ -102,7 +120,13 @@ defmodule Atoll.Metrics do
       {"atoll_vm_run_queue", :erlang.statistics(:run_queue)}
     ]
 
-    output = [exposition(counters, "counter"), exposition(gauges, "gauge")]
+    deadlines =
+      Enum.map(state.worker_indexes, fn {worker, index} ->
+        {~s(atoll_worker_progress_deadline_seconds{worker="#{worker}"}),
+         :atomics.get(state.deadlines, index)}
+      end)
+
+    output = [exposition(counters, "counter"), exposition(gauges ++ deadlines, "gauge")]
     {:reply, IO.iodata_to_binary(output), state}
   end
 

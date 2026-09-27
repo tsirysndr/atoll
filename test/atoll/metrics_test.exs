@@ -96,4 +96,37 @@ defmodule Atoll.MetricsTest do
     assert text =~ ~s(atoll_worker_runs_total{worker="signup_cleanup",result="ok"} 1\n)
     assert text =~ ~s(atoll_worker_runs_total{worker="oauth_key_checks",result="complete"} 1\n)
   end
+
+  test "progress deadlines replace prior schedules without accepting arbitrary labels or values" do
+    sample = ~s(atoll_worker_progress_deadline_seconds{worker="blob_cleanup"})
+    assert Atoll.Metrics.render(@collector) =~ "#{sample} 0\n"
+
+    for deadline <- [200, 100] do
+      :telemetry.execute([:atoll, :worker, :scheduled], %{deadline_seconds: deadline}, %{
+        worker: "blob_cleanup"
+      })
+
+      assert Atoll.Metrics.render(@collector) =~ "#{sample} #{deadline}\n"
+    end
+
+    for deadline <- [nil, "999", -1, 0, 9_223_372_036_854_775_808] do
+      :telemetry.execute([:atoll, :worker, :scheduled], %{deadline_seconds: deadline}, %{
+        worker: "blob_cleanup"
+      })
+    end
+
+    :telemetry.execute([:atoll, :worker, :scheduled], %{deadline_seconds: 123}, %{
+      worker: "secret-account"
+    })
+
+    text = Atoll.Metrics.render(@collector)
+    assert text =~ "#{sample} 100\n"
+    assert text =~ "# TYPE atoll_worker_progress_deadline_seconds gauge\n"
+    refute text =~ "secret-account"
+    assert length(Regex.scan(~r/^atoll_worker_progress_deadline_seconds\{/m, text)) == 8
+
+    stop_supervised!(Atoll.Metrics)
+    start_supervised!({Atoll.Metrics, name: @collector})
+    assert Atoll.Metrics.render(@collector) =~ "#{sample} 0\n"
+  end
 end
