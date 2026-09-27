@@ -7074,6 +7074,15 @@ asserts. Missing, malformed, or unresolvable feed references return
 `400 UnknownFeed` after authorization, and the feed lookup happens only for
 admitted callers.
 
+Proxied AppView reads are transparent: Atoll does not re-implement the
+reference server's read-after-write munging, which splices locally written
+posts and profile edits into `getTimeline`, `getProfile` and thread responses
+until the AppView has indexed them. Repository writes reach the firehose
+atomically with their commit, AppViews index within moments, and official
+clients render their own writes optimistically, so the trade is brief eventual
+consistency in exchange for never fabricating partially hydrated view records.
+This is a deliberate scope decision, recorded here rather than left implicit.
+
 `app.bsky.notification.registerPush` and `unregisterPush` follow the same
 upstream model: the service is named by the request body's `serviceDid`, so
 OAuth grant assertion is deferred to token issuance with audience
