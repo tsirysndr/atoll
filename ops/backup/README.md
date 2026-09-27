@@ -183,9 +183,11 @@ encryption/KMS keys and permissions. Atoll's S3 inventory can describe current
 ownership but is not proof of a complete backup or permission to delete objects.
 The offline S3 helper below copies and verifies current Atoll blob objects.
 The combined PostgreSQL/MinIO drill below exercises selected application recovery
-across both stores through the paired wrapper. Automatic production writer
-quiescence and deployment-specific recovery validation remain unimplemented;
-the main backup/restore checklist remains open.
+across both stores through the paired wrapper. Start every node with
+`ATOLL_READ_ONLY=true` to refuse mutations and keep background writers stopped
+during the snapshot window; the mode cannot cancel transactions already in
+flight when it starts, so restart nodes into it rather than toggling a live
+one, and remember deployment-specific recovery validation stays yours.
 
 ### Archive and restore S3 blob bytes
 

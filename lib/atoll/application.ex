@@ -98,19 +98,22 @@ defmodule Atoll.Application do
         []
       end
 
-    Supervisor.start_link(
-      Atoll.Redis.children() ++
-        children ++
+    # Read-only maintenance keeps every background writer stopped for backups.
+    workers =
+      if Application.get_env(:atoll, :read_only, false) do
+        []
+      else
         refresh_children ++
-        cleanup_children ++
-        account_cleanup_children ++
-        relay_children ++
-        retention_children ++
-        Atoll.Accounts.SignupCleanupWorker.children() ++
-        Atoll.Accounts.SignupRetryWorker.children() ++
-        Atoll.OAuth.KeyCheckWorker.children(),
-      opts
-    )
+          cleanup_children ++
+          account_cleanup_children ++
+          relay_children ++
+          retention_children ++
+          Atoll.Accounts.SignupCleanupWorker.children() ++
+          Atoll.Accounts.SignupRetryWorker.children() ++
+          Atoll.OAuth.KeyCheckWorker.children()
+      end
+
+    Supervisor.start_link(Atoll.Redis.children() ++ children ++ workers, opts)
   end
 
   # Tell Phoenix to update the endpoint configuration

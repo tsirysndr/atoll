@@ -1049,7 +1049,8 @@ observations do not produce duplicate events. The
 - [x] Recovery-set verification of PostgreSQL-owned blob presence, byte size and CID digest, with missing/corrupt/mismatched-size restore-drill cases.
 - [x] PostgreSQL and combined S3 restore drills for enrolled TOTP, encrypted factor custody, used-step/recovery-code preservation, and fresh second-factor logins.
 - [x] Passkey restore drills covering public credentials, user handles, RP binding, retained counters/sessions, consumed and expired challenges, and fresh signed logins.
-- [ ] Complete database/S3 recovery sets, broader restore drills, and backup / restore workflow.
+- [x] Read-only maintenance mode refusing every mutation and OAuth-credentialed read before parsing, with background writers kept stopped for consistent backups.
+- [x] Paired database/S3 recovery sets with ownership coverage checks, restore drills spanning custody, credentials, second factors, preferences, blobs and replay state, and the documented backup/restore workflow in `ops/backup`.
 - [x] `GET /health/ready` database connectivity readiness with bounded queries and outcome telemetry.
 - [x] Opt-in supervised cleanup of expired sessions and service-token replay markers, with bounded batches and outcome telemetry.
 - [x] Opt-in operator-authenticated Prometheus endpoint with fixed-cardinality HTTP, database, readiness, worker and VM metrics.
@@ -6985,3 +6986,21 @@ proxy's `X-Forwarded-Proto`. Health endpoints for orchestration are
 `GET /metrics` serves operator-authenticated Prometheus metrics with the alert
 rules and runbook in `ops/prometheus`. Backup and recovery-set tooling lives in
 `scripts/` with drills documented above and in `ops/backup`.
+
+### Read-only maintenance mode
+
+Start a node with `ATOLL_READ_ONLY=true` to hold it in maintenance: every POST
+(XRPC, OAuth and browser forms) is refused before body parsing with
+`503 ServiceUnavailable` and a `Retry-After` header, OAuth-credentialed reads
+are refused too because DPoP proof admission persists replay state, and none of
+the optional background writers (cleanup, retention, identity refresh, relay
+announcements, signup retries, OAuth key checks) are started. Missing-worker
+metrics expect zero workers in this mode, so maintenance does not page.
+
+Public reads, password and app-password session reads, preference exports, the
+firehose, `/.well-known` documents, health probes and operator metrics keep
+working, so downstream consumers can drain while the database and S3 snapshot
+are taken (see `ops/backup`). The switch is per node and read at boot; restart
+nodes into and out of maintenance rather than reconfiguring a live system, and
+quiesce every node that shares the database before calling a snapshot
+consistent.

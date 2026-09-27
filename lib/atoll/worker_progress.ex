@@ -15,10 +15,12 @@ defmodule Atoll.WorkerProgress do
 
   @doc "Reads configured worker expectations and local registered process presence without messaging workers."
   def inventory do
+    read_only = Application.get_env(:atoll, :read_only, false)
+
     Enum.map(@workers, fn {worker, module, setting} ->
       %{
         worker: worker,
-        expected: if(configured(setting) in [false, nil], do: 0, else: 1),
+        expected: if(read_only or configured(setting) in [false, nil], do: 0, else: 1),
         present: if(is_pid(Process.whereis(module)), do: 1, else: 0)
       }
     end)
