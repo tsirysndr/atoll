@@ -6,7 +6,8 @@
     "lume": "echo \"import 'lume/cli.ts'\" | deno run -A -",
     "build": "deno task lume",
     "serve": "deno task lume -s",
-    "check": "deno task lume --help"
+    "check": "deno task lume --help",
+    "deploy": "deno run -A deploy.ts"
   },
   "compilerOptions": {
     "types": [
@@ -15,7 +16,13 @@
   },
   "lint": {
     "rules": {
-      "tags": ["recommended"]
+      "tags": [
+        "recommended"
+      ]
     }
+  },
+  "deploy": {
+    "org": "tsirysndr",
+    "app": "atoll-docs"
   }
 }
