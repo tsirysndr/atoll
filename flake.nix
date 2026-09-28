@@ -57,6 +57,9 @@
                 pkgs.mix2nix
                 pkgs.sqlite
                 pkgs.git
+                pkgs.deno
+                pkgs.bun
+                pkgs.nodejs
               ]
               ++ pkgs.lib.optional (database == "postgres") pkgs.postgresql_18;
 
