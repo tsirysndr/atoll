@@ -11,9 +11,8 @@
   // Applied before first paint so the page never flashes the wrong theme.
   try {
     const stored = localStorage.getItem("atoll-theme");
-    if (stored === "light" || stored === "dark") {
-      document.documentElement.dataset.theme = stored;
-    }
+    document.documentElement.dataset.theme =
+      stored === "light" || stored === "dark" ? stored : "dark";
   } catch (_) { /* private mode */ }
 </script>
 </head>

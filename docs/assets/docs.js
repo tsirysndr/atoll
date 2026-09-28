@@ -3,8 +3,7 @@
 const root = document.documentElement;
 
 function currentTheme() {
-  if (root.dataset.theme) return root.dataset.theme;
-  return matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+  return root.dataset.theme === "light" ? "light" : "dark";
 }
 
 document.querySelector(".theme-toggle")?.addEventListener("click", () => {

@@ -72,36 +72,34 @@
   --hl-meta: #8ba0c0;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) {
-    color-scheme: dark;
+:root:not([data-theme="light"]) {
+  color-scheme: dark;
 
-    --bg: #0b111f;
-    --bg-soft: #0f1728;
-    --bg-sunken: #0a101c;
-    --surface: #111a2c;
-    --text: #e7eefb;
-    --text-soft: #a7b6d0;
-    --text-faint: #7f8fab;
-    --border: #1e2a42;
-    --border-strong: #2b3a58;
-    --accent: #58b0ff;
-    --accent-soft: #14263e;
-    --accent-contrast: #06101f;
-    --shadow-sm: 0 1px 2px rgb(0 0 0 / 40%);
-    --shadow-lg: 0 24px 60px -20px rgb(0 0 0 / 70%), 0 4px 12px rgb(0 0 0 / 40%);
+  --bg: #0b111f;
+  --bg-soft: #0f1728;
+  --bg-sunken: #0a101c;
+  --surface: #111a2c;
+  --text: #e7eefb;
+  --text-soft: #a7b6d0;
+  --text-faint: #7f8fab;
+  --border: #1e2a42;
+  --border-strong: #2b3a58;
+  --accent: #58b0ff;
+  --accent-soft: #14263e;
+  --accent-contrast: #06101f;
+  --shadow-sm: 0 1px 2px rgb(0 0 0 / 40%);
+  --shadow-lg: 0 24px 60px -20px rgb(0 0 0 / 70%), 0 4px 12px rgb(0 0 0 / 40%);
 
-    --code-bg: #0c1424;
-    --code-border: #1e2a42;
-    --code-text: #d7e2f5;
-    --hl-keyword: #f472b6;
-    --hl-string: #7ee2b8;
-    --hl-number: #fbbf24;
-    --hl-comment: #6b7c99;
-    --hl-title: #7cc4ff;
-    --hl-attr: #c4a6ff;
-    --hl-meta: #8ba0c0;
-  }
+  --code-bg: #0c1424;
+  --code-border: #1e2a42;
+  --code-text: #d7e2f5;
+  --hl-keyword: #f472b6;
+  --hl-string: #7ee2b8;
+  --hl-number: #fbbf24;
+  --hl-comment: #6b7c99;
+  --hl-title: #7cc4ff;
+  --hl-attr: #c4a6ff;
+  --hl-meta: #8ba0c0;
 }
 
 *, *::before, *::after { box-sizing: border-box; }
@@ -200,10 +198,8 @@ svg.icon-tangled { width: 1.4rem; height: 1.4rem; }
 .theme-toggle .icon-moon { display: none; }
 :root[data-theme="dark"] .theme-toggle .icon-sun { display: none; }
 :root[data-theme="dark"] .theme-toggle .icon-moon { display: block; }
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) .theme-toggle .icon-sun { display: none; }
-  :root:not([data-theme="light"]) .theme-toggle .icon-moon { display: block; }
-}
+:root:not([data-theme="light"]) .theme-toggle .icon-sun { display: none; }
+:root:not([data-theme="light"]) .theme-toggle .icon-moon { display: block; }
 
 /* --------------------------------- shell ------------------------------- */
 
