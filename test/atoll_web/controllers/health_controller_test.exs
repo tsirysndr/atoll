@@ -59,7 +59,7 @@ defmodule AtollWeb.HealthControllerTest do
   end
 
   test "the XRPC health route reports the version and database availability", %{conn: conn} do
-    version = to_string(Application.spec(:atoll, :vsn))
+    version = "atoll " <> to_string(Application.spec(:atoll, :vsn))
     response = get(conn, "/xrpc/_health")
     assert json_response(response, 200) == %{"version" => version}
     assert get_resp_header(response, "cache-control") == ["no-store"]
@@ -72,7 +72,7 @@ defmodule AtollWeb.HealthControllerTest do
 
   @tag :postgres
   test "XRPC health reports PostgreSQL transaction failure", %{conn: conn} do
-    version = to_string(Application.spec(:atoll, :vsn))
+    version = "atoll " <> to_string(Application.spec(:atoll, :vsn))
 
     assert {:error, :probe_test} =
              Atoll.Repo.transaction(fn ->

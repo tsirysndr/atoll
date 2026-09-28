@@ -6,7 +6,7 @@ defmodule AtollWeb.HealthController do
   end
 
   def xrpc(conn, _params) do
-    version = to_string(Application.spec(:atoll, :vsn))
+    version = "atoll " <> to_string(Application.spec(:atoll, :vsn))
     conn = put_resp_header(conn, "cache-control", "no-store")
 
     case Atoll.Readiness.check() do
