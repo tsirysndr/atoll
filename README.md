@@ -74,6 +74,7 @@ pages below, with search and navigation.
 | Document                                                 | Contents                                                               |
 | -------------------------------------------------------- | ---------------------------------------------------------------------- |
 | [docs/deploy.md](docs/deploy.md)                         | Step-by-step production deployment and the production checklist        |
+| [docs/frontend.md](docs/frontend.md)                     | The React account frontend: stack, screens, translations, CSP          |
 | [docs/features.md](docs/features.md)                     | The complete feature record with scope notes and design decisions      |
 | [docs/accounts.md](docs/accounts.md)                     | Signup, invites, email, app passwords, deletion, preferences, recovery |
 | [docs/identity.md](docs/identity.md)                     | DID/handle resolution, PLC submission, journals, identity changes      |

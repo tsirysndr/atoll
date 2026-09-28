@@ -11,7 +11,7 @@ build the release you ship to a server.
 | Erlang/OTP       | The version your Elixir build targets                                     |
 | PostgreSQL       | 16 or newer; 18 recommended                                               |
 | SQLite           | Optional alternative to PostgreSQL, single node only                      |
-| Node-free assets | Assets build through `mix assets.build`; no Node.js toolchain is required |
+| Bun              | Builds the React account frontend through `mix assets.build`              |
 | Docker           | Optional; `ghcr.io/tsirysndr/atoll-pds` is a prebuilt SQLite image         |
 | Nix              | Optional; `flake.nix` provides dev shells and release builds               |
 
@@ -58,7 +58,8 @@ mix setup
 ```
 
 `mix setup` expands to `deps.get`, `ecto.create`, `ecto.migrate`, the seed
-script, and `assets.setup` + `assets.build`.
+script, and `assets.setup` + `assets.build`. The last two install and build the
+React frontend with Bun; see [Account frontend](frontend.md).
 
 Development uses `atoll_dev.sqlite3` in the project directory when the SQLite
 adapter is selected; tests use `atoll_test.sqlite3`, with `MIX_TEST_PARTITION`
@@ -150,8 +151,8 @@ built with `ATOLL_DATABASE=sqlite` against the same database file.
 
 ## Build with Nix
 
-`flake.nix` pins Erlang/OTP 28, Elixir 1.19, and a Tailwind binary, so neither
-the shell nor the build downloads a toolchain. The adapter is compiled in, so
+`flake.nix` pins Erlang/OTP 28, Elixir 1.19 and Bun, so neither the shell nor
+the build downloads a toolchain. The adapter is compiled in, so
 there is one target per database:
 
 ```sh
@@ -168,9 +169,11 @@ pinned in `nix/deps.nix`, generated from `mix.lock`; regenerate it with
 build keeps using the old versions. The `nix` workflow builds both targets on
 manual dispatch.
 
-The shells set `TAILWIND_PATH` so `mix assets.build` uses the pinned Tailwind,
-and `EXQLITE_USE_SYSTEM` so the SQLite driver compiles against nixpkgs' SQLite
-instead of downloading a prebuilt NIF.
+The shells set `EXQLITE_USE_SYSTEM` so the SQLite driver compiles against
+nixpkgs' SQLite instead of downloading a prebuilt NIF. The frontend bundle is
+built from `assets/bun.lock` through `nix/bun-deps.nix`, so the sandboxed build
+needs no network; regenerate that file with `python3 scripts/bun2nix.py` after
+changing dependencies.
 
 ## Build a production release
 

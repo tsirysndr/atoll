@@ -14,6 +14,7 @@ const sidebar = [
       { url: "/installation/", label: "Installation" },
       { url: "/setup-environment/", label: "Setup environment" },
       { url: "/development/", label: "Local development" },
+      { url: "/frontend/", label: "Account frontend" },
     ],
   },
   {
