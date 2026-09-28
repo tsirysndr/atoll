@@ -138,7 +138,7 @@ defmodule AtollWeb.BrowserConsentTest do
            |> json_response(200)
 
     sessions = approved |> browser() |> get("/account/sessions")
-    assert sessions.resp_body =~ "Revoke access"
+    assert Atoll.Bootstrap.read(sessions)["sessions"] != []
     logout = post_form(sessions, "/account/logout", %{})
     assert redirected_to(logout, 303) == "/account/login"
     assert Repo.aggregate(Atoll.OAuth.Session, :count) == 0
@@ -288,11 +288,16 @@ defmodule AtollWeb.BrowserConsentTest do
       |> put_req_header("accept-language", "fr-CA, en;q=0.5")
       |> get("/oauth/authorize")
 
-    assert html_response(page, 200) =~ "Accès &lt;script&gt;"
-    assert page.resp_body =~ "Publier &amp; lire"
+    assert html_response(page, 200)
+    permissions = Atoll.Bootstrap.read(page)["permissions"]
+    set = Enum.find(permissions, &(&1["kind"] == "set"))
+    # The French snapshot is used, and its markup is escaped inside the payload.
+    assert set["title"] == "Accès <script>"
+    assert set["detail"] == "Publier & lire"
+    assert set["includes"] != []
     assert page.resp_body =~ "com.example.post"
-    assert page.resp_body =~ "View included permissions"
-    refute page.resp_body =~ "<script>"
+    assert page.resp_body =~ "\\u003Cscript"
+    refute page.resp_body =~ "<script>alert"
 
     changed =
       put_in(doc, ["defs", "main", "permissions"], [])
@@ -405,7 +410,8 @@ defmodule AtollWeb.BrowserConsentTest do
     )
 
     page = consent_page(c)
-    assert html_response(page, 400) =~ "different account"
+    assert html_response(page, 400)
+    assert Atoll.Bootstrap.error(page) == "authorize_account_mismatch"
     assert Repo.aggregate(AuthorizationCode, :count) == 0
   end
 
@@ -430,7 +436,7 @@ defmodule AtollWeb.BrowserConsentTest do
     page = signup_page(c)
     assert html_response(page, 200) =~ "Create an account"
     refute page.resp_body =~ "Invitation code"
-    refute page.resp_body =~ "name=\"inviteCode\""
+    refute Atoll.Bootstrap.read(page)["inviteRequired"]
     assert get_resp_header(page, "cache-control") == ["no-store"]
     assert get_resp_header(page, "content-security-policy") |> hd() =~ "style-src 'self'"
     accept_registration()
@@ -469,10 +475,12 @@ defmodule AtollWeb.BrowserConsentTest do
     )
 
     page = signup_page(c)
-    assert html_response(page, 200) =~ "Reserve a custom-domain DID"
+    assert html_response(page, 200)
+    assert Atoll.Bootstrap.read(page)["customDomainEnabled"]
     params = %{"handle" => "alice.example.com", "action" => "reserve_custom"}
     reserved = signup(page, params)
-    assert html_response(reserved, 200) =~ "Connect your domain"
+    assert html_response(reserved, 200)
+    assert Atoll.Bootstrap.read(reserved)["reservation"]["dnsName"] =~ "_atproto."
     account = Repo.one!(Atoll.Accounts.Profile)
     assert reserved.resp_body =~ "_atproto.alice.example.com"
     assert reserved.resp_body =~ "did=" <> account.did
@@ -519,7 +527,7 @@ defmodule AtollWeb.BrowserConsentTest do
     c = create_request(c, %{"login_hint" => "alice.example.com"})
     page = signup_page(c)
     params = %{"handle" => "alice.example.com", "action" => "reserve_custom"}
-    refute page.resp_body =~ "Reserve a custom-domain DID"
+    refute Atoll.Bootstrap.read(page)["customDomainEnabled"]
     assert signup(page, params).status == 400
     Application.put_env(:atoll, :custom_domain_signup_enabled, true)
     assert signup(page, params).status == 400
@@ -636,7 +644,8 @@ defmodule AtollWeb.BrowserConsentTest do
   end
 
   test "signup requires a live create request, correct view and CSRF before side effects", c do
-    assert get(c.conn, "/account/signup").status == 400
+    # Direct signup is refused here because this server has signup disabled.
+    assert get(c.conn, "/account/signup").status == 403
     ordinary = begin(c) |> browser() |> get("/account/signup")
     assert ordinary.status == 400
     c = create_request(c)
@@ -672,7 +681,7 @@ defmodule AtollWeb.BrowserConsentTest do
     Application.put_env(:atoll, :invite_code_required, true)
     page = signup_page(c)
     assert html_response(page, 200) =~ "Invitation code"
-    assert page.resp_body =~ "name=\"inviteCode\" maxlength=\"256\" required"
+    assert Atoll.Bootstrap.read(page)["inviteRequired"]
     assert signup(page, %{"handle" => "different.users.example.com"}).status == 400
     assert Repo.aggregate(Atoll.Accounts.Profile, :count) == 0
     {:ok, invite} = Atoll.Accounts.Invites.create()
@@ -729,7 +738,8 @@ defmodule AtollWeb.BrowserConsentTest do
     Req.Test.expect(__MODULE__, &Req.Test.transport_error(&1, :timeout))
     Req.Test.expect(__MODULE__, &Plug.Conn.send_resp(&1, 404, ""))
     failed = signup(page)
-    assert html_response(failed, 503) =~ "Retry with the same handle"
+    assert html_response(failed, 503)
+    assert Atoll.Bootstrap.error(failed) == "signup_unconfirmed"
     reservation = Repo.one!(Atoll.Identity.PLC.Registration)
     refute reservation.completed_at
     accept_registration()
@@ -745,7 +755,7 @@ defmodule AtollWeb.BrowserConsentTest do
     accept_registration(fn -> Repo.update_all(PushedRequest, set: [expires_at: 1]) end)
     signed = signup(page)
     assert html_response(signed, 200) =~ "Account created"
-    assert signed.resp_body =~ "request expired"
+    assert Atoll.Bootstrap.read(signed)["text"] == "account_created_expired"
     assert Repo.aggregate(AuthorizationCode, :count) == 0
 
     assert signed |> browser() |> get("/account/sessions") |> html_response(200) =~
@@ -773,10 +783,7 @@ defmodule AtollWeb.BrowserConsentTest do
 
     login = begin(c) |> browser() |> get("/account/login")
     ceremony = post_form(login, "/account/passkeys/login/begin", %{})
-    [_, raw] = Regex.run(~r/data-public-key="([^"]+)"/, ceremony.resp_body)
-
-    options =
-      raw |> String.replace("&quot;", "\"") |> String.replace("&amp;", "&") |> Jason.decode!()
+    options = Atoll.Bootstrap.read(ceremony)["ceremony"]["publicKey"]
 
     fixture = %{
       fixture
@@ -935,8 +942,15 @@ defmodule AtollWeb.BrowserConsentTest do
     |> post(path, URI.encode_query(Map.put(params, "_csrf_token", value(page, "_csrf_token"))))
   end
 
-  defp value(page, name),
-    do: Regex.run(~r/name="#{name}" value="([^"]+)"/, page.resp_body) |> Enum.at(1)
+  defp value(page, name) do
+    payload = Atoll.Bootstrap.read(page) || %{}
+
+    case name do
+      "_csrf_token" -> payload["csrf"]
+      "view" -> payload["view"]
+      _ -> Regex.run(~r/name="#{name}" value="([^"]+)"/, page.resp_body) |> Enum.at(1)
+    end
+  end
 
   defp browser(conn),
     do:

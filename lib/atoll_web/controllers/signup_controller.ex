@@ -1,29 +1,41 @@
 defmodule AtollWeb.SignupController do
   use AtollWeb, :controller
   alias AtollWeb.AccountController, as: UI
+  alias AtollWeb.Shell
   alias Atoll.OAuth.BrowserConsent
   alias Atoll.Accounts.Signup
 
   def dispatch(conn) do
     context = get_session(conn, :oauth_pending)
 
-    with true <- conn.query_string == "",
-         {:ok, request} <- BrowserConsent.load(context),
-         true <- BrowserConsent.creation_required?(context, request) do
-      if Application.get_env(:atoll, :signup_enabled, false) do
-        if conn.method == "GET",
-          do: form(conn, context, request),
-          else: create(conn, context, request)
-      else
-        UI.message(conn, 403, "Account creation is disabled on this server.")
-      end
+    cond do
+      conn.query_string != "" ->
+        UI.message(conn, 400, "signup_request_invalid")
+
+      # Direct signup, outside any application request.
+      is_nil(context) ->
+        guarded(conn, nil, nil)
+
+      true ->
+        case BrowserConsent.load(context) do
+          {:ok, request} ->
+            if BrowserConsent.creation_required?(context, request),
+              do: guarded(conn, context, request),
+              else: UI.message(conn, 400, "signup_request_invalid")
+
+          _ ->
+            UI.message(conn, 400, "signup_request_invalid")
+        end
+    end
+  end
+
+  defp guarded(conn, context, request) do
+    if Application.get_env(:atoll, :signup_enabled, false) do
+      if conn.method == "GET",
+        do: form(conn, context, request),
+        else: create(conn, context, request)
     else
-      _ ->
-        UI.message(
-          conn,
-          400,
-          "This account-creation request is invalid or expired. Restart signup in the application."
-        )
+      UI.message(conn, 403, "signup_disabled")
     end
   end
 
@@ -31,8 +43,8 @@ defmodule AtollWeb.SignupController do
     p = conn.body_params
 
     with true <- Map.keys(p) -- ~w(_csrf_token view handle email password inviteCode action) == [],
-         true <- p["view"] == context["view"],
-         true <- request.parameters["login_hint"] in [nil, p["handle"]],
+         true <- is_nil(context) or p["view"] == context["view"],
+         true <- is_nil(request) or request.parameters["login_hint"] in [nil, p["handle"]],
          {:ok, result} <- signup_action(p) do
       case result do
         {:account, account} -> created(conn, context, account)
@@ -40,50 +52,31 @@ defmodule AtollWeb.SignupController do
       end
     else
       {:error, reason} when reason in [:plc_unavailable, :plc_conflict] ->
-        form(
-          conn,
-          context,
-          request,
-          "Registration could not be confirmed. Retry with the same handle, email, password and invitation. If your account has already been activated, restart sign-in in the application.",
-          503
-        )
+        form(conn, context, request, "signup_unconfirmed", 503)
 
       {:error, :signup_reservation_unavailable} ->
-        form(
-          conn,
-          context,
-          request,
-          "New custom-domain reservations are temporarily unavailable. Retry later or contact the server operator.",
-          503
-        )
+        form(conn, context, request, "reservation_unavailable", 503)
 
       {:error, :session_configuration_missing} ->
-        UI.message(conn, 503, "Account creation is not configured.")
+        UI.message(conn, 503, "signup_not_configured")
 
       _ ->
-        form(
-          conn,
-          context,
-          request,
-          "Account creation failed. Check your handle, email, password and invitation. The handle must be available and match any account requested by the application.",
-          400
-        )
+        form(conn, context, request, "signup_failed", 400)
     end
+  end
+
+  defp created(conn, nil, account) do
+    conn
+    |> sign_in(account)
+    |> put_resp_header("location", "/account/sessions")
+    |> send_resp(303, "")
   end
 
   defp created(conn, context, account) do
     # Keep the resulting account usable even if registration outlives the PAR.
     # A fresh application request is then required; no expired grant is issued.
     pending = Map.put(context, "created_did", account.did)
-    Plug.CSRFProtection.delete_csrf_token()
-
-    conn =
-      conn
-      |> clear_session()
-      |> configure_session(renew: true)
-      |> put_session(:account_access, account.accessJwt)
-      |> put_session(:account_refresh, account.refreshJwt)
-      |> put_session(:account_expires_at, System.system_time(:second) + 3600)
+    conn = sign_in(conn, account)
 
     case BrowserConsent.load(pending) do
       {:ok, _} ->
@@ -93,13 +86,26 @@ defmodule AtollWeb.SignupController do
         |> send_resp(303, "")
 
       _ ->
-        UI.page(
-          conn,
-          200,
-          "Account created",
-          "<p>Your account was created, but the application's request expired. Restart sign-in in the application with your new account.</p><a href=\"/account/sessions\">Manage your account</a>"
-        )
+        Shell.render(conn, 200, %{
+          screen: "message",
+          title: "Account created",
+          notice: "account_created_expired",
+          text: "account_created_expired",
+          error: "",
+          link: %{href: "/account/sessions", label: "Manage your account"}
+        })
     end
+  end
+
+  defp sign_in(conn, account) do
+    Plug.CSRFProtection.delete_csrf_token()
+
+    conn
+    |> clear_session()
+    |> configure_session(renew: true)
+    |> put_session(:account_access, account.accessJwt)
+    |> put_session(:account_refresh, account.refreshJwt)
+    |> put_session(:account_expires_at, System.system_time(:second) + 3600)
   end
 
   defp signup_action(%{"action" => "reserve_custom"} = params) do
@@ -124,68 +130,32 @@ defmodule AtollWeb.SignupController do
   end
 
   defp form(conn, context, request, error \\ "", status \\ 200, reservation \\ nil) do
-    domains =
-      Application.get_env(:atoll, :pds, [])
-      |> Keyword.get(:available_user_domains, [])
-      |> Enum.join(", ")
-
-    hint = request.parameters["login_hint"]
+    hint = request && request.parameters["login_hint"]
     handle = if is_binary(hint) and Atoll.Syntax.handle?(hint), do: hint, else: ""
-
     handle = if reservation, do: reservation.handle, else: handle
 
-    setup =
-      if reservation do
-        "<section aria-label=\"Custom handle setup\"><h2>Connect your domain</h2><p>Your reserved DID is <code>" <>
-          e(reservation.did) <>
-          "</code>.</p><p>Add a DNS TXT record at <code>" <>
-          e(reservation.dns_name) <>
-          "</code> with value <code>" <>
-          e(reservation.dns_value) <>
-          "</code>, or serve your DID as plain text at <code>" <>
-          e(reservation.https_url) <>
-          "</code>.</p><p>Then create your account below using the same handle, email, password and invitation. Keep those details; this page does not store your password. If the application request expires while DNS updates, restart signup in the application and reuse the same details.</p></section>"
-      else
-        ""
-      end
-
-    reserve_button =
-      if Signup.self_service_custom_enabled?() do
-        "<p>Using your own domain? Reserve your DID first, then configure its DNS or HTTPS claim.</p><button name=\"action\" value=\"reserve_custom\">Reserve a custom-domain DID</button>"
-      else
-        ""
-      end
-
-    invitation_field =
-      if Atoll.Accounts.Invites.required?(),
-        do:
-          "<label>Invitation code<input name=\"inviteCode\" maxlength=\"256\" required></label>",
-        else: ""
-
-    UI.page(
-      conn,
-      status,
-      "Create an account",
-      "<p>Create an account to connect to <strong>" <>
-        e(request.client_id) <>
-        "</strong>. You will review permissions before connecting.</p><p role=\"status\">" <>
-        e(error) <>
-        "</p><p>Handle domains: " <>
-        e(domains) <>
-        "</p>" <>
-        setup <>
-        "<form method=\"post\" action=\"/account/signup\"><input type=\"hidden\" name=\"_csrf_token\" value=\"" <>
-        e(Plug.CSRFProtection.get_csrf_token()) <>
-        "\"><input type=\"hidden\" name=\"view\" value=\"" <>
-        e(context["view"]) <>
-        "\"><label>Full handle<input name=\"handle\" autocomplete=\"username\" required maxlength=\"253\" value=\"" <>
-        e(handle) <>
-        "\"></label><label>Email (optional)<input name=\"email\" type=\"email\" autocomplete=\"email\" maxlength=\"320\"></label>" <>
-        "<label>Password<input name=\"password\" type=\"password\" autocomplete=\"new-password\" required minlength=\"8\" maxlength=\"1024\"></label>" <>
-        invitation_field <>
-        "<p>Keep your password. Creating an account switches this browser to the new account; applications connected to an existing account stay connected.</p><button name=\"action\" value=\"create\">Create account</button>" <>
-        reserve_button <> "</form>"
-    )
+    Shell.render(conn, status, %{
+      screen: "signup",
+      title: "Create an account",
+      error: error,
+      view: context && context["view"],
+      handle: handle,
+      email: "",
+      handleDomains:
+        Application.get_env(:atoll, :pds, []) |> Keyword.get(:available_user_domains, []),
+      inviteRequired: Atoll.Accounts.Invites.required?(),
+      customDomainEnabled: Signup.self_service_custom_enabled?(),
+      reservation:
+        reservation &&
+          %{
+            did: reservation.did,
+            handle: reservation.handle,
+            dnsName: reservation.dns_name,
+            dnsValue: reservation.dns_value,
+            httpsUrl: reservation.https_url
+          },
+      client: request && UI.client(request.client_id)
+    })
   end
 
   defp transport,
@@ -194,6 +164,4 @@ defmodule AtollWeb.SignupController do
         Application.get_env(:atoll, :identity_resolution_options, []),
         Application.get_env(:atoll, :plc_submission_options, [])
       )
-
-  defp e(value), do: Plug.HTML.html_escape(value)
 end
