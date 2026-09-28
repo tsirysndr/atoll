@@ -24,6 +24,8 @@ atoll-*.tar
 /flake.lock
 /flake.nix
 /nix/
+/assets/node_modules/
+/assets/storybook-static/
 /result
 /result-*
 /.gitignore

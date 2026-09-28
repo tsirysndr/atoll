@@ -1,12 +1,17 @@
 # Atoll PDS built for SQLite: single node, one container owning /data.
 ARG ELIXIR_IMAGE="hexpm/elixir:1.19.5-erlang-28.5.0.5-debian-bookworm-20260824-slim"
 ARG RUNNER_IMAGE="debian:bookworm-20260918-slim"
+ARG BUN_IMAGE="oven/bun:1.4-slim"
+
+FROM ${BUN_IMAGE} AS bun
 
 FROM ${ELIXIR_IMAGE} AS builder
 
 RUN apt-get update -y \
   && apt-get install -y --no-install-recommends build-essential ca-certificates git \
   && rm -rf /var/lib/apt/lists/*
+
+COPY --from=bun /usr/local/bin/bun /usr/local/bin/bun
 
 WORKDIR /app
 
@@ -22,6 +27,9 @@ RUN mix deps.get --only $MIX_ENV
 RUN mkdir config
 COPY config/config.exs config/${MIX_ENV}.exs config/
 RUN mix deps.compile
+
+COPY assets/package.json assets/bun.lock assets/
+RUN cd assets && bun install --frozen-lockfile
 
 COPY priv priv
 COPY lib lib
