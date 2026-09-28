@@ -1,5 +1,6 @@
 defmodule AtollWeb.ConsentController do
   use AtollWeb, :controller
+  require Logger
   alias AtollWeb.AccountController, as: UI
   alias AtollWeb.Shell
   alias Atoll.OAuth.{BrowserConsent, AuthorizationCodes}
@@ -37,7 +38,8 @@ defmodule AtollWeb.ConsentController do
         end
       end
     else
-      _ -> UI.message(conn, 400, "authorize_request_invalid")
+      {:error, reason} -> refused(conn, reason)
+      other -> refused(conn, other)
     end
   end
 
@@ -64,8 +66,21 @@ defmodule AtollWeb.ConsentController do
            ) do
       conn |> delete_session(:oauth_pending) |> go(BrowserConsent.callback(result))
     else
-      _ -> UI.message(conn, 400, "authorize_failed")
+      error ->
+        Logger.warning("oauth authorize decision refused: #{inspect(error)}")
+        UI.message(conn, 400, "authorize_failed")
     end
+  end
+
+  # One message covers several causes; the log says which, without the token.
+  defp refused(conn, reason) do
+    Logger.warning(
+      "oauth authorize refused: #{inspect(reason)} " <>
+        "query=#{inspect(Map.keys(conn.query_params))} " <>
+        "pending=#{is_map(get_session(conn, :oauth_pending))}"
+    )
+
+    UI.message(conn, 400, "authorize_request_invalid")
   end
 
   defp context(conn) do
