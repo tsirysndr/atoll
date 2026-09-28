@@ -47,14 +47,13 @@ beamPackages.mixRelease {
 
   env = {
     ATOLL_DATABASE = database;
+    # mix.exs sets build_path per adapter, and Mix nests MIX_ENV under it again.
+    # Both spellings would miss the _build/$MIX_ENV/lib that mixRelease symlinks
+    # its dependencies into, so pin the build root back to that layout.
+    MIX_BUILD_ROOT = "_build";
     # config/config.exs passes this to the tailwind dep, which would otherwise
     # download its own binary.
     TAILWIND_PATH = "${tailwindcss_4}/bin/tailwindcss";
-  }
-  // lib.optionalAttrs (database == "sqlite") {
-    # mix.exs redirects build_path for SQLite; keep the _build/$MIX_ENV layout
-    # that mixRelease symlinks its dependencies into.
-    MIX_BUILD_ROOT = "_build";
   };
 
   postBuild = ''
