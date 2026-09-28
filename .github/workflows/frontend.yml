@@ -1,0 +1,54 @@
+name: frontend
+
+on:
+  push:
+    paths:
+      - "assets/**"
+      - ".github/workflows/frontend.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: frontend-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    working-directory: assets
+
+jobs:
+  test:
+    name: Types, tests and bundle
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.2"
+
+      - run: bun install --frozen-lockfile
+
+      - name: Check types
+        run: bun run check
+
+      - name: Run tests
+        run: bun run test
+
+      - name: Build the bundle
+        run: bun run build
+
+      - name: Build Storybook
+        run: bun run storybook:build
+
+      - name: Check the Nix dependency set is current
+        working-directory: .
+        run: |
+          python3 scripts/bun2nix.py
+          git diff --exit-code nix/bun-deps.nix
