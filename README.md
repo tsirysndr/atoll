@@ -1,6 +1,7 @@
 # Atoll
 
 [![ci](https://github.com/tsirysndr/atoll/actions/workflows/test.yml/badge.svg)](https://github.com/tsirysndr/atoll/actions/workflows/test.yml)
+[![nix](https://github.com/tsirysndr/atoll/actions/workflows/nix.yml/badge.svg)](https://github.com/tsirysndr/atoll/actions/workflows/nix.yml)
 
 An AT Protocol Personal Data Server (PDS), built with Elixir, Phoenix, and PostgreSQL or SQLite.
 
