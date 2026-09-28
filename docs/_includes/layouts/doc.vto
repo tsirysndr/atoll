@@ -1,0 +1,39 @@
+---
+layout: layouts/base.vto
+---
+<div class="doc">
+  <article class="doc-main">
+    <header class="doc-header">
+      {{ if navSection }}<p class="eyebrow">{{ navSection }}</p>{{ /if }}
+      <h1>{{ title }}</h1>
+    </header>
+
+    <div class="doc-body prose">
+      {{ content }}
+    </div>
+
+    {{ if prev || next }}
+    <nav class="pager" aria-label="Page navigation">
+      {{ if prev }}
+      <a class="pager-link pager-prev" href="{{ prev.url }}">
+        <span class="pager-dir">Previous</span>
+        <span class="pager-label">{{ prev.label }}</span>
+      </a>
+      {{ else }}<span></span>{{ /if }}
+      {{ if next }}
+      <a class="pager-link pager-next" href="{{ next.url }}">
+        <span class="pager-dir">Next</span>
+        <span class="pager-label">{{ next.label }}</span>
+      </a>
+      {{ /if }}
+    </nav>
+    {{ /if }}
+  </article>
+
+  <aside class="doc-aside">
+    <div class="toc">
+      <h2 class="toc-title">On this page</h2>
+      <ul id="toc-list"></ul>
+    </div>
+  </aside>
+</div>

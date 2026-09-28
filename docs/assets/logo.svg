@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="Atoll">
+  <defs>
+    <linearGradient id="atoll-reef" x1="8" y1="6" x2="56" y2="58" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#5eead4"/>
+      <stop offset="0.5" stop-color="#22d3ee"/>
+      <stop offset="1" stop-color="#4f7cf7"/>
+    </linearGradient>
+    <linearGradient id="atoll-lagoon" x1="20" y1="18" x2="46" y2="46" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#22d3ee"/>
+      <stop offset="1" stop-color="#4f7cf7"/>
+    </linearGradient>
+  </defs>
+  <!-- outer reef ring, broken by a channel into the lagoon -->
+  <circle cx="32" cy="32" r="25" fill="none" stroke="url(#atoll-reef)" stroke-width="6"
+          stroke-linecap="round" stroke-dasharray="105 52" transform="rotate(-54 32 32)"/>
+  <!-- inner shoal -->
+  <circle cx="32" cy="32" r="14" fill="none" stroke="url(#atoll-lagoon)" stroke-width="4"
+          stroke-linecap="round" stroke-dasharray="58 30" transform="rotate(126 32 32)"/>
+  <!-- lagoon -->
+  <circle cx="32" cy="32" r="5" fill="url(#atoll-lagoon)"/>
+</svg>

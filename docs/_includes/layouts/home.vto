@@ -1,0 +1,20 @@
+---
+layout: layouts/base.vto
+---
+<div class="doc doc-home">
+  <article class="doc-main">
+    <section class="hero">
+      <img class="hero-logo" src="/assets/logo.svg" width="96" height="96" alt="">
+      <h1 class="hero-title">atoll <span>PDS</span></h1>
+      <p class="hero-sub">{{ description }}</p>
+      <div class="hero-actions">
+        <a class="button button-primary" href="/get-started/">Get started</a>
+        <a class="button" href="{{ repo }}" target="_blank" rel="noopener noreferrer">View on Tangled</a>
+      </div>
+    </section>
+
+    <div class="doc-body prose">
+      {{ content }}
+    </div>
+  </article>
+</div>
