@@ -43,3 +43,8 @@ atoll-*.tar
 # Nix build results.
 /result
 /result-*
+
+# Frontend dependencies and build caches.
+/assets/node_modules/
+/assets/storybook-static/
+/assets/.vite/
