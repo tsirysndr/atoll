@@ -1,7 +1,8 @@
 defmodule AtollWeb.AccountController do
   use AtollWeb, :controller
-  alias Atoll.Accounts.Sessions
-  alias Atoll.OAuth.SessionManagement
+  alias Atoll.Accounts.{LoginIdentifier, Sessions}
+  alias Atoll.OAuth.{BrowserConsent, SessionManagement}
+  alias AtollWeb.Shell
 
   def dispatch(conn, "/account/passkeys" <> _ = path),
     do: AtollWeb.PasskeyController.dispatch(conn, path)
@@ -49,31 +50,19 @@ defmodule AtollWeb.AccountController do
         signed_in(conn, pair)
       else
         {:error, :totp_required} ->
-          login_form(
-            conn,
-            "Enter the current six-digit code from your authenticator app, or an unused recovery code.",
-            401
-          )
+          login_form(conn, "totp_required", 401)
 
         {:error, :totp_rate_limited} ->
-          login_form(conn, "Too many authenticator attempts. Try again in five minutes.", 429)
+          login_form(conn, "totp_rate_limited", 429)
 
         {:error, :auth_factor_required} ->
-          login_form(
-            conn,
-            "Check your email for a sign-in code, then enter it with your password.",
-            401
-          )
+          login_form(conn, "auth_factor_required", 401)
 
         {:error, :session_configuration_missing} ->
-          message(conn, 503, "Account login is not configured.")
+          message(conn, 503, "login_not_configured")
 
         _ ->
-          login_form(
-            conn,
-            "Sign-in failed. Use your account password and an email address or DID.",
-            401
-          )
+          login_form(conn, "invalid_credentials", 401)
       end
     end
   end
@@ -98,12 +87,10 @@ defmodule AtollWeb.AccountController do
 
   defp authenticate(identifier, password, factor, totp) do
     opts = if factor in [nil, ""], do: [], else: [auth_factor_token: factor]
-
     opts = Keyword.put(opts, :totp_code, totp)
 
-    if Atoll.Syntax.did?(identifier),
-      do: Sessions.create(identifier, password, opts),
-      else: Sessions.create_email(identifier, password, opts)
+    with {:ok, pair, _handle} <- LoginIdentifier.create_session(identifier, password, opts),
+         do: {:ok, pair}
   end
 
   defp full_account(pair) do
@@ -121,51 +108,30 @@ defmodule AtollWeb.AccountController do
     params = conn.query_params
 
     if Map.keys(params) -- ["cursor"] != [] do
-      message(conn, 400, "Invalid page.")
+      message(conn, 400, "invalid_page")
     else
       case SessionManagement.list(get_session(conn, :account_access), 50, params["cursor"]) do
         {:ok, page} ->
-          rows =
-            Enum.map_join(page.sessions, "", fn s ->
-              "<li><p><strong>" <>
-                e(s.clientId) <>
-                "</strong></p><p>Permissions: " <>
-                e(s.scope) <>
-                "</p><p>Expires: " <>
-                e(DateTime.from_unix!(s.expiresAt) |> DateTime.to_iso8601()) <>
-                "</p><form method=\"post\" action=\"/account/sessions/revoke\">" <>
-                csrf() <>
-                "<input type=\"hidden\" name=\"id\" value=\"" <>
-                e(s.id) <> "\"><button>Revoke access</button></form></li>"
-            end)
-
-          next =
-            if page[:cursor],
-              do:
-                "<p><a href=\"/account/sessions?cursor=" <>
-                  e(page.cursor) <> "\">Next page</a></p>",
-              else: ""
-
-          content =
-            if rows == "", do: "<p>No active OAuth sessions.</p>", else: "<ul>" <> rows <> "</ul>"
-
-          page(
-            conn,
-            200,
-            "Connected applications",
-            "<p><a href=\"/account/security\">Account security</a></p><p>Revoking access disconnects this application. Other applications remain connected.</p>" <>
-              content <>
-              next <>
-              "<form method=\"post\" action=\"/account/logout\">" <>
-              csrf() <>
-              "<button>Sign out and disconnect applications authorized in this browser</button></form>"
-          )
+          Shell.render(conn, 200, %{
+            screen: "sessions",
+            title: "Connected applications",
+            sessions:
+              Enum.map(page.sessions, fn session ->
+                %{
+                  id: session.id,
+                  clientId: session.clientId,
+                  scope: session.scope,
+                  expiresAt: session.expiresAt
+                }
+              end),
+            cursor: page[:cursor]
+          })
 
         {:error, :invalid_request} ->
-          message(conn, 400, "Invalid page.")
+          message(conn, 400, "invalid_page")
 
         {:error, :oauth_session_store_unavailable} ->
-          message(conn, 503, "Account storage is unavailable. Try again later.")
+          message(conn, 503, "storage_unavailable")
 
         _ ->
           conn |> clear_session() |> configure_session(drop: true) |> go("/account/login")
@@ -180,16 +146,16 @@ defmodule AtollWeb.AccountController do
           go(conn, "/account/sessions")
 
         {:error, :invalid_request} ->
-          message(conn, 400, "Invalid session.")
+          message(conn, 400, "invalid_session")
 
         {:error, :oauth_session_store_unavailable} ->
-          message(conn, 503, "Account storage is unavailable. Try again later.")
+          message(conn, 503, "storage_unavailable")
 
         _ ->
           conn |> clear_session() |> configure_session(drop: true) |> go("/account/login")
       end
     else
-      message(conn, 400, "Invalid form.")
+      message(conn, 400, "invalid_form")
     end
   end
 
@@ -203,7 +169,7 @@ defmodule AtollWeb.AccountController do
     case result do
       {:ok, :ok} -> drop_login(conn)
       {:error, reason} when reason in [:invalid_token, :expired_token] -> drop_login(conn)
-      _ -> message(conn, 503, "Sign-out could not complete. Try again later.")
+      _ -> message(conn, 503, "signout_failed")
     end
   end
 
@@ -213,87 +179,51 @@ defmodule AtollWeb.AccountController do
   end
 
   defp login_form(conn, error \\ "", status \\ 200) do
-    page(
-      conn,
-      status,
-      "Sign in",
-      "<p role=\"status\">" <>
-        e(error) <>
-        "</p><form method=\"post\" action=\"/account/login\">" <>
-        csrf() <>
-        "<label>Email or DID<input name=\"identifier\" placeholder=\"Email address or DID\" autocomplete=\"username\" autocapitalize=\"none\" spellcheck=\"false\" autofocus required maxlength=\"2048\"></label>" <>
-        "<label>Password<input type=\"password\" name=\"password\" placeholder=\"Enter your password\" autocomplete=\"current-password\" required maxlength=\"1024\"></label>" <>
-        "<p role=\"note\" class=\"auth-note\">Only enter your password on sites you trust.</p>" <>
-        "<details class=\"my-5\"" <>
-        if(status == 200, do: "", else: " open") <>
-        "><summary>Two-factor authentication</summary><label>Email sign-in code (if requested)<input name=\"authFactorToken\" autocomplete=\"one-time-code\" maxlength=\"32\"></label>" <>
-        "<label>Authenticator or recovery code (if enabled)<input name=\"totpCode\" pattern=\"([0-9]{6}|[A-Z2-7]{26})\" autocomplete=\"one-time-code\" maxlength=\"26\"></label>" <>
-        "</details><button>Sign in</button></form>" <> passkey_login()
-    )
+    Shell.render(conn, status, %{
+      screen: "login",
+      title: "Sign in",
+      error: error,
+      identifier: login_hint(conn),
+      passkeysEnabled: Atoll.Accounts.Passkeys.enabled?(),
+      showTwoFactor: error in ["totp_required", "auth_factor_required", "totp_rate_limited"],
+      signupEnabled: Application.get_env(:atoll, :signup_enabled, false),
+      client: pending_client(conn)
+    })
   end
 
-  defp passkey_login do
-    if Atoll.Accounts.Passkeys.enabled?(),
-      do:
-        "<form method=\"post\" action=\"/account/passkeys/login/begin\">" <>
-          csrf() <>
-          "<button class=\"secondary-action\">Sign in with a passkey</button></form>",
-      else: ""
+  @doc false
+  def pending_client(conn) do
+    with context when is_map(context) <- get_session(conn, :oauth_pending),
+         {:ok, request} <- BrowserConsent.load(context) do
+      client(request.client_id)
+    else
+      _ -> nil
+    end
   end
 
-  def message(conn, status, text),
-    do:
-      page(
-        conn,
-        status,
-        "Atoll account",
-        "<p>" <> e(text) <> "</p><a href=\"/account/login\">Sign in</a>"
-      )
-
-  defp csrf,
-    do:
-      "<input type=\"hidden\" name=\"_csrf_token\" value=\"" <>
-        e(Plug.CSRFProtection.get_csrf_token()) <> "\">"
-
-  defp e(value), do: Plug.HTML.html_escape(value)
-  defp go(conn, path), do: conn |> put_resp_header("location", path) |> send_resp(303, "")
-
-  def page(conn, status, title, content) do
-    width =
-      cond do
-        conn.request_path == "/oauth/authorize" ->
-          "max-w-[28rem]"
-
-        conn.assigns[:passkey_script] ||
-            conn.request_path in ["/account/login", "/account/signup"] ->
-          "max-w-[26rem]"
-
-        true ->
-          "max-w-2xl"
+  @doc false
+  def client(client_id) do
+    name =
+      case URI.parse(client_id) do
+        %URI{host: host} when is_binary(host) and host != "" -> host
+        _ -> client_id
       end
 
-    script =
-      if conn.assigns[:passkey_script],
-        do:
-          "<script defer src=\"" <>
-            e(AtollWeb.Endpoint.static_path("/assets/passkeys.js")) <> "\"></script>",
-        else: ""
-
-    html =
-      "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>" <>
-        e(title) <>
-        "</title><link rel=\"stylesheet\" href=\"" <>
-        e(AtollWeb.Endpoint.static_path("/assets/account.css")) <>
-        "\">" <>
-        script <>
-        "</head><body class=\"account-background\"><div class=\"auth-shell\"><main class=\"auth-card " <>
-        width <>
-        "\" aria-labelledby=\"page-title\"><header class=\"auth-brand\">Atoll PDS</header><h1 id=\"page-title\" class=\"px-6\">" <>
-        e(title) <>
-        "</h1><div class=\"auth-content\">" <>
-        content <>
-        "</div><footer class=\"auth-footer\"><select aria-label=\"Language\"><option value=\"en\">English</option></select></footer></main></div></body></html>"
-
-    conn |> put_resp_content_type("text/html") |> send_resp(status, html)
+    %{id: client_id, name: name}
   end
+
+  defp login_hint(conn) do
+    with context when is_map(context) <- get_session(conn, :oauth_pending),
+         {:ok, request} <- BrowserConsent.load(context),
+         hint when is_binary(hint) <- request.parameters["login_hint"],
+         true <- Atoll.Syntax.handle?(hint) or Atoll.Syntax.did?(hint) do
+      hint
+    else
+      _ -> ""
+    end
+  end
+
+  def message(conn, status, code), do: Shell.message(conn, status, code)
+
+  defp go(conn, path), do: conn |> put_resp_header("location", path) |> send_resp(303, "")
 end

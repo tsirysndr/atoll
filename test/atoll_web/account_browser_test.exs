@@ -48,7 +48,8 @@ defmodule AtollWeb.AccountBrowserTest do
 
   test "login, escaped inventory, revocation and logout form a complete browser flow", c do
     login = get(c.conn, "/account/login")
-    assert html_response(login, 200) =~ "Email or DID"
+    assert html_response(login, 200)
+    assert Atoll.Bootstrap.read(login)["screen"] == "login"
     assert get_resp_header(login, "cache-control") == ["no-store"]
     assert get_resp_header(login, "content-security-policy") |> hd() =~ "frame-ancestors 'none'"
     cookie = login.resp_cookies["_atoll_account"]
@@ -61,15 +62,17 @@ defmodule AtollWeb.AccountBrowserTest do
     page = signed_in |> browser_recycle() |> get("/account/sessions")
     body = html_response(page, 200)
     assert body =~ "Connected applications"
-    assert body =~ "&lt;script&gt;"
-    refute body =~ "<script>"
+    # The payload escapes markup, so a hostile client id cannot close the data block.
+    assert body =~ "\\u003Cscript"
+    refute body =~ "<script>alert"
     assert body =~ c.session.id
     assert get_resp_header(page, "referrer-policy") == ["no-referrer"]
     revoked = form(page, "/account/sessions/revoke", %{id: c.session.id})
     assert redirected_to(revoked, 303) == "/account/sessions"
     refute Repo.get(Session, c.session.id)
     page = revoked |> browser_recycle() |> get("/account/sessions")
-    assert html_response(page, 200) =~ "No active OAuth sessions"
+    assert html_response(page, 200)
+    assert Atoll.Bootstrap.read(page)["sessions"] == []
     before = Repo.aggregate(Atoll.Accounts.Session, :count)
     logout = form(page, "/account/logout", %{})
     assert redirected_to(logout, 303) == "/account/login"
@@ -111,7 +114,8 @@ defmodule AtollWeb.AccountBrowserTest do
   test "invalid login, forged cookies and stale source sessions cannot manage grants", c do
     login = get(c.conn, "/account/login")
     failed = form(login, "/account/login", %{identifier: c.did, password: "wrong password"})
-    assert html_response(failed, 401) =~ "Sign-in failed"
+    assert html_response(failed, 401)
+    assert Atoll.Bootstrap.error(failed) == "invalid_credentials"
     refute failed.resp_body =~ "wrong password"
 
     assert failed |> browser_recycle() |> get("/account/sessions") |> redirected_to(303) ==
@@ -169,7 +173,8 @@ defmodule AtollWeb.AccountBrowserTest do
     login = get(c.conn, "/account/login")
     before = Repo.aggregate(Atoll.Accounts.Session, :count)
     result = form(login, "/account/login", %{identifier: c.did, password: "account password"})
-    assert html_response(result, 401) =~ "Check your email"
+    assert html_response(result, 401)
+    assert Atoll.Bootstrap.error(result) == "auth_factor_required"
     assert Repo.aggregate(Atoll.Accounts.Session, :count) == before
   end
 
@@ -214,7 +219,8 @@ defmodule AtollWeb.AccountBrowserTest do
     next = enable_totp(c)
     login = get(c.conn, "/account/login")
     result = form(login, "/account/login", %{identifier: c.did, password: "account password"})
-    assert html_response(result, 401) =~ "six-digit code"
+    assert html_response(result, 401)
+    assert Atoll.Bootstrap.error(result) == "totp_required"
 
     signed =
       form(result, "/account/login", %{
@@ -270,12 +276,23 @@ defmodule AtollWeb.AccountBrowserTest do
   end
 
   defp form(page, path, params) do
-    [_, csrf] = Regex.run(~r/name="_csrf_token" value="([^"]+)"/, page.resp_body)
+    csrf = csrf_token(page)
 
     page
     |> browser_recycle()
     |> put_req_header("content-type", "application/x-www-form-urlencoded")
     |> post(path, URI.encode_query(Map.put(params, :_csrf_token, csrf)))
+  end
+
+  defp csrf_token(page) do
+    case Atoll.Bootstrap.read(page) do
+      %{"csrf" => csrf} when is_binary(csrf) and csrf != "" ->
+        csrf
+
+      _ ->
+        [_, csrf] = Regex.run(~r/name="_csrf_token" value="([^"]+)"/, page.resp_body)
+        csrf
+    end
   end
 
   defp browser_recycle(conn) do

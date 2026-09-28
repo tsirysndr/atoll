@@ -99,71 +99,38 @@ defmodule AtollWeb.PasskeyController do
       )
       |> assign(:passkey_script, true)
 
-    title = if kind == "register", do: "Save your passkey", else: "Sign in with a passkey"
-
-    UI.page(
-      conn,
-      200,
-      title,
-      "<p>Use your device’s screen lock or a security key to continue. This request expires in five minutes.</p>" <>
-        "<p id=\"passkey-status\" role=\"status\" aria-live=\"polite\"></p><noscript><p>Passkeys require JavaScript. Password sign-in remains available.</p></noscript>" <>
-        "<form method=\"post\" action=\"/account/passkeys/" <>
-        kind <>
-        "/finish\" data-passkey-ceremony=\"" <>
-        kind <>
-        "\" data-public-key=\"" <>
-        e(Jason.encode!(request.public_key)) <>
-        "\">" <>
-        csrf() <>
-        "<input type=\"hidden\" name=\"credential\"><button type=\"button\">Continue with passkey</button></form>" <>
-        back(kind)
-    )
+    AtollWeb.Shell.render(conn, 200, %{
+      screen: "passkeys",
+      title: if(kind == "register", do: "Save your passkey", else: "Sign in with a passkey"),
+      passkeys: [],
+      enabled: Passkeys.enabled?(),
+      ceremony: %{
+        kind: kind,
+        action: "/account/passkeys/" <> kind <> "/finish",
+        publicKey: request.public_key
+      }
+    })
   end
 
-  defp show(conn) do
+  defp show(conn, error \\ "", status \\ 200) do
     case Passkeys.list(token(conn)) do
       {:ok, keys} ->
-        rows =
-          Enum.map_join(keys, "", fn key ->
-            "<li><strong>" <>
-              e(key.name) <>
-              "</strong><p>Added " <>
-              date(key.created_at) <>
-              "; last used " <>
-              date(key.last_used_at) <>
-              ".</p>" <>
-              "<details><summary>Remove this passkey</summary><p>This signs out sessions and disconnects applications authorized with this passkey.</p>" <>
-              "<form method=\"post\" action=\"/account/passkeys/revoke\">" <>
-              csrf() <>
-              "<input type=\"hidden\" name=\"id\" value=\"" <>
-              e(key.id) <>
-              "\">" <>
-              password_fields() <>
-              "<button>Remove passkey</button></form></details></li>"
-          end)
-
-        enroll =
-          if Passkeys.enabled?(),
-            do:
-              "<h2>Add a passkey</h2><form method=\"post\" action=\"/account/passkeys/register/begin\">" <>
-                csrf() <>
-                "<label>Passkey name<input name=\"name\" required maxlength=\"64\" autocomplete=\"off\" placeholder=\"e.g. Personal laptop\"></label>" <>
-                password_fields() <> "<button>Add passkey</button></form>",
-            else: "<p>New passkey setup and sign-in are disabled on this server.</p>"
-
-        UI.page(
-          conn,
-          200,
-          "Your passkeys",
-          "<p>Passkeys let you sign in using your device’s screen lock or a security key, without a password or authenticator code.</p>" <>
-            if(rows == "",
-              do: "<p>You have no passkeys yet.</p>",
-              else: "<ul>" <> rows <> "</ul>"
-            ) <>
-            enroll <>
-            "<h2>Lost a passkey?</h2><p>Sign in with your password and any enabled email or authenticator factor. Then remove the lost passkey here and add a replacement. Keep a spare passkey or your authenticator recovery codes somewhere safe.</p>" <>
-            back()
-        )
+        AtollWeb.Shell.render(conn, status, %{
+          screen: "passkeys",
+          title: "Passkeys",
+          error: error,
+          enabled: Passkeys.enabled?(),
+          ceremony: nil,
+          passkeys:
+            Enum.map(keys, fn key ->
+              %{
+                id: key.id,
+                name: key.name,
+                createdAt: timestamp(key.created_at),
+                lastUsedAt: timestamp(key.last_used_at)
+              }
+            end)
+        })
 
       {:error, reason} ->
         error(conn, reason)
@@ -213,75 +180,43 @@ defmodule AtollWeb.PasskeyController do
         :key_vault_unconfigured,
         :key_decryption_failed
       ] ->
-        notice(conn, 503, "Passkeys are temporarily unavailable. Try again later.")
+        notice(conn, 503, "passkeys_unavailable")
 
       reason == :totp_rate_limited ->
         conn
         |> put_resp_header("retry-after", "300")
-        |> notice(429, "Too many authenticator attempts. Try again in five minutes.")
+        |> notice(429, "totp_rate_limited")
 
       reason in [:totp_required, :invalid_totp] ->
-        notice(
-          conn,
-          401,
-          "Enter an unused authenticator or recovery code with your account password."
-        )
+        notice(conn, 401, "totp_required")
 
       reason == :invalid_credentials ->
-        notice(conn, 401, "Your account password was not accepted.")
+        notice(conn, 401, "invalid_credentials")
 
       reason == :passkeys_disabled ->
-        notice(
-          conn,
-          403,
-          "Passkey setup and sign-in are disabled. You can still use your password."
-        )
+        notice(conn, 403, "passkeys_disabled")
 
       reason == :passkey_limit ->
-        notice(conn, 400, "You can have up to ten passkeys. Remove one before adding another.")
+        notice(conn, 400, "passkey_limit")
 
       true ->
-        notice(
-          conn,
-          400,
-          "The passkey request could not complete. Restart setup or sign-in and try again."
-        )
+        notice(conn, 400, "passkey_failed")
     end
   end
 
-  defp notice(conn, status, text),
-    do:
-      UI.page(
-        conn,
-        status,
-        "Passkeys",
-        "<p>" <> e(text) <> "</p>" <> back(if(token(conn), do: "register", else: "login"))
-      )
-
-  defp password_fields,
-    do:
-      "<label>Account password<input type=\"password\" name=\"password\" autocomplete=\"current-password\" required minlength=\"8\" maxlength=\"1024\"></label>" <>
-        "<label>Authenticator or recovery code (if enabled)<input name=\"totpCode\" autocomplete=\"one-time-code\" maxlength=\"26\" pattern=\"([0-9]{6}|[A-Z2-7]{26})\"></label>"
-
-  defp csrf,
-    do:
-      "<input type=\"hidden\" name=\"_csrf_token\" value=\"" <>
-        e(Plug.CSRFProtection.get_csrf_token()) <> "\">"
-
-  defp back,
-    do:
-      "<p><a href=\"/account/security\">Account security</a> · <a href=\"/account/sessions\">Connected applications</a></p>"
-
-  defp back("register"), do: "<p><a href=\"/account/passkeys\">Back to passkeys</a></p>"
-  defp back("login"), do: "<p><a href=\"/account/login\">Use password instead</a></p>"
+  defp notice(conn, status, code) do
+    if token(conn),
+      do: show(conn, code, status),
+      else: UI.message(conn, status, code)
+  end
 
   defp fields?(params, allowed), do: Map.keys(params) -- allowed == []
 
+  defp timestamp(nil), do: nil
+  defp timestamp(seconds), do: DateTime.from_unix!(seconds) |> DateTime.to_iso8601()
+
   defp token(conn), do: get_session(conn, :account_access)
   defp random, do: Base.url_encode64(:crypto.strong_rand_bytes(32), padding: false)
-  defp date(nil), do: "never"
-  defp date(seconds), do: DateTime.from_unix!(seconds) |> DateTime.to_iso8601() |> e()
-  defp e(value), do: Plug.HTML.html_escape(value)
   defp go(conn, path), do: conn |> put_resp_header("location", path) |> send_resp(303, "")
 
   defp signed_out(conn) do

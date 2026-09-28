@@ -22,7 +22,7 @@ defmodule AtollWeb.AccountBrowserPlug do
         |> put_resp_header("x-frame-options", "DENY")
         |> put_resp_header(
           "content-security-policy",
-          "default-src 'none'; style-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'"
+          "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data:; connect-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'"
         )
 
       cond do

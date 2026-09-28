@@ -1,6 +1,7 @@
 defmodule AtollWeb.ConsentController do
   use AtollWeb, :controller
   alias AtollWeb.AccountController, as: UI
+  alias AtollWeb.Shell
   alias Atoll.OAuth.{BrowserConsent, AuthorizationCodes}
   alias Atoll.Accounts.Sessions
 
@@ -25,7 +26,7 @@ defmodule AtollWeb.ConsentController do
             show(conn, context, did)
 
           {:ok, _} ->
-            UI.message(conn, 400, "This account cannot authorize applications while inactive.")
+            UI.message(conn, 400, "account_inactive")
 
           _ ->
             conn
@@ -36,12 +37,7 @@ defmodule AtollWeb.ConsentController do
         end
       end
     else
-      _ ->
-        UI.message(
-          conn,
-          400,
-          "This authorization request is invalid or expired. Restart sign-in in the application."
-        )
+      _ -> UI.message(conn, 400, "authorize_request_invalid")
     end
   end
 
@@ -68,12 +64,7 @@ defmodule AtollWeb.ConsentController do
            ) do
       conn |> delete_session(:oauth_pending) |> go(BrowserConsent.callback(result))
     else
-      _ ->
-        UI.message(
-          conn,
-          400,
-          "Authorization could not complete. Check the selected account and permissions, or restart sign-in in the application."
-        )
+      _ -> UI.message(conn, 400, "authorize_failed")
     end
   end
 
@@ -88,11 +79,8 @@ defmodule AtollWeb.ConsentController do
           client_hash = fresh["client"]
 
           case get_session(conn, :oauth_pending) do
-            %{"uri" => ^uri, "client" => ^client_hash} = existing ->
-              {:ok, existing}
-
-            _ ->
-              {:ok, fresh}
+            %{"uri" => ^uri, "client" => ^client_hash} = existing -> {:ok, existing}
+            _ -> {:ok, fresh}
           end
         end
 
@@ -105,55 +93,57 @@ defmodule AtollWeb.ConsentController do
     with {:ok, request} <- BrowserConsent.load(context),
          true <- BrowserConsent.creation_matches?(context, request, did),
          :ok <- BrowserConsent.account_matches(request, did) do
-      choices =
-        Enum.map_join(permissions(request), "", fn {scope, field, label} ->
-          label = set_title(scope, request, conn) || label
-
-          "<label class=\"permission-option\"><input type=\"checkbox\" name=\"" <>
-            field <>
-            "\" value=\"yes\" checked><span>" <>
-            e(label) <> "</span></label>" <> set_details(scope, request, conn)
-        end)
-
       # A form-action restriction on the initiating page can block the OAuth callback redirect.
       conn =
-        put_resp_header(
-          conn,
+        conn
+        |> put_resp_header(
           "content-security-policy",
-          "default-src 'none'; style-src 'self'; frame-ancestors 'none'; base-uri 'none'"
+          "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'"
         )
+        |> put_session(:oauth_pending, Map.put(context, "did", did))
 
-      conn = put_session(conn, :oauth_pending, Map.put(context, "did", did))
-
-      UI.page(
-        conn,
-        200,
-        "Authorize",
-        "<p class=\"auth-subtitle\">Grant access to your account:<strong class=\"auth-identity\">" <>
-          e(did) <>
-          "</strong></p><section class=\"application-panel\" aria-label=\"Application\"><p><strong>" <>
-          e(request.client_id) <>
-          "</strong></p><p class=\"auth-note\">wants to access your account</p></section>" <>
-          "<p class=\"auth-note\">This application will learn your account DID. Choose any additional permissions below.</p>" <>
-          "<form method=\"post\" action=\"/oauth/authorize\"><input type=\"hidden\" name=\"_csrf_token\" value=\"" <>
-          e(Plug.CSRFProtection.get_csrf_token()) <>
-          "\"><input type=\"hidden\" name=\"view\" value=\"" <>
-          e(context["view"]) <>
-          "\">" <>
-          choices <>
-          "<div class=\"auth-actions\"><button name=\"decision\" value=\"approve\">Authorize</button>" <>
-          "<button name=\"decision\" value=\"deny\">Deny access</button></div></form>" <>
-          "<p class=\"auth-note\">Signing out of this browser revokes access granted through this sign-in. You can revoke applications individually on your account page.</p>" <>
-          "<a href=\"/account/sessions\">Manage account or sign out to use another account</a>"
-      )
+      Shell.render(conn, 200, %{
+        screen: "authorize",
+        title: "Authorize",
+        view: context["view"],
+        account: %{did: did, handle: handle(did)},
+        client: UI.client(request.client_id),
+        permissions: permission_data(request, conn)
+      })
     else
-      _ ->
-        UI.message(
-          conn,
-          400,
-          "This request is for a different account or has expired. Sign out to choose the requested account, or restart sign-in in the application."
-        )
+      _ -> UI.message(conn, 400, "authorize_account_mismatch")
     end
+  end
+
+  defp handle(did) do
+    case Atoll.Repo.get(Atoll.Accounts.Profile, did) do
+      %{handle: handle} -> handle
+      _ -> nil
+    end
+  end
+
+  defp permission_data(request, conn) do
+    Enum.map(permissions(request), fn {scope, field, label} ->
+      entry =
+        case Atoll.OAuth.PermissionSnapshots.entry(scope, request.permission_sets) do
+          {:ok, entry} -> entry
+          _ -> nil
+        end
+
+      %{
+        field: field,
+        scope: scope,
+        kind: if(entry, do: "set", else: "scope"),
+        title: (entry && translated(entry, "title", conn)) || label,
+        detail: (entry && translated(entry, "detail", conn)) || "",
+        includes:
+          if(entry,
+            do: Enum.map(entry["scopes"] || [], &Atoll.OAuth.Permissions.describe/1),
+            else: []
+          ),
+        checked: true
+      }
+    end)
   end
 
   defp decision(%{"decision" => "deny"}, _), do: {:ok, :deny}
@@ -162,11 +152,9 @@ defmodule AtollWeb.ConsentController do
     choices = permissions(request)
     selected = Enum.filter(choices, fn {_, field, _} -> p[field] == "yes" end)
 
-    if Enum.all?(choices, fn {_, field, _} ->
-         is_nil(p[field]) or p[field] == "yes"
-       end),
-       do: {:ok, {:approve, Enum.join(["atproto" | Enum.map(selected, &elem(&1, 0))], " ")}},
-       else: {:error, :invalid_scope}
+    if Enum.all?(choices, fn {_, field, _} -> is_nil(p[field]) or p[field] == "yes" end),
+      do: {:ok, {:approve, Enum.join(["atproto" | Enum.map(selected, &elem(&1, 0))], " ")}},
+      else: {:error, :invalid_scope}
   end
 
   defp decision(_, _), do: {:error, :invalid_consent}
@@ -181,9 +169,7 @@ defmodule AtollWeb.ConsentController do
       |> Enum.flat_map(fn {scope, index} ->
         case permission_label(scope, request) do
           label when is_binary(label) ->
-            [
-              {scope, "permission_" <> Integer.to_string(index), label}
-            ]
+            [{scope, "permission_" <> Integer.to_string(index), label}]
 
           _ ->
             []
@@ -197,36 +183,6 @@ defmodule AtollWeb.ConsentController do
     case Atoll.OAuth.PermissionSnapshots.entry(scope, request.permission_sets) do
       {:ok, entry} -> entry["title"] || scope
       _ -> Atoll.OAuth.Permissions.describe(scope)
-    end
-  end
-
-  defp set_title(scope, request, conn) do
-    case Atoll.OAuth.PermissionSnapshots.entry(scope, request.permission_sets) do
-      {:ok, entry} -> translated(entry, "title", conn)
-      _ -> nil
-    end
-  end
-
-  defp set_details(scope, request, conn) do
-    case Atoll.OAuth.PermissionSnapshots.entry(scope, request.permission_sets) do
-      {:ok, entry} ->
-        detail = translated(entry, "detail", conn) || ""
-
-        permissions =
-          Enum.map_join(entry["scopes"], "", fn value ->
-            "<li>" <> e(Atoll.OAuth.Permissions.describe(value)) <> "</li>"
-          end)
-
-        "<details><summary>View included permissions</summary><p>" <>
-          e(detail) <>
-          "</p><p>" <>
-          e(scope) <>
-          "</p><ul>" <>
-          permissions <>
-          "</ul><p>This set can change over time within its namespace. You can revoke this application from your account.</p></details>"
-
-      _ ->
-        ""
     end
   end
 
@@ -274,6 +230,5 @@ defmodule AtollWeb.ConsentController do
       Application.get_env(:atoll, :oauth_transport_options, [])
       |> Keyword.take([:request, :lookup])
 
-  defp e(value), do: Plug.HTML.html_escape(value)
   defp go(conn, url), do: conn |> put_resp_header("location", url) |> send_resp(303, "")
 end

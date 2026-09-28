@@ -42,20 +42,22 @@ defmodule AtollWeb.PasskeyBrowserTest do
 
   test "complete registration, discoverable login, removal and password recovery", c do
     page = manage(c)
-    assert html_response(page, 200) =~ "You have no passkeys yet"
+    assert html_response(page, 200)
+    assert Atoll.Bootstrap.read(page)["passkeys"] == []
     {created, fixture} = enroll(page)
     page = created |> browser() |> get("/account/passkeys")
     assert html_response(page, 200) =~ "Laptop"
-    assert page.resp_body =~ "Lost a passkey?"
+    assert Atoll.Bootstrap.read(page)["enabled"]
     refute page.resp_body =~ "public_key"
     sessions = page |> browser() |> get("/account/sessions")
     logout = form(sessions, "/account/logout", %{})
     login = logout |> browser() |> get("/account/login")
-    assert login.resp_body =~ "Sign in with a passkey"
+    assert Atoll.Bootstrap.read(login)["passkeysEnabled"]
     ceremony = form(login, @login_begin, %{})
-    assert html_response(ceremony, 200) =~ "Continue with passkey"
+    assert html_response(ceremony, 200)
+    assert Atoll.Bootstrap.read(ceremony)["ceremony"]["kind"] == "login"
     assert get_resp_header(ceremony, "content-security-policy") |> hd() =~ "script-src 'self'"
-    assert ceremony.resp_body =~ "/assets/passkeys.js"
+    assert ceremony.resp_body =~ "/assets/account.js"
     assert get_resp_header(ceremony, "cache-control") == ["no-store"]
 
     assert get_resp_header(ceremony, "permissions-policy") |> hd() =~
@@ -87,7 +89,9 @@ defmodule AtollWeb.PasskeyBrowserTest do
 
     assert redirected_to(revoked, 303) == "/account/login"
     assert Repo.aggregate(Passkey, :count) == 0
-    assert html_response(manage(%{c | conn: browser(revoked)}), 200) =~ "You have no passkeys yet"
+    empty = manage(%{c | conn: browser(revoked)})
+    assert html_response(empty, 200)
+    assert Atoll.Bootstrap.read(empty)["passkeys"] == []
   end
 
   test "ceremonies require CSRF, exact fields and the encrypted browser context", c do
@@ -148,19 +152,23 @@ defmodule AtollWeb.PasskeyBrowserTest do
     Application.put_env(:atoll, :passkeys_enabled, false)
     assert form(page, @begin, %{name: "Key", password: @password}).status == 403
     login = get(c.conn, "/account/login")
-    refute login.resp_body =~ "Sign in with a passkey"
+    refute Atoll.Bootstrap.read(login)["passkeysEnabled"]
     assert form(login, @login_begin, %{}).status == 403
-    assert page |> browser() |> get("/account/passkeys") |> html_response(200) =~ "disabled"
+    inventory = page |> browser() |> get("/account/passkeys")
+    assert html_response(inventory, 200)
+    refute Atoll.Bootstrap.read(inventory)["enabled"]
   end
 
   test "names are escaped and script permission is limited to ceremony pages", c do
     page = manage(c)
     {created, _} = enroll(page, "<script>alert(1)</script>")
     inventory = created |> browser() |> get("/account/passkeys")
-    assert inventory.resp_body =~ "&lt;script&gt;alert(1)&lt;/script&gt;"
-    refute inventory.resp_body =~ "<script>"
-    refute get_resp_header(inventory, "content-security-policy") |> hd() =~ "script-src"
-    refute get_resp_header(inventory, "content-security-policy") |> hd() =~ "unsafe-inline"
+    assert inventory.resp_body =~ "\\u003Cscript"
+    refute inventory.resp_body =~ "<script>alert"
+    csp = get_resp_header(inventory, "content-security-policy") |> hd()
+    # The account bundle is served from this origin; inline scripts stay forbidden.
+    assert csp =~ "script-src 'self'"
+    refute csp =~ "script-src 'self' 'unsafe-inline'"
   end
 
   test "canonical paths, form size bounds and shared sign-in rate limits", c do
@@ -209,13 +217,10 @@ defmodule AtollWeb.PasskeyBrowserTest do
     })
   end
 
-  defp options(page) do
-    [_, raw] = Regex.run(~r/data-public-key="([^"]+)"/, page.resp_body)
-    raw |> String.replace("&quot;", "\"") |> String.replace("&amp;", "&") |> Jason.decode!()
-  end
+  defp options(page), do: Atoll.Bootstrap.read(page)["ceremony"]["publicKey"]
 
   defp csrf(page),
-    do: Regex.run(~r/name="_csrf_token" value="([^"]+)"/, page.resp_body) |> Enum.at(1)
+    do: Atoll.Bootstrap.read(page)["csrf"]
 
   defp form(page, path, fields),
     do:

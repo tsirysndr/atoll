@@ -32,10 +32,12 @@ defmodule AtollWeb.AuthenticatorBrowserTest do
   test "browser setup, recovery sign-in, code replacement and disabling form a complete flow",
        c do
     page = signed_in(c)
-    assert html_response(page, 200) =~ "not enabled"
+    assert html_response(page, 200)
+    assert Atoll.Bootstrap.read(page)["state"] == "disabled"
     setup = form(page, "/account/security/begin", %{password: "account password"})
-    assert html_response(setup, 200) =~ "Google Authenticator"
-    [_, secret] = Regex.run(~r/<code>([A-Z2-7]{32})<\/code>/, setup.resp_body)
+    assert html_response(setup, 200)
+    assert Atoll.Bootstrap.read(setup)["state"] == "pending"
+    secret = Atoll.Bootstrap.read(setup)["secret"]
     assert get_resp_header(setup, "cache-control") == ["no-store"]
 
     assert {:ok, code} =
@@ -44,12 +46,13 @@ defmodule AtollWeb.AuthenticatorBrowserTest do
     confirmed = form(setup, "/account/security/confirm", %{totpCode: code})
     codes = codes(confirmed)
     assert length(codes) == 10
-    assert html_response(confirmed, 200) =~ "shown only now"
+    assert html_response(confirmed, 200)
+    assert length(Atoll.Bootstrap.read(confirmed)["recoveryCodes"]) == 10
     refute confirmed.resp_body =~ secret
     assert Repo.get!(TOTPFactor, c.did).confirmed_at
 
     security = confirmed |> recycle_browser() |> get("/account/security")
-    assert security.resp_body =~ "Recovery codes remaining: <strong>10</strong>"
+    assert Atoll.Bootstrap.read(security)["recoveryRemaining"] == 10
     for code <- codes, do: refute(security.resp_body =~ code)
     signed_out = form(security, "/account/logout", %{})
     login = signed_out |> recycle_browser() |> get("/account/login")
@@ -63,7 +66,7 @@ defmodule AtollWeb.AuthenticatorBrowserTest do
 
     assert redirected_to(signed, 303) == "/account/sessions"
     security = signed |> recycle_browser() |> get("/account/security")
-    assert security.resp_body =~ "Recovery codes remaining: <strong>9</strong>"
+    assert Atoll.Bootstrap.read(security)["recoveryRemaining"] == 9
 
     replaced =
       form(security, "/account/security/recovery", %{
@@ -82,7 +85,9 @@ defmodule AtollWeb.AuthenticatorBrowserTest do
         totpCode: hd(fresh)
       })
 
-    assert html_response(disabled, 200) =~ "has been disabled"
+    assert html_response(disabled, 200)
+    assert Atoll.Bootstrap.read(disabled)["notice"] == "totp_disabled"
+    assert Atoll.Bootstrap.read(disabled)["state"] == "disabled"
     refute Repo.get(TOTPFactor, c.did)
     assert {:ok, _} = Sessions.create(c.did, "account password")
   end
@@ -115,11 +120,13 @@ defmodule AtollWeb.AuthenticatorBrowserTest do
   test "setup failures preserve a retry form and do not echo submitted secrets", c do
     page = signed_in(c)
     denied = form(page, "/account/security/begin", %{password: "incorrect password"})
-    assert html_response(denied, 401) =~ "not accepted"
+    assert html_response(denied, 401)
+    assert Atoll.Bootstrap.error(denied) == "invalid_credentials"
     refute denied.resp_body =~ "incorrect password"
     setup = form(denied, "/account/security/begin", %{password: "account password"})
     bad = form(setup, "/account/security/confirm", %{totpCode: "invalid code"})
-    assert html_response(bad, 400) =~ "Finish setup"
+    assert html_response(bad, 400)
+    assert Atoll.Bootstrap.read(bad)["state"] == "pending"
     refute bad.resp_body =~ "invalid code"
     assert Repo.get!(TOTPFactor, c.did).attempts == 1
 
@@ -132,7 +139,7 @@ defmodule AtollWeb.AuthenticatorBrowserTest do
   test "XRPC recovery codes retain one-time use and do not replace the password", c do
     page = signed_in(c)
     setup = form(page, "/account/security/begin", %{password: "account password"})
-    [_, secret] = Regex.run(~r/<code>([A-Z2-7]{32})<\/code>/, setup.resp_body)
+    secret = Atoll.Bootstrap.read(setup)["secret"]
     {:ok, code} = TOTP.code(Base.decode32!(secret, padding: false), System.system_time(:second))
     recovery = form(setup, "/account/security/confirm", %{totpCode: code}) |> codes() |> hd()
     conn = put_req_header(c.conn, "content-type", "application/json")
@@ -151,13 +158,16 @@ defmodule AtollWeb.AuthenticatorBrowserTest do
              |> json_response(401)
   end
 
-  test "browser pages load local Tailwind styles without inline style permission", c do
+  test "browser pages load local styles and scripts with no inline script permission", c do
     page = get(c.conn, "/account/login")
     assert page.resp_body =~ "href=\"/assets/account.css\""
-    refute page.resp_body =~ "<style>"
+    assert page.resp_body =~ "src=\"/assets/account.js\""
     [csp] = get_resp_header(page, "content-security-policy")
-    assert csp =~ "style-src 'self'"
-    refute csp =~ "unsafe-inline"
+    assert csp =~ "style-src 'self' 'unsafe-inline'"
+    assert csp =~ "font-src 'self'"
+    # The bundle ships its own styles; only scripts served from here may run.
+    assert csp =~ "script-src 'self'"
+    refute csp =~ "script-src 'self' 'unsafe-inline'"
   end
 
   defp signed_in(c) do
@@ -167,11 +177,21 @@ defmodule AtollWeb.AuthenticatorBrowserTest do
     |> get("/account/security")
   end
 
-  defp codes(conn),
-    do: Regex.scan(~r/<li>([A-Z2-7]{26})<\/li>/, conn.resp_body) |> Enum.map(&List.last/1)
+  defp codes(conn), do: Atoll.Bootstrap.read(conn)["recoveryCodes"] || []
+
+  defp csrf_token(page) do
+    case Atoll.Bootstrap.read(page) do
+      %{"csrf" => csrf} when is_binary(csrf) and csrf != "" ->
+        csrf
+
+      _ ->
+        [_, csrf] = Regex.run(~r/name="_csrf_token" value="([^"]+)"/, page.resp_body)
+        csrf
+    end
+  end
 
   defp form(page, path, params) do
-    [_, csrf] = Regex.run(~r/name="_csrf_token" value="([^"]+)"/, page.resp_body)
+    csrf = csrf_token(page)
 
     page
     |> recycle_browser()
