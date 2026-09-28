@@ -35,7 +35,8 @@ defmodule Atoll.OAuth.PARTest do
 
   test "persists an opaque request with exact parameters and DPoP binding", c do
     assert {:ok, result} = push(c)
-    assert result.expires_in == 90
+    # Long enough for a person to sign in and review permissions.
+    assert result.expires_in == 600
     assert String.starts_with?(result.request_uri, "urn:ietf:params:oauth:request_uri:")
     assert {:ok, row} = PAR.get(@id, result.request_uri, c.opts)
     assert row.parameters == c.params
@@ -43,7 +44,7 @@ defmodule Atoll.OAuth.PARTest do
     assert row.client_binding == nil
     assert row.digest == :crypto.hash(:sha256, result.request_uri)
     assert Repo.aggregate(PKCEUse, :count) == 1
-    assert Repo.one!(PKCEUse).expires_at - row.expires_at == 86_310
+    assert Repo.one!(PKCEUse).expires_at - row.expires_at == 85_800
     refute inspect(row) =~ "client-state"
 
     assert {:error, :invalid_request_uri} =

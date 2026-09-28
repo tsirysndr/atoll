@@ -49,7 +49,7 @@ defmodule AtollWeb.OAuthPARTest do
 
   test "POST returns a bound request, fresh nonce, no-store, and browser CORS", c do
     result = send_form(c, URI.encode_query(c.params))
-    assert %{"request_uri" => uri, "expires_in" => 90} = json_response(result, 201)
+    assert %{"request_uri" => uri, "expires_in" => 600} = json_response(result, 201)
     assert {:ok, row} = PAR.get(@id, uri)
     assert row.parameters == c.params
     assert row.dpop_jkt == JOSE.JWK.thumbprint(c.key)

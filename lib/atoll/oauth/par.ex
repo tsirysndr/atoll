@@ -177,7 +177,9 @@ defmodule Atoll.OAuth.PAR do
            Repo.aggregate(PKCEUse, :count) >= 100_000,
          do: Repo.rollback(:oauth_par_store_full)
 
-      lifetime = if params["prompt"] == "create", do: 600, else: 90
+      # Long enough for a person to sign in, clear a second factor and review
+      # permissions: every step of the browser flow revalidates this request.
+      lifetime = 600
       uri = @prefix <> Base.url_encode64(:crypto.strong_rand_bytes(32), padding: false)
       {:ok, digest} = request_digest(uri)
       Repo.insert!(%PKCEUse{digest: challenge_digest, expires_at: now + 86_400}, log: false)
