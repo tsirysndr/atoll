@@ -39,6 +39,8 @@ defmodule AtollWeb.HomeController do
     This is an AT Protocol Personal Data Server (aka, an atproto PDS)
 
     Most API routes are under /xrpc/
+
+    Docs: https://atoll-docs.tsirysndr.deno.net
     """)
   end
 end
