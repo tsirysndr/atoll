@@ -61,12 +61,14 @@ beamPackages.mixRelease {
   preBuild = ''
     mkdir -p priv/static/assets
     cp -r ${frontend}/* priv/static/assets/
+    # The bundle arrives read-only from the store; phx.digest rewrites it.
+    chmod -R u+w priv/static/assets
   '';
 
   postBuild = ''
     # Aliases need deps.loadpaths to carry --no-deps-check for them:
     # https://github.com/phoenixframework/phoenix/issues/2690
-    mix do deps.loadpaths --no-deps-check, assets.deploy
+    mix do deps.loadpaths --no-deps-check + assets.deploy
   '';
 
   meta = {
