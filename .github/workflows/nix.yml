@@ -33,7 +33,11 @@ jobs:
       - name: Build the release
         run: nix build .#${{ matrix.target }} --print-build-logs
 
-      - name: Check the release starts
+      # The release keeps no cookie in the store, so one comes from the
+      # environment; every release command reads it.
+      - name: Check the release runs
+        env:
+          RELEASE_COOKIE: nix-smoke-test
         run: ./result/bin/atoll version
 
       - name: Check the development shell
