@@ -4,6 +4,8 @@
 
 An AT Protocol Personal Data Server (PDS), built with Elixir, Phoenix, and PostgreSQL or SQLite.
 
+Docs: **<https://atoll-docs.tsirysndr.deno.net>**
+
 Atoll provides account hosting, signed repositories, blob storage, the
 repository firehose, OAuth, moderation tooling, and operator workflows,
 tracking the endpoint surface of the pinned reference implementation.
@@ -65,22 +67,25 @@ rather than on first use.
 
 ## Documentation
 
-| Document | Contents |
-| --- | --- |
-| [docs/deploy.md](docs/deploy.md) | Step-by-step production deployment and the production checklist |
-| [docs/features.md](docs/features.md) | The complete feature record with scope notes and design decisions |
-| [docs/accounts.md](docs/accounts.md) | Signup, invites, email, app passwords, deletion, preferences, recovery |
-| [docs/identity.md](docs/identity.md) | DID/handle resolution, PLC submission, journals, identity changes |
-| [docs/keys.md](docs/keys.md) | Encrypted key custody, rotation, PLC recovery and reconciliation |
-| [docs/oauth.md](docs/oauth.md) | OAuth server, granular permissions, passkeys, TOTP |
-| [docs/repository.md](docs/repository.md) | Lexicon discovery, inclusion proofs, CAR internals |
-| [docs/moderation.md](docs/moderation.md) | Operator endpoints, takedowns, audit history |
-| [docs/operations.md](docs/operations.md) | Monitoring, rate limits, retention, relays, proxying, maintenance mode |
-| [docs/development.md](docs/development.md) | Local development and dev-only behavior |
-| [docs/testing.md](docs/testing.md) | Opt-in integration suites, interoperability checks, restore drills |
-| [ops/backup/README.md](ops/backup/README.md) | Backup, recovery sets, and restore runbook |
-| [ops/email-worker/README.md](ops/email-worker/README.md) | Deployable Cloudflare email Worker |
-| [ops/prometheus/README.md](ops/prometheus/README.md) | Alert rules and operator runbook |
+The documentation site at <https://atoll-docs.tsirysndr.deno.net> renders the
+pages below, with search and navigation.
+
+| Document                                                 | Contents                                                               |
+| -------------------------------------------------------- | ---------------------------------------------------------------------- |
+| [docs/deploy.md](docs/deploy.md)                         | Step-by-step production deployment and the production checklist        |
+| [docs/features.md](docs/features.md)                     | The complete feature record with scope notes and design decisions      |
+| [docs/accounts.md](docs/accounts.md)                     | Signup, invites, email, app passwords, deletion, preferences, recovery |
+| [docs/identity.md](docs/identity.md)                     | DID/handle resolution, PLC submission, journals, identity changes      |
+| [docs/keys.md](docs/keys.md)                             | Encrypted key custody, rotation, PLC recovery and reconciliation       |
+| [docs/oauth.md](docs/oauth.md)                           | OAuth server, granular permissions, passkeys, TOTP                     |
+| [docs/repository.md](docs/repository.md)                 | Lexicon discovery, inclusion proofs, CAR internals                     |
+| [docs/moderation.md](docs/moderation.md)                 | Operator endpoints, takedowns, audit history                           |
+| [docs/operations.md](docs/operations.md)                 | Monitoring, rate limits, retention, relays, proxying, maintenance mode |
+| [docs/development.md](docs/development.md)               | Local development and dev-only behavior                                |
+| [docs/testing.md](docs/testing.md)                       | Opt-in integration suites, interoperability checks, restore drills     |
+| [ops/backup/README.md](ops/backup/README.md)             | Backup, recovery sets, and restore runbook                             |
+| [ops/email-worker/README.md](ops/email-worker/README.md) | Deployable Cloudflare email Worker                                     |
+| [ops/prometheus/README.md](ops/prometheus/README.md)     | Alert rules and operator runbook                                       |
 
 ## Testing
 
