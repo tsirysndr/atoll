@@ -39,3 +39,7 @@ atoll-*.tar
 # SQLite databases and journals
 *.sqlite3
 *.sqlite3-*
+
+# Nix build results.
+/result
+/result-*

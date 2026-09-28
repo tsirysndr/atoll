@@ -1,0 +1,40 @@
+name: nix
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nix-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: nix build .#${{ matrix.target }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - sqlite
+          - postgres
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: DeterminateSystems/nix-installer-action@v23
+
+      - name: Build the release
+        run: nix build .#${{ matrix.target }} --print-build-logs
+
+      - name: Check the release starts
+        run: ./result/bin/atoll version
+
+      - name: Check the development shell
+        run: nix develop .#${{ matrix.target }} --command mix --version

@@ -39,6 +39,8 @@ end
 
 config :tailwind,
   version: "4.3.0",
+  # Set TAILWIND_PATH to an installed binary to skip the download.
+  path: System.get_env("TAILWIND_PATH"),
   atoll: [
     args: ~w(--input=assets/css/account.css --output=priv/static/assets/account.css),
     cd: Path.expand("..", __DIR__)

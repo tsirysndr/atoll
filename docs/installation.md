@@ -13,6 +13,7 @@ build the release you ship to a server.
 | SQLite           | Optional alternative to PostgreSQL, single node only                      |
 | Node-free assets | Assets build through `mix assets.build`; no Node.js toolchain is required |
 | Docker           | Optional; `ghcr.io/tsirysndr/atoll-pds` is a prebuilt SQLite image         |
+| Nix              | Optional; `flake.nix` provides dev shells and release builds               |
 
 Backups need matching PostgreSQL client binaries on `PATH`: `pg_dump` 14 cannot
 dump an 18 server.
@@ -146,6 +147,30 @@ docker run --rm --env-file atoll.env --volume atoll-data:/data \
 The image ships a release, not Mix, so the `mix atoll.*` maintenance tasks in
 [Operations](operations.md) are unavailable inside it. Run them from a checkout
 built with `ATOLL_DATABASE=sqlite` against the same database file.
+
+## Build with Nix
+
+`flake.nix` pins Erlang/OTP 28, Elixir 1.19, and a Tailwind binary, so neither
+the shell nor the build downloads a toolchain. The adapter is compiled in, so
+there is one target per database:
+
+```sh
+nix develop            # SQLite shell: ATOLL_DATABASE=sqlite, sqlite3, mix2nix
+nix develop .#postgres # PostgreSQL shell, with the matching psql and pg_dump
+
+nix build .#sqlite     # release at ./result/bin/atoll
+nix build .#postgres
+```
+
+`nix build` with no target builds the SQLite release. Hex dependencies are
+pinned in `nix/deps.nix`, generated from `mix.lock`; regenerate it with
+`nix run nixpkgs#mix2nix > nix/deps.nix` whenever `mix.lock` changes, or the
+build keeps using the old versions. The `nix` workflow builds both targets on
+manual dispatch.
+
+The shells set `TAILWIND_PATH` so `mix assets.build` uses the pinned Tailwind,
+and `EXQLITE_USE_SYSTEM` so the SQLite driver compiles against nixpkgs' SQLite
+instead of downloading a prebuilt NIF.
 
 ## Build a production release
 

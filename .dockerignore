@@ -21,6 +21,11 @@ atoll-*.tar
 
 /.git/
 /.github/
+/flake.lock
+/flake.nix
+/nix/
+/result
+/result-*
 /.gitignore
 /docs/_site/
 /docs/deno.lock
