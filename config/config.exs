@@ -37,17 +37,6 @@ if database == :sqlite do
     default_transaction_mode: :immediate
 end
 
-config :tailwind,
-  version: "4.3.0",
-  # Set TAILWIND_PATH to an installed binary to skip the download; its version
-  # is then the installer's business, not this pin's.
-  path: System.get_env("TAILWIND_PATH"),
-  version_check: System.get_env("TAILWIND_PATH") == nil,
-  atoll: [
-    args: ~w(--input=assets/css/account.css --output=priv/static/assets/account.css),
-    cd: Path.expand("..", __DIR__)
-  ]
-
 config :atoll,
   ecto_repos: [Atoll.Repo],
   record_write_rate_limit: 300,
