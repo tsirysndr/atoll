@@ -1,8 +1,8 @@
 {
   lib,
   beamPackages,
+  callPackage,
   sqlite,
-  tailwindcss_4,
 }:
 
 # The Ecto adapter is compiled in, so each database is its own package.
@@ -31,6 +31,8 @@ let
     };
   };
 
+  frontend = callPackage ./frontend.nix { } { inherit version; };
+
   version =
     let
       line = lib.findFirst (lib.hasInfix "version: \"") null (
@@ -51,10 +53,15 @@ beamPackages.mixRelease {
     # Both spellings would miss the _build/$MIX_ENV/lib that mixRelease symlinks
     # its dependencies into, so pin the build root back to that layout.
     MIX_BUILD_ROOT = "_build";
-    # config/config.exs passes this to the tailwind dep, which would otherwise
-    # download its own binary.
-    TAILWIND_PATH = "${tailwindcss_4}/bin/tailwindcss";
+    # The bundle is built by nix/frontend.nix from assets/bun.lock; the Mix task
+    # would otherwise need network access for Bun.
+    ATOLL_SKIP_ASSETS = "true";
   };
+
+  preBuild = ''
+    mkdir -p priv/static/assets
+    cp -r ${frontend}/* priv/static/assets/
+  '';
 
   postBuild = ''
     # Aliases need deps.loadpaths to carry --no-deps-check for them:

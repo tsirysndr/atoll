@@ -541,19 +541,6 @@ let
       beamDeps = [];
     };
 
-    tailwind = buildMix rec {
-      name = "tailwind";
-      version = "0.5.1";
-
-      src = fetchHex {
-        pkg = "tailwind";
-        version = "${version}";
-        sha256 = "c4e26302a59fec72abc5610ecb6ad2116d9aa31f31aab2d4b8eb6e95d25a689c";
-      };
-
-      beamDeps = [];
-    };
-
     telemetry = buildRebar3 rec {
       name = "telemetry";
       version = "1.4.2";

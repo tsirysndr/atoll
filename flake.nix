@@ -53,7 +53,6 @@
                 beamPackages.erlang
                 beamPackages.hex
                 pkgs.rebar3
-                pkgs.tailwindcss_4
                 pkgs.mix2nix
                 pkgs.sqlite
                 pkgs.git
@@ -71,7 +70,6 @@
                 ATOLL_DATABASE = database;
                 EXQLITE_USE_SYSTEM = "1";
                 MIX_REBAR3 = "${pkgs.rebar3}/bin/rebar3";
-                TAILWIND_PATH = "${pkgs.tailwindcss_4}/bin/tailwindcss";
               };
 
               shellHook = ''
