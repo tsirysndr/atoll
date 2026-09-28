@@ -1,10 +1,13 @@
 {
   lib,
+  stdenv,
   stdenvNoCC,
   runCommand,
   fetchurl,
   writeText,
+  autoPatchelfHook,
   bun,
+  nodejs,
 }:
 
 { version }:
@@ -22,20 +25,32 @@ let
     ) deps
   );
 
-  nodeModules = runCommand "atoll-node-modules-${version}" { } ''
-    mkdir -p $out/.bin
+  nodeModules =
+    runCommand "atoll-node-modules-${version}"
+      {
+        nativeBuildInputs = [ nodejs ] ++ lib.optional stdenv.hostPlatform.isLinux autoPatchelfHook;
+        buildInputs = lib.optionals stdenv.hostPlatform.isLinux [ stdenv.cc.cc.lib ];
+        # The tree carries prebuilt binaries for every platform; only this one's
+        # can be patched, and the rest are left as they are.
+        autoPatchelfIgnoreMissingDeps = true;
+      }
+      ''
+        mkdir -p $out/.bin
 
-    while read -r tarball path; do
-      mkdir -p "$out/$path"
-      tar -xzf "$tarball" -C "$out/$path" --strip-components=1
-    done < ${manifest}
+        while read -r tarball path; do
+          mkdir -p "$out/$path"
+          tar -xzf "$tarball" -C "$out/$path" --strip-components=1
+        done < ${manifest}
 
-    while read -r path name target; do
-      ln -sf "../$path/$target" "$out/.bin/$name"
-    done < ${bins}
+        while read -r path name target; do
+          ln -sf "../$path/$target" "$out/.bin/$name"
+        done < ${bins}
 
-    chmod -R u+w $out
-  '';
+        chmod -R u+w $out
+
+        # npm ships `#!/usr/bin/env node`, which the sandbox has no /usr/bin for.
+        patchShebangs $out
+      '';
 in
 stdenvNoCC.mkDerivation {
   pname = "atoll-account";
@@ -43,7 +58,10 @@ stdenvNoCC.mkDerivation {
 
   src = ../assets;
 
-  nativeBuildInputs = [ bun ];
+  nativeBuildInputs = [
+    bun
+    nodejs
+  ];
 
   configurePhase = ''
     runHook preConfigure

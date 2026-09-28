@@ -34,6 +34,7 @@
         rec {
           sqlite = atoll { database = "sqlite"; };
           postgres = atoll { database = "postgres"; };
+          frontend = pkgs.callPackage ./nix/frontend.nix { } { version = sqlite.version; };
           default = sqlite;
         }
       );
