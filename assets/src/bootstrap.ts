@@ -125,8 +125,21 @@ declare global {
   }
 }
 
+export const BOOTSTRAP_ELEMENT_ID = "atoll-bootstrap";
+
 export function readBootstrap(source: Window = window): Bootstrap {
-  const data = source.__ATOLL__;
+  const element = source.document?.getElementById(BOOTSTRAP_ELEMENT_ID);
+  let data: Bootstrap | undefined;
+
+  if (element?.textContent) {
+    try {
+      data = JSON.parse(element.textContent) as Bootstrap;
+    } catch {
+      data = undefined;
+    }
+  }
+
+  data ??= source.__ATOLL__;
 
   if (!data) {
     return {
