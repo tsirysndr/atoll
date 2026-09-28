@@ -4,6 +4,7 @@ import { IconApps, IconShieldLock } from "@tabler/icons-react";
 import type { SessionsData } from "../bootstrap";
 import { AuthCard } from "../components/AuthCard";
 import { Alert } from "../components/Alert";
+import { PostForm, SubmitButton } from "../components/SubmitButton";
 import { errorMessage } from "../i18n";
 
 function formatDate(seconds: number, language: string) {
@@ -63,13 +64,18 @@ export function SessionsScreen({ data }: { data: SessionsData }) {
                 ))}
               </div>
 
-              <form method="post" action="/account/sessions/revoke" className="self-start">
-                <input type="hidden" name="_csrf_token" value={data.csrf} />
-                <input type="hidden" name="id" value={session.id} />
-                <Button type="submit" size="sm" variant="flat" color="danger" radius="sm">
-                  {t("sessions.revoke")}
-                </Button>
-              </form>
+              <PostForm
+                action="/account/sessions/revoke"
+                csrf={data.csrf}
+                fields={{ id: session.id }}
+                className="self-start"
+              >
+                {(submitting) => (
+                  <SubmitButton size="sm" variant="flat" color="danger" isLoading={submitting}>
+                    {t("sessions.revoke")}
+                  </SubmitButton>
+                )}
+              </PostForm>
             </li>
           ))}
         </ul>
@@ -84,12 +90,17 @@ export function SessionsScreen({ data }: { data: SessionsData }) {
         </a>
       ) : null}
 
-      <form method="post" action="/account/logout" className="border-t border-default-200 pt-4">
-        <input type="hidden" name="_csrf_token" value={data.csrf} />
-        <Button type="submit" variant="bordered" radius="sm" fullWidth>
-          {t("sessions.signOutAll")}
-        </Button>
-      </form>
+      <PostForm
+        action="/account/logout"
+        csrf={data.csrf}
+        className="border-t border-default-200 pt-4"
+      >
+        {(submitting) => (
+          <SubmitButton variant="bordered" fullWidth isLoading={submitting}>
+            {t("sessions.signOutAll")}
+          </SubmitButton>
+        )}
+      </PostForm>
     </AuthCard>
   );
 }

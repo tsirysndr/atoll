@@ -14,6 +14,7 @@ import { AuthCard } from "../components/AuthCard";
 import { Alert } from "../components/Alert";
 import { PasswordField, TextField } from "../components/Field";
 import { ServerForm, useServerForm } from "../components/ServerForm";
+import { SubmitButton } from "../components/SubmitButton";
 import { errorMessage } from "../i18n";
 
 function BeginForm({ csrf }: { csrf: string }) {
@@ -30,9 +31,9 @@ function BeginForm({ csrf }: { csrf: string }) {
         autoComplete="current-password"
         maxLength={1024}
       />
-      <Button type="submit" color="primary" radius="sm" size="lg" className="font-medium">
+      <SubmitButton color="primary" size="lg" className="font-medium" isLoading={api.submitting}>
         {t("security.begin")}
-      </Button>
+      </SubmitButton>
     </ServerForm>
   );
 }
@@ -53,9 +54,9 @@ function ConfirmForm({ csrf }: { csrf: string }) {
         maxLength={26}
         autoFocus
       />
-      <Button type="submit" color="primary" radius="sm" size="lg" className="font-medium">
+      <SubmitButton color="primary" size="lg" className="font-medium" isLoading={api.submitting}>
         {t("security.confirm")}
-      </Button>
+      </SubmitButton>
     </ServerForm>
   );
 }
@@ -94,16 +95,15 @@ function PasswordAndCodeForm({
         inputMode="numeric"
         maxLength={26}
       />
-      <Button
-        type="submit"
+      <SubmitButton
         color={danger ? "danger" : "primary"}
         variant={danger ? "flat" : "solid"}
-        radius="sm"
         size="lg"
         className="font-medium"
+        isLoading={api.submitting}
       >
         {label}
-      </Button>
+      </SubmitButton>
     </ServerForm>
   );
 }

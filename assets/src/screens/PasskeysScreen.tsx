@@ -11,6 +11,7 @@ import { AuthCard } from "../components/AuthCard";
 import { Alert } from "../components/Alert";
 import { PasswordField, TextField } from "../components/Field";
 import { ServerForm, useServerForm } from "../components/ServerForm";
+import { SubmitButton } from "../components/SubmitButton";
 import { passkeyStatusAtom } from "../atoms";
 import { ceremonyError, passkeysSupported, runCeremony } from "../passkeys";
 import { errorMessage } from "../i18n";
@@ -99,9 +100,9 @@ function EnrollForm({ csrf }: { csrf: string }) {
         maxLength={26}
         isRequired={false}
       />
-      <Button type="submit" color="primary" radius="sm" size="lg" className="font-medium">
+      <SubmitButton color="primary" size="lg" className="font-medium" isLoading={api.submitting}>
         {t("passkeys.add")}
-      </Button>
+      </SubmitButton>
     </ServerForm>
   );
 }
@@ -183,17 +184,15 @@ export function PasskeysScreen({ data }: { data: PasskeysData }) {
                     maxLength={26}
                     className="h-11 rounded-md border border-default-200 bg-default-50/60 px-3 text-base"
                   />
-                  <Button
-                    type="submit"
+                  <SubmitButton
                     color="danger"
                     variant="flat"
-                    radius="sm"
                     size="sm"
                     className="self-start"
                     startContent={<IconTrash size={16} stroke={1.75} />}
                   >
                     {t("passkeys.remove")}
-                  </Button>
+                  </SubmitButton>
                 </form>
               </details>
             </li>

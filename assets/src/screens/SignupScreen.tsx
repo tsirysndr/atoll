@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { Button, Snippet } from "@heroui/react";
+import { Snippet } from "@heroui/react";
 import { useTranslation } from "react-i18next";
 import { IconAt, IconCheck, IconLock, IconWorld, IconX } from "@tabler/icons-react";
 import type { SignupData } from "../bootstrap";
@@ -11,6 +11,7 @@ import { Alert } from "../components/Alert";
 import { ClientPanel } from "../components/ClientPanel";
 import { TextField, PasswordField } from "../components/Field";
 import { ServerForm, useServerForm } from "../components/ServerForm";
+import { SubmitButton } from "../components/SubmitButton";
 import { useHandleAvailability, useServerDescription } from "../api";
 import { errorMessage } from "../i18n";
 
@@ -149,29 +150,27 @@ export function SignupScreen({ data }: { data: SignupData }) {
 
         <p className="text-xs text-default-500">{t("signup.keepPassword")}</p>
 
-        <Button
-          type="submit"
+        <SubmitButton
           color="primary"
           size="lg"
-          radius="sm"
           className="font-medium"
+          isLoading={api.submitting}
           onPress={() => api.submitWith("action", "create")}
         >
           {t("common.createAccount")}
-        </Button>
+        </SubmitButton>
 
         {data.customDomainEnabled ? (
           <>
             <p className="text-xs text-default-500">{t("signup.customDomain")}</p>
-            <Button
-              type="submit"
+            <SubmitButton
               variant="bordered"
               size="lg"
-              radius="sm"
+              isLoading={api.submitting}
               onPress={() => api.submitWith("action", "reserve_custom")}
             >
               {t("signup.reserveCustom")}
-            </Button>
+            </SubmitButton>
           </>
         ) : null}
       </ServerForm>

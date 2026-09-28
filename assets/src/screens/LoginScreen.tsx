@@ -1,6 +1,6 @@
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { Button, Divider } from "@heroui/react";
+import { Divider } from "@heroui/react";
 import { useAtom } from "jotai";
 import { useTranslation } from "react-i18next";
 import { IconAt, IconChevronRight, IconFingerprint, IconLock } from "@tabler/icons-react";
@@ -11,6 +11,7 @@ import { Alert } from "../components/Alert";
 import { ClientPanel } from "../components/ClientPanel";
 import { TextField, PasswordField } from "../components/Field";
 import { ServerForm, useServerForm } from "../components/ServerForm";
+import { PostForm, SubmitButton } from "../components/SubmitButton";
 import { twoFactorOpenAtom } from "../atoms";
 import { useServerDescription } from "../api";
 import { errorMessage } from "../i18n";
@@ -108,9 +109,14 @@ export function LoginScreen({ data }: { data: LoginData }) {
           </button>
         )}
 
-        <Button type="submit" color="primary" size="lg" radius="sm" className="mt-1 font-medium">
+        <SubmitButton
+          color="primary"
+          size="lg"
+          className="mt-1 font-medium"
+          isLoading={api.submitting}
+        >
           {t("common.signIn")}
-        </Button>
+        </SubmitButton>
       </ServerForm>
 
       {data.passkeysEnabled ? (
@@ -121,19 +127,19 @@ export function LoginScreen({ data }: { data: LoginData }) {
             <Divider className="flex-1" />
           </div>
 
-          <form method="post" action="/account/passkeys/login/begin">
-            <input type="hidden" name="_csrf_token" value={data.csrf} />
-            <Button
-              type="submit"
-              variant="bordered"
-              size="lg"
-              radius="sm"
-              fullWidth
-              startContent={<IconFingerprint size={18} stroke={1.75} />}
-            >
-              {t("login.passkey")}
-            </Button>
-          </form>
+          <PostForm action="/account/passkeys/login/begin" csrf={data.csrf}>
+            {(submitting) => (
+              <SubmitButton
+                variant="bordered"
+                size="lg"
+                fullWidth
+                isLoading={submitting}
+                startContent={<IconFingerprint size={18} stroke={1.75} />}
+              >
+                {t("login.passkey")}
+              </SubmitButton>
+            )}
+          </PostForm>
         </>
       ) : null}
 

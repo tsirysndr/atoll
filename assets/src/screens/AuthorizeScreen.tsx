@@ -1,6 +1,5 @@
 import { useEffect } from "react";
 import { useForm } from "react-hook-form";
-import { Button } from "@heroui/react";
 import { useSetAtom } from "jotai";
 import { useTranslation } from "react-i18next";
 import type { AuthorizeData } from "../bootstrap";
@@ -9,6 +8,7 @@ import { Alert } from "../components/Alert";
 import { ClientPanel } from "../components/ClientPanel";
 import { PermissionList } from "../components/PermissionList";
 import { ServerForm, useServerForm } from "../components/ServerForm";
+import { SubmitButton } from "../components/SubmitButton";
 import { permissionsAtom } from "../atoms";
 import { errorMessage } from "../i18n";
 
@@ -46,25 +46,23 @@ export function AuthorizeScreen({ data }: { data: AuthorizeData }) {
         <PermissionList permissions={data.permissions} />
 
         <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
-          <Button
-            type="submit"
+          <SubmitButton
             variant="bordered"
             size="lg"
-            radius="sm"
+            isLoading={api.submitting}
             onPress={() => api.submitWith("decision", "deny")}
           >
             {t("authorize.deny")}
-          </Button>
-          <Button
-            type="submit"
+          </SubmitButton>
+          <SubmitButton
             color="primary"
             size="lg"
-            radius="sm"
             className="font-medium sm:min-w-40"
+            isLoading={api.submitting}
             onPress={() => api.submitWith("decision", "approve")}
           >
             {t("authorize.approve")}
-          </Button>
+          </SubmitButton>
         </div>
       </ServerForm>
 

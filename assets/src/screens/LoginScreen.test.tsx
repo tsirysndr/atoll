@@ -62,3 +62,23 @@ describe("LoginScreen", () => {
     expect(screen.getByRole("alert")).toHaveTextContent(/sign-in failed/i);
   });
 });
+
+describe("LoginScreen progress", () => {
+  it("shows the button busy while the request is in flight", async () => {
+    const user = userEvent.setup();
+    render(<App data={loginFixture} client={client()} />);
+
+    await user.type(screen.getByLabelText(/username or email address/i), "alice.example.com");
+    await user.type(screen.getByLabelText(/^password$/i), "correct horse battery");
+
+    const button = screen.getByRole("button", { name: /sign in$/i });
+    await user.click(button);
+
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /sign in$/i })).toHaveAttribute(
+        "data-loading",
+        "true",
+      ),
+    );
+  });
+});

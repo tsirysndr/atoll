@@ -1,19 +1,23 @@
-import { useRef, type FormEvent, type ReactNode } from "react";
+import { useRef, useState, type FormEvent, type ReactNode } from "react";
 import type { FieldValues, UseFormReturn } from "react-hook-form";
 
 export type ServerFormApi = {
   formRef: React.RefObject<HTMLFormElement | null>;
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
   submitWith: (name: string, value: string) => void;
+  submitting: boolean;
 };
 
 export function useServerForm<T extends FieldValues>(form: UseFormReturn<T>): ServerFormApi {
   const formRef = useRef<HTMLFormElement>(null);
   const intent = useRef<{ name: string; value: string } | null>(null);
+  const [submitting, setSubmitting] = useState(false);
 
   const submitNative = () => {
     const element = formRef.current;
     if (!element) return;
+
+    setSubmitting(true);
 
     if (intent.current) {
       const input = document.createElement("input");
@@ -28,6 +32,7 @@ export function useServerForm<T extends FieldValues>(form: UseFormReturn<T>): Se
 
   return {
     formRef,
+    submitting,
     onSubmit: form.handleSubmit(submitNative),
     submitWith: (name, value) => {
       intent.current = { name, value };
