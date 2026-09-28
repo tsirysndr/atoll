@@ -39,7 +39,13 @@ function CeremonyPanel({ ceremony, csrf }: { ceremony: Ceremony; csrf: string })
   };
 
   return (
-    <form ref={formRef} method="post" action={ceremony.action} className="flex flex-col gap-4">
+    <form
+      ref={formRef}
+      method="post"
+      action={ceremony.action}
+      data-passkey-ceremony={ceremony.kind}
+      className="flex flex-col gap-4"
+    >
       <input type="hidden" name="_csrf_token" value={csrf} />
       <input type="hidden" name="credential" ref={credentialRef} />
 

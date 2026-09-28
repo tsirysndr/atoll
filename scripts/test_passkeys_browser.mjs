@@ -36,6 +36,7 @@ try {
   let id = 0;
   const pending = new Map();
   let loaded;
+  const diagnostics = [];
   socket.onmessage = ({data}) => {
     const message = JSON.parse(data);
     if (message.id) {
@@ -43,6 +44,13 @@ try {
       pending.delete(message.id);
       if (request) { clearTimeout(request.timer); message.error ? request.reject(message.error) : request.resolve(message.result); }
     } else if (message.method === 'Page.loadEventFired') loaded?.();
+    else if (message.method === 'Runtime.consoleAPICalled') {
+      diagnostics.push('console: ' + message.params.args.map(a => a.description || a.value).join(' '));
+    } else if (message.method === 'Runtime.exceptionThrown') {
+      diagnostics.push('exception: ' + JSON.stringify(message.params.exceptionDetails.exception || message.params.exceptionDetails.text));
+    } else if (message.method === 'Log.entryAdded') {
+      diagnostics.push('log[' + message.params.entry.level + ']: ' + message.params.entry.text + ' ' + (message.params.entry.url || ''));
+    }
   };
   const call = (method, params = {}) => new Promise((resolve, reject) => {
     const n = ++id;
@@ -52,6 +60,8 @@ try {
   });
   const version = await call('Browser.getVersion');
   await call('Page.enable');
+  await call('Runtime.enable');
+  await call('Log.enable');
   await call('WebAuthn.enable');
   await call('WebAuthn.addVirtualAuthenticator', {options: {
     protocol: 'ctap2', transport: 'internal', hasResidentKey: true,
@@ -62,6 +72,13 @@ try {
     if (result.exceptionDetails) throw Error(JSON.stringify(result.exceptionDetails));
     return result.result.value;
   };
+  const waitFor = async (expression, description) => {
+    for (let i = 0; i < 100; i++) {
+      if (await evaluate(expression)) return;
+      await pause(100);
+    }
+    throw Error('Timed out waiting for ' + description + '\n' + diagnostics.slice(-15).join('\n'));
+  };
   const navigate = async action => {
     let timer;
     const load = new Promise(resolve => { loaded = resolve; });
@@ -71,23 +88,37 @@ try {
     } finally { clearTimeout(timer); }
   };
   const visit = path => navigate(() => call('Page.navigate', {url: origin + path}));
-  const submit = (path, values = {}) => navigate(() => evaluate(`(() => {
-    const form = document.querySelector('form[action="' + ${JSON.stringify(path)} + '"]');
-    if (!form) throw Error('Missing form: ' + ${JSON.stringify(path)});
-    for (const [key, value] of Object.entries(${JSON.stringify(values)})) form.elements.namedItem(key).value = value;
-    form.requestSubmit();
-  })()`));
+  const submit = async (path, values = {}) => {
+    const selector = `form[action="${path}"]`;
+    await waitFor(`!!document.querySelector('${selector}')`, 'form ' + path);
+    await navigate(() => evaluate(`(() => {
+      const form = document.querySelector('form[action="' + ${JSON.stringify(path)} + '"]');
+      if (!form) throw Error('Missing form: ' + ${JSON.stringify(path)});
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
+      for (const [key, value] of Object.entries(${JSON.stringify(values)})) {
+        const field = form.elements.namedItem(key);
+        if (!field) throw Error('Missing field: ' + key);
+        setter.call(field, value);
+        field.dispatchEvent(new Event('input', {bubbles: true}));
+      }
+      form.requestSubmit();
+    })()`));
+  };
   const assertPage = async text => {
-    const content = await evaluate('document.body.innerText');
-    if (!content.includes(text)) throw Error('Expected ' + text + '; received: ' + content);
+    for (let i = 0; i < 100; i++) {
+      const content = await evaluate('document.body.innerText');
+      if (content.includes(text)) return;
+      await pause(100);
+    }
+    throw Error('Expected ' + text + '; received: ' + (await evaluate('document.body.innerText')));
   };
   await visit('/account/login');
   await submit('/account/login', {identifier: did, password});
   await assertPage('Connected applications');
   await visit('/account/security');
-  await assertPage('Manage passkeys');
+  await assertPage('Passkeys');
   await visit('/account/passkeys');
-  await assertPage('You have no passkeys yet');
+  await assertPage('No passkeys yet');
   await submit('/account/passkeys/register/begin', {name: 'Virtual test key', password});
   await assertPage('Save your passkey');
   for (const [name, width, height, mobile, dark] of [['desktop', 1280, 900, false, false], ['mobile', 390, 844, true, false], ['dark', 1280, 900, false, true]]) {
@@ -98,6 +129,7 @@ try {
     const screenshot = await call('Page.captureScreenshot', {format: 'png'});
     await writeFile(join(tmpdir(), 'atoll-passkey-' + name + '.png'), Buffer.from(screenshot.data, 'base64'));
   }
+  await waitFor('!!document.querySelector("[data-passkey-ceremony] button")', 'the passkey ceremony');
   await navigate(() => evaluate('document.querySelector("[data-passkey-ceremony] button").click()'));
   await assertPage('Virtual test key');
   await visit('/account/sessions');
@@ -105,12 +137,13 @@ try {
   await assertPage('Sign in');
   await submit('/account/passkeys/login/begin');
   await assertPage('Sign in with a passkey');
+  await waitFor('!!document.querySelector("[data-passkey-ceremony] button")', 'the passkey ceremony');
   await evaluate(`(async () => {
     const original = navigator.credentials.get.bind(navigator.credentials);
     try {
       navigator.credentials.get = async () => { throw new DOMException('Cancelled', 'NotAllowedError'); };
       document.querySelector('[data-passkey-ceremony] button').click();
-      await new Promise(queueMicrotask);
+      await new Promise(resolve => setTimeout(resolve, 250));
       if (document.querySelector('[data-passkey-ceremony] button').disabled) throw Error('Retry is disabled');
     } finally { navigator.credentials.get = original; }
   })()`);
@@ -119,6 +152,7 @@ try {
   await assertPage('Connected applications');
   await visit('/account/passkeys');
   await submit('/account/passkeys/revoke', {password});
+  await waitFor(`!!document.querySelector('form[action="/account/login"]')`, 'the password form');
   const passwordRecoveryReady = await evaluate(`(() => {
     const form = document.querySelector('form[action="/account/login"]');
     return location.pathname === '/account/login' &&
@@ -129,7 +163,7 @@ try {
   await submit('/account/login', {identifier: did, password});
   await assertPage('Connected applications');
   await visit('/account/passkeys');
-  await assertPage('You have no passkeys yet');
+  await assertPage('No passkeys yet');
   console.log('Passkey browser flow passed with ' + version.product);
 
 } finally {
