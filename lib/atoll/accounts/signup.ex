@@ -233,7 +233,7 @@ defmodule Atoll.Accounts.Signup do
     cond do
       not hosted_handle?(handle) -> custom_domain(handle)
       Atoll.Accounts.ReservedHandles.blocked?(handle) -> {:error, :handle_reserved}
-      true -> :ok
+      true -> Atoll.Identity.Delegates.available(handle)
     end
   end
 

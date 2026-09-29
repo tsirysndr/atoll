@@ -228,8 +228,21 @@ namespace. The handle is checked against the hosted-handle rules first, a
 delegate's answer must be a syntactically valid `did:plc` or `did:web`, and
 requests fail fast — two seconds to connect, three to answer — because the ask
 endpoint runs on the TLS handshake path. A local account always wins: delegates
-are consulted only when this server has no account for the handle, so handle
-allocation remains this server's to arbitrate.
+are consulted only when this server has no account for the handle.
+
+Allocation asks them too. A hosted handle would otherwise be free to hand out on
+the strength of owning the domain, which stops being true once a delegate issues
+names in the same namespace, so account creation and any move onto a hosted
+handle ask the delegates first and refuse a name another DID already holds with
+`HandleNotAvailable`. Only an answered claim counts as taken: a delegate that
+cannot be reached leaves the name unproven and registration proceeds, so an
+outage there cannot stop signups here. With no delegates configured nothing is
+asked and nothing changes.
+
+This closes the allocation race only between servers that perform the check. A
+delegate that allocates without asking in return can still issue a name this
+server has already given out, so a shared namespace wants the check on both
+sides.
 
 ### HTTPS handle redirects
 

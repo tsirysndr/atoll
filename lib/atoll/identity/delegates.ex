@@ -52,6 +52,22 @@ defmodule Atoll.Identity.Delegates do
     end
   end
 
+  @doc """
+  `:ok` unless a delegate already claims `handle` for a different DID.
+
+  A hosted handle is otherwise free to allocate because this server owns the
+  domain, which stops being true once a delegate issues names in it. Only an
+  answered claim counts as taken: a delegate that cannot be reached leaves the
+  name unproven, so an outage there does not stop registration here.
+  """
+  def available(handle, did \\ nil, opts \\ []) do
+    case resolve(handle, opts) do
+      {:ok, ^did} -> :ok
+      {:ok, _} -> {:error, :handle_not_available}
+      :error -> :ok
+    end
+  end
+
   def configured, do: Application.get_env(:atoll, :handle_delegates, [])
 
   defp handle?(handle) do

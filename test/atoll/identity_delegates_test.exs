@@ -55,6 +55,40 @@ defmodule Atoll.Identity.DelegatesTest do
     assert :error = Delegates.resolve("alice.example.com")
   end
 
+  describe "available/3" do
+    test "a name a delegate claims for another DID cannot be allocated here" do
+      Req.Test.expect(__MODULE__, fn conn -> Req.Test.json(conn, %{did: @did}) end)
+
+      assert {:error, :handle_not_available} =
+               Delegates.available("alice.example.com", nil, plug: {Req.Test, __MODULE__})
+    end
+
+    test "a name the same DID already holds is not a collision" do
+      Req.Test.expect(__MODULE__, fn conn -> Req.Test.json(conn, %{did: @did}) end)
+
+      assert :ok = Delegates.available("alice.example.com", @did, plug: {Req.Test, __MODULE__})
+    end
+
+    # Only an answered claim proves a name is taken, so a delegate that is down
+    # or answers with nonsense must not stop registration here.
+    test "an unproven name stays available" do
+      for answer <- [
+            fn conn -> Plug.Conn.send_resp(conn, 400, ~s({"error":"UnableToResolveHandle"})) end,
+            fn conn -> Plug.Conn.send_resp(conn, 503, "") end,
+            fn conn -> Req.Test.json(conn, %{did: "not-a-did"}) end,
+            fn conn -> Req.Test.transport_error(conn, :econnrefused) end
+          ] do
+        Req.Test.expect(__MODULE__, answer)
+        assert :ok = Delegates.available("alice.example.com", nil, plug: {Req.Test, __MODULE__})
+      end
+    end
+
+    test "no delegates configured asks nothing and allocates freely" do
+      Application.put_env(:atoll, :handle_delegates, [])
+      assert :ok = Delegates.available("alice.example.com")
+    end
+  end
+
   describe "parse!/2" do
     test "reads a comma-separated list of origins and trims trailing slashes" do
       env = %{"ATOLL_HANDLE_DELEGATES" => "https://a.example.com/, http://b.example.com"}

@@ -113,7 +113,7 @@ defmodule Atoll.Identity.PLC.Submission do
 
     cond do
       Atoll.Accounts.ReservedHandles.blocked?(handle, did) -> {:error, :handle_reserved}
-      Signup.hosted_handle?(handle) -> :ok
+      Signup.hosted_handle?(handle) -> Atoll.Identity.Delegates.available(handle, did, opts)
       Handle.resolve(handle, Keyword.put(opts, :force_refresh, true)) == {:ok, did} -> :ok
       true -> {:error, :unverified_handle}
     end

@@ -845,6 +845,32 @@ defmodule AtollWeb.SignupControllerTest do
     reservation
   end
 
+  test "a handle a delegate already issued cannot be allocated here" do
+    delegates = Application.get_env(:atoll, :handle_delegates)
+    transport = Application.get_env(:atoll, :handle_delegate_transport)
+    Application.put_env(:atoll, :handle_delegates, ["https://sibling.example.test"])
+    Application.put_env(:atoll, :handle_delegate_transport, plug: {Req.Test, __MODULE__})
+
+    on_exit(fn ->
+      if delegates,
+        do: Application.put_env(:atoll, :handle_delegates, delegates),
+        else: Application.delete_env(:atoll, :handle_delegates)
+
+      if transport,
+        do: Application.put_env(:atoll, :handle_delegate_transport, transport),
+        else: Application.delete_env(:atoll, :handle_delegate_transport)
+    end)
+
+    Req.Test.stub(__MODULE__, fn conn ->
+      assert conn.request_path == "/xrpc/com.atproto.identity.resolveHandle"
+      Req.Test.json(conn, %{did: "did:plc:4zc47fuogx2rdgxolokayzaw"})
+    end)
+
+    assert json_response(request(@params), 400)["error"] == "HandleNotAvailable"
+    assert Repo.aggregate(Profile, :count) == 0
+    assert Repo.aggregate(Registration, :count) == 0
+  end
+
   defp request(params),
     do:
       %{build_conn() | remote_ip: Process.get(:signup_test_ip)}
