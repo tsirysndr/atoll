@@ -32,17 +32,23 @@ export const loginSchema = z.object({
 
 export type LoginValues = z.infer<typeof loginSchema>;
 
-export const signupSchema = z.object({
-  handle: z
-    .string()
-    .trim()
-    .min(1, "Choose a username")
-    .max(253, "That username is too long")
-    .regex(/^[a-zA-Z0-9.-]+$/, "Use letters, numbers, hyphens and dots only"),
-  email: z.email("Enter a valid email address").max(320).or(z.literal("")),
-  password,
-  inviteCode: z.string().trim().max(256).or(z.literal("")),
-});
+export const signupSchema = z
+  .object({
+    handle: z
+      .string()
+      .trim()
+      .min(1, "Choose a username")
+      .max(253, "That username is too long")
+      .regex(/^[a-zA-Z0-9.-]+$/, "Use letters, numbers, hyphens and dots only"),
+    email: z.email("Enter a valid email address").max(320).or(z.literal("")),
+    password,
+    confirmPassword: z.string().min(1, "Confirm your password"),
+    inviteCode: z.string().trim().max(256).or(z.literal("")),
+  })
+  .refine((values) => values.password === values.confirmPassword, {
+    message: "Those passwords do not match",
+    path: ["confirmPassword"],
+  });
 
 export type SignupValues = z.infer<typeof signupSchema>;
 

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient } from "@tanstack/react-query";
@@ -45,6 +45,34 @@ describe("SignupScreen", () => {
     await waitFor(() => expect(screen.getByText(/that username is taken/i)).toBeInTheDocument(), {
       timeout: 3000,
     });
+  });
+
+  it("refuses to submit when the passwords do not match", async () => {
+    const user = userEvent.setup();
+    const { container } = render(<App data={signupFixture} client={client()} />);
+    const submit = vi.fn();
+    container.querySelector("form")!.submit = submit;
+
+    await user.type(screen.getByLabelText(/^password$/i), "correct horse");
+    await user.type(screen.getByLabelText(/confirm password/i), "correct hors");
+    await user.click(screen.getByRole("button", { name: /create account/i }));
+
+    expect(await screen.findByText(/those passwords do not match/i)).toBeInTheDocument();
+    expect(submit).not.toHaveBeenCalled();
+  });
+
+  it("submits once the passwords match", async () => {
+    const user = userEvent.setup();
+    const { container } = render(<App data={signupFixture} client={client()} />);
+    const submit = vi.fn();
+    container.querySelector("form")!.submit = submit;
+
+    await user.type(screen.getByLabelText(/username/i), "alice.example.com");
+    await user.type(screen.getByLabelText(/^password$/i), "correct horse");
+    await user.type(screen.getByLabelText(/confirm password/i), "correct horse");
+    await user.click(screen.getByRole("button", { name: /create account/i }));
+
+    await waitFor(() => expect(submit).toHaveBeenCalled());
   });
 
   it("only asks for an invitation code when the server requires one", () => {

@@ -37,6 +37,7 @@ export function SignupScreen({ data }: { data: SignupData }) {
       handle: data.handle,
       email: data.email,
       password: "",
+      confirmPassword: "",
       inviteCode: "",
     },
   });
@@ -134,6 +135,15 @@ export function SignupScreen({ data }: { data: SignupData }) {
           description={t("signup.passwordHint")}
           registration={form.register("password")}
           error={form.formState.errors.password}
+          startContent={<IconLock size={18} stroke={1.75} className="text-default-400" aria-hidden />}
+          autoComplete="new-password"
+          maxLength={1024}
+        />
+
+        <PasswordField
+          label={t("signup.confirmPassword")}
+          registration={form.register("confirmPassword")}
+          error={form.formState.errors.confirmPassword}
           startContent={<IconLock size={18} stroke={1.75} className="text-default-400" aria-hidden />}
           autoComplete="new-password"
           maxLength={1024}

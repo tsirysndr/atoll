@@ -43,6 +43,7 @@
     "emailOptional": "Facultatif, utilisé pour récupérer le compte",
     "password": "Mot de passe",
     "passwordHint": "Au moins 8 caractères",
+    "confirmPassword": "Confirmer le mot de passe",
     "invite": "Code d'invitation",
     "domains": "Domaines disponibles : {{domains}}",
     "keepPassword": "Conservez votre mot de passe. La création d'un compte bascule ce navigateur vers le nouveau compte.",

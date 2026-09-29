@@ -43,6 +43,7 @@
     "emailOptional": "Facoltativo, usato per recuperare l'account",
     "password": "Password",
     "passwordHint": "Almeno 8 caratteri",
+    "confirmPassword": "Conferma password",
     "invite": "Codice di invito",
     "domains": "Domini disponibili: {{domains}}",
     "keepPassword": "Conserva la password. Creare un account passa questo browser al nuovo account.",
