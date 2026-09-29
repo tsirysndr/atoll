@@ -134,4 +134,21 @@ defmodule Atoll.EmailTest do
       Email.Config.parse!(%{}, url: "http://configured.example.com", token: "config-secret")
     end
   end
+
+  # Every other test here injects a Req.Test plug, which never reaches the Finch
+  # adapter and so cannot catch an option combination the adapter rejects. This
+  # one dials a closed port to run the real adapter: a refused connection is the
+  # expected outcome, while an invalid request option raises instead.
+  test "delivery options are accepted by the real HTTP adapter" do
+    {:ok, socket} = :gen_tcp.listen(0, [])
+    {:ok, port} = :inet.port(socket)
+    :ok = :gen_tcp.close(socket)
+
+    Application.put_env(:atoll, :email_worker,
+      url: "https://127.0.0.1:#{port}/send",
+      token: "secret"
+    )
+
+    assert {:error, :email_delivery_unavailable} = Email.deliver(@message, @key)
+  end
 end

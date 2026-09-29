@@ -19,8 +19,9 @@ defmodule Atoll.Email do
         redirect: false,
         retry: false,
         decode_body: false,
+        # Req refuses :finch alongside :connect_options, which owns the connect
+        # timeout and the pool it is started with.
         connect_options: [timeout: 3_000],
-        finch: [pool_timeout: 3_000],
         receive_timeout: 5_000,
         into: fn {:data, _data}, acc -> {:cont, acc} end
       ]

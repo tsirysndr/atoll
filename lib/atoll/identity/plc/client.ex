@@ -233,8 +233,10 @@ defmodule Atoll.Identity.PLC.Client do
       retry: false,
       raw: true,
       compressed: false,
+      # Req refuses :finch alongside :connect_options, which owns the connect
+      # timeout and the pool it is started with. Checkout falls back to Finch's
+      # own bound; connect and receive stay bounded here.
       connect_options: [timeout: 3_000],
-      finch: [pool_timeout: 3_000],
       receive_timeout: 5_000,
       into: &collect(&1, &2, max_bytes)
     ]
