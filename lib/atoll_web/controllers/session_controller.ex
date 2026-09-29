@@ -1,6 +1,6 @@
 defmodule AtollWeb.SessionController do
   use AtollWeb, :controller
-  alias Atoll.Accounts.Sessions
+  alias Atoll.Accounts.{LoginIdentifier, Sessions}
   action_fallback AtollWeb.SessionFallback
 
   def reserve_signing_key(conn, _) do
@@ -261,31 +261,12 @@ defmodule AtollWeb.SessionController do
   defp valid_factor?(token) when is_binary(token), do: byte_size(token) == 32
   defp valid_factor?(_), do: false
 
-  defp login_pair(identifier, password, opts) do
-    if String.contains?(identifier, "@") do
-      with {:ok, pair} <- Sessions.create_email(identifier, password, opts),
-           do: {:ok, pair, nil}
-    else
-      with {:ok, did, handle} <- login_identity(identifier),
-           {:ok, pair} <- Sessions.create(did, password, opts),
-           do: {:ok, pair, handle}
-    end
-  end
-
-  defp login_identity(identifier) do
-    if Atoll.Syntax.did?(identifier) do
-      {:ok, identifier, nil}
-    else
-      opts =
-        Application.get_env(:atoll, :identity_resolution_options, [])
-        |> Keyword.put(:force_refresh, true)
-
-      case Atoll.Identity.Handle.verify(identifier, opts) do
-        {:ok, identity} -> {:ok, identity.did, identity.handle}
-        {:error, _} -> {:error, :invalid_credentials}
-      end
-    end
-  end
+  # Shared with the browser sign-in so both resolve an account hosted here from
+  # its own records. Resolving such a handle over the network instead fails
+  # whenever another server answers for the domain, which is exactly what a
+  # shared handle namespace arranges.
+  defp login_pair(identifier, password, opts),
+    do: LoginIdentifier.create_session(identifier, password, opts)
 
   defp bearer(conn), do: AtollWeb.BearerToken.get(conn)
 

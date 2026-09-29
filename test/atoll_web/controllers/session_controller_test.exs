@@ -31,6 +31,23 @@ defmodule AtollWeb.SessionControllerTest do
     %{conn: %{conn | remote_ip: {10, 10, div(id, 256), rem(id, 256)}}, head: head}
   end
 
+  test "a handle hosted here signs in even when the network cannot resolve it", %{conn: conn} do
+    Atoll.Repo.insert!(%Atoll.Accounts.Profile{did: @did, handle: "alice.example.com"})
+
+    # Another server answers for this domain, so resolution finds nothing. An
+    # account hosted here must still be able to sign in with its own handle.
+    Application.put_env(:atoll, :identity_resolution_options,
+      dns: fn _ -> {:error, :nxdomain} end,
+      plug: {Req.Test, __MODULE__}
+    )
+
+    Req.Test.stub(__MODULE__, fn c -> Plug.Conn.send_resp(c, 404, "") end)
+
+    pair = login(conn, %{"identifier" => "alice.example.com"}) |> json_response(200)
+    assert pair["did"] == @did
+    assert pair["handle"] == "alice.example.com"
+  end
+
   test "email login normalizes identifiers and follows changes without sending mail", %{
     conn: conn
   } do
