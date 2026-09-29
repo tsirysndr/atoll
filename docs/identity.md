@@ -208,6 +208,29 @@ share a per-node limit of 60 requests per five minutes per direct client IP, ret
 no-store responses, and reject request bodies. Query parsing retains the existing
 32 KiB bound and Lexicon parameter validation.
 
+### Sharing a handle namespace
+
+One handle domain can be served by more than one PDS — `*.bsky.social` works
+this way — because handle resolution belongs to whichever server owns the
+wildcard, not to whichever server stores the repository. That server answers
+`/.well-known/atproto-did` for the whole namespace while the repositories live
+wherever the DID documents say they do.
+
+`ATOLL_HANDLE_DELEGATES` is a comma-separated list of sibling PDS origins. When a
+handle in this server's namespace matches no local account, each delegate is
+asked `com.atproto.identity.resolveHandle` in turn, and the first DID returned is
+served as the handle's answer. The on-demand TLS ask endpoint consults the same
+list, so a delegate's handle can also be issued a certificate here; without that
+the name would fail the TLS handshake before resolution was ever attempted.
+
+A delegate is trusted only to name a DID for a handle already inside this
+namespace. The handle is checked against the hosted-handle rules first, a
+delegate's answer must be a syntactically valid `did:plc` or `did:web`, and
+requests fail fast — two seconds to connect, three to answer — because the ask
+endpoint runs on the TLS handshake path. A local account always wins: delegates
+are consulted only when this server has no account for the handle, so handle
+allocation remains this server's to arbitrate.
+
 ### HTTPS handle redirects
 
 The HTTPS fallback for handle resolution follows up to three redirects (four

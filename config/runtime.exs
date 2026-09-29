@@ -230,6 +230,13 @@ config :atoll,
        :email_worker,
        Atoll.Email.Config.parse!(System.get_env(), Application.get_env(:atoll, :email_worker, []))
 
+config :atoll,
+       :handle_delegates,
+       Atoll.Identity.Delegates.parse!(
+         System.get_env(),
+         Application.get_env(:atoll, :handle_delegates, [])
+       )
+
 server = Atoll.ServerConfig.parse!(System.get_env(), config_env() == :prod)
 config :atoll, :pds, server.pds
 

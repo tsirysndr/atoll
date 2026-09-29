@@ -37,8 +37,13 @@ defmodule AtollWeb.ServerController do
   defp handle_host?(domain) do
     Atoll.Accounts.Signup.hosted_handle?(domain) and
       case Atoll.Repo.get_by(Atoll.Accounts.Profile, handle: domain) do
-        %{did: did} -> not Atoll.Accounts.Signup.pending?(did)
-        nil -> false
+        %{did: did} ->
+          not Atoll.Accounts.Signup.pending?(did)
+
+        # A delegate's account needs a certificate here as well, because this
+        # server is what the handle's wildcard resolves to.
+        nil ->
+          match?({:ok, _}, Atoll.Identity.Delegates.resolve(domain))
       end
   end
 

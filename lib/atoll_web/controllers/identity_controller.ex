@@ -186,7 +186,12 @@ defmodule AtollWeb.IdentityController do
             else: conn |> put_resp_content_type("text/plain") |> send_resp(200, did)
 
         nil ->
-          send_resp(conn, 404, "Not found")
+          # The namespace can be shared with another PDS. This server owns the
+          # wildcard, so it answers for that server's accounts too.
+          case Atoll.Identity.Delegates.resolve(host) do
+            {:ok, did} -> conn |> put_resp_content_type("text/plain") |> send_resp(200, did)
+            :error -> send_resp(conn, 404, "Not found")
+          end
       end
     else
       send_resp(conn, 404, "Not found")

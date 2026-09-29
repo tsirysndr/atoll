@@ -1,0 +1,90 @@
+defmodule Atoll.Identity.Delegates do
+  @moduledoc """
+  Sibling PDS hosts that share this server's handle namespace.
+
+  One handle domain can be served by several PDS instances — `*.bsky.social`
+  works this way — because whichever server owns the wildcard answers handle
+  resolution for the whole namespace, while the repositories themselves live
+  wherever they live. This server owns `*.<user domain>`, so it answers for a
+  delegate's accounts as well as its own, and the on-demand TLS ask endpoint
+  follows the same answer so those names can get a certificate.
+
+  A delegate is trusted only to name a DID for a handle inside this namespace.
+  """
+
+  @did ~r/\A(did:plc:[a-z2-7]{24}|did:web:[a-z0-9.:%-]{1,250})\z/
+
+  @doc "Parses `ATOLL_HANDLE_DELEGATES`, a comma-separated list of PDS origins."
+  def parse!(env, settings \\ []) do
+    case Map.fetch(env, "ATOLL_HANDLE_DELEGATES") do
+      {:ok, value} -> validate!(String.split(value, ","))
+      :error -> settings
+    end
+  end
+
+  defp validate!(values) do
+    origins = values |> Enum.map(&String.trim/1) |> Enum.reject(&(&1 == ""))
+
+    Enum.each(origins, fn origin ->
+      uri = URI.parse(origin)
+
+      unless uri.scheme in ["http", "https"] and is_binary(uri.host) and uri.host != "" and
+               uri.path in [nil, "/"] and is_nil(uri.query) and is_nil(uri.fragment) and
+               is_nil(uri.userinfo) do
+        raise "ATOLL_HANDLE_DELEGATES must be a comma-separated list of PDS origins, got #{inspect(origin)}"
+      end
+    end)
+
+    Enum.map(origins, &String.trim_trailing(&1, "/"))
+  end
+
+  @doc "The DID a delegate claims for `handle`, or `:error` when none does."
+  def resolve(handle, opts \\ []) do
+    if handle?(handle) do
+      Enum.reduce_while(configured(), :error, fn origin, _ ->
+        case ask(origin, handle, opts) do
+          {:ok, did} -> {:halt, {:ok, did}}
+          :error -> {:cont, :error}
+        end
+      end)
+    else
+      :error
+    end
+  end
+
+  def configured, do: Application.get_env(:atoll, :handle_delegates, [])
+
+  defp handle?(handle) do
+    is_binary(handle) and byte_size(handle) in 1..253 and
+      Regex.match?(~r/\A[a-z0-9.-]+\z/, handle)
+  end
+
+  # This runs on the TLS handshake path through the ask endpoint, so it fails
+  # fast rather than holding a connection open.
+  defp ask(origin, handle, opts) do
+    request = [
+      url: "#{origin}/xrpc/com.atproto.identity.resolveHandle",
+      params: [handle: handle],
+      redirect: false,
+      retry: false,
+      connect_options: [timeout: 2_000],
+      receive_timeout: 3_000
+    ]
+
+    # Only the transport can be overridden, so a caller cannot redirect the
+    # question somewhere else.
+    transport =
+      case Keyword.fetch(opts, :plug) do
+        {:ok, plug} -> [plug: plug]
+        :error -> Application.get_env(:atoll, :handle_delegate_transport, [])
+      end
+
+    case Req.get(Keyword.merge(request, transport)) do
+      {:ok, %{status: 200, body: %{"did" => did}}} when is_binary(did) ->
+        if Regex.match?(@did, did), do: {:ok, did}, else: :error
+
+      _ ->
+        :error
+    end
+  end
+end

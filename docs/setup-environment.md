@@ -152,6 +152,7 @@ DATABASE_PATH=/absolute/path/to/atoll.sqlite3
 | S3 blob storage          | `ATOLL_BLOB_STORAGE=s3` plus the `ATOLL_S3_*` settings                          |
 | Redis-shared rate limits | `ATOLL_RATE_LIMIT_BACKEND=redis`, `ATOLL_REDIS_URL`                             |
 | Email worker             | `ATOLL_EMAIL_WORKER_URL`, `ATOLL_EMAIL_WORKER_TOKEN`                            |
+| Handle delegates         | `ATOLL_HANDLE_DELEGATES`                                                        |
 | Passkeys                 | `ATOLL_PASSKEYS_ENABLED=true`                                                   |
 | Verified PLC resolution  | `ATOLL_PLC_RESOLUTION_MODE=audit`                                               |
 | Key rotation             | `ATOLL_PREVIOUS_KEY_ENCRYPTION_KEYS`                                            |
