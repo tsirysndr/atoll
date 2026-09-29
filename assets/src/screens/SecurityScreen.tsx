@@ -1,6 +1,7 @@
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { Button, Chip, Snippet } from "@heroui/react";
+import { QRCodeSVG } from "qrcode.react";
 import { useTranslation } from "react-i18next";
 import { IconFingerprint, IconShieldCheck, IconShieldOff } from "@tabler/icons-react";
 import type { SecurityData } from "../bootstrap";
@@ -141,6 +142,17 @@ export function SecurityScreen({ data }: { data: SecurityData }) {
       {data.secret ? (
         <section className="flex flex-col gap-2">
           <p className="text-sm text-default-500">{t("security.secret")}</p>
+          {data.uri ? (
+            <figure className="flex flex-col items-center gap-2 self-start rounded-md bg-white p-3">
+              <QRCodeSVG
+                value={data.uri}
+                size={176}
+                level="M"
+                marginSize={0}
+                title={t("security.qrTitle")}
+              />
+            </figure>
+          ) : null}
           <Snippet size="sm" radius="sm" hideSymbol className="w-full font-mono tracking-wider">
             {data.secret}
           </Snippet>

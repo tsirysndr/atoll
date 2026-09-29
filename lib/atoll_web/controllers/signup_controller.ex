@@ -42,7 +42,11 @@ defmodule AtollWeb.SignupController do
   defp create(conn, context, request) do
     p = conn.body_params
 
-    with true <- Map.keys(p) -- ~w(_csrf_token view handle email password inviteCode action) == [],
+    # confirmPassword is checked in the browser and posted with the form; it is
+    # accepted here and dropped below rather than failing the whole request.
+    with true <-
+           Map.keys(p) --
+             ~w(_csrf_token view handle email password confirmPassword inviteCode action) == [],
          true <- is_nil(context) or p["view"] == context["view"],
          true <- is_nil(request) or request.parameters["login_hint"] in [nil, p["handle"]],
          {:ok, result} <- signup_action(p) do

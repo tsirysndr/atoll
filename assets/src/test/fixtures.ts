@@ -100,6 +100,7 @@ export const securityFixture: SecurityData = {
   state: "disabled",
   recoveryRemaining: 0,
   secret: null,
+  uri: null,
   recoveryCodes: null,
 };
 

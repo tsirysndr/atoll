@@ -17,7 +17,7 @@ defmodule AtollWeb.AuthenticatorController do
       case path do
         "/account/security/begin" ->
           if fields?(p, ~w(_csrf_token password)),
-            do: Authenticator.begin(token, p["password"]),
+            do: Authenticator.begin(token, p["password"], issuer()),
             else: {:error, :invalid_request}
 
         "/account/security/confirm" ->
@@ -37,8 +37,8 @@ defmodule AtollWeb.AuthenticatorController do
       end
 
     case result do
-      {:ok, %{secret: secret}} ->
-        screen(conn, 200, %{state: :pending, secret: secret})
+      {:ok, %{secret: secret} = enrollment} ->
+        screen(conn, 200, %{state: :pending, secret: secret, uri: Map.get(enrollment, :uri)})
 
       {:ok, %{recovery_codes: codes}} ->
         screen(conn, 200, %{state: :enabled, recovery_codes: codes})
@@ -102,9 +102,14 @@ defmodule AtollWeb.AuthenticatorController do
       state: to_string(data.state),
       recoveryRemaining: Map.get(data, :recovery_remaining, 0),
       secret: Map.get(data, :secret),
+      uri: Map.get(data, :uri),
       recoveryCodes: Map.get(data, :recovery_codes)
     })
   end
+
+  # The authenticator shows this to its owner, so it names the service they are
+  # actually enrolling with rather than a build-time default.
+  defp issuer, do: URI.parse(AtollWeb.Endpoint.url()).host || "Atoll"
 
   defp fields?(params, allowed), do: Map.keys(params) -- allowed == []
 

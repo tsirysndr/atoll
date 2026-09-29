@@ -23,6 +23,25 @@ defmodule Atoll.AuthenticatorTest do
     %{did: did, pair: pair}
   end
 
+  test "enrollment offers a provisioning URI naming the handle and this service", c do
+    Atoll.Repo.insert!(%Atoll.Accounts.Profile{did: c.did, handle: "alice.example.test"})
+
+    assert {:ok, enrollment} =
+             Authenticator.begin(c.pair.access_jwt, "authenticator password", "pds.example.test")
+
+    assert enrollment.uri =~ "otpauth://totp/"
+    assert enrollment.uri =~ "alice.example.test"
+    assert enrollment.uri =~ "secret=" <> enrollment.secret
+    assert enrollment.uri =~ "issuer=pds.example.test"
+  end
+
+  test "enrollment without a handle still yields a typed secret", c do
+    # The scannable code is a convenience; losing it must not block enrollment.
+    assert {:ok, enrollment} = Authenticator.begin(c.pair.access_jwt, "authenticator password")
+    assert enrollment.uri == nil
+    assert is_binary(enrollment.secret)
+  end
+
   test "enrollment needs a full session and fresh password, stores only encrypted material", c do
     assert {:error, :invalid_credentials} =
              Authenticator.begin(c.pair.access_jwt, "wrong password")

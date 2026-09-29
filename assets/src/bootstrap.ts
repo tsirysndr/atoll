@@ -94,6 +94,7 @@ export type SecurityData = Common & {
   state: "disabled" | "pending" | "enabled";
   recoveryRemaining: number;
   secret: string | null;
+  uri: string | null;
   recoveryCodes: string[] | null;
 };
 

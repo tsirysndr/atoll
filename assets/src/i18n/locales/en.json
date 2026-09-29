@@ -96,6 +96,7 @@
     "disable": "Turn off two-factor authentication",
     "recovery": "Replace recovery codes",
     "secret": "Scan this in your authenticator app, or enter the key by hand.",
+    "qrTitle": "Authenticator setup code",
     "recoveryCodes": "Save these recovery codes. Each one works once.",
     "passkeys": "Passkeys"
   },

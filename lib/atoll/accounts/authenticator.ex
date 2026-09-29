@@ -10,7 +10,7 @@ defmodule Atoll.Accounts.Authenticator do
   alias Atoll.Accounts.{Credentials, Sessions, TOTP, TOTPSecret, TOTPFactor}
   alias Atoll.Repositories.Head
 
-  def begin(token, password) do
+  def begin(token, password, issuer \\ "Atoll") do
     with {:ok, head} <- Sessions.authenticate_management(token),
          {:ok, digest} <- Credentials.verified_digest(head.did, password),
          secret = TOTP.generate_secret(),
@@ -33,7 +33,13 @@ defmodule Atoll.Accounts.Authenticator do
 
         row = row || %TOTPFactor{did: head.did}
         row |> Ecto.Changeset.change(attrs) |> Repo.insert_or_update!(log: false)
-        {:ok, %{secret: Base.encode32(secret, padding: false), expires_at: now + 600}}
+
+        {:ok,
+         %{
+           secret: Base.encode32(secret, padding: false),
+           uri: provisioning_uri(secret, head.did, issuer),
+           expires_at: now + 600
+         }}
       end)
     end
   end
@@ -283,6 +289,20 @@ defmodule Atoll.Accounts.Authenticator do
 
   defp factor(did),
     do: Repo.one(from(f in TOTPFactor, where: f.did == ^did, lock: "FOR UPDATE"), log: false)
+
+  # The label an authenticator shows its owner. A missing handle only costs the
+  # scannable code, so enrollment still proceeds with the typed secret.
+  defp provisioning_uri(secret, did, issuer) do
+    handle =
+      Repo.one(from(p in Atoll.Accounts.Profile, where: p.did == ^did, select: p.handle),
+        log: false
+      )
+
+    case handle && TOTP.provisioning_uri(secret, handle, issuer) do
+      {:ok, uri} -> uri
+      _ -> nil
+    end
+  end
 
   defp clock! do
     now = Atoll.Database.now_seconds!()

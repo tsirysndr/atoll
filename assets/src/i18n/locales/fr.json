@@ -96,6 +96,7 @@
     "disable": "Désactiver l'authentification à deux facteurs",
     "recovery": "Remplacer les codes de récupération",
     "secret": "Scannez ceci dans votre application d'authentification, ou saisissez la clé manuellement.",
+    "qrTitle": "Code de configuration de l'authentificateur",
     "recoveryCodes": "Conservez ces codes de récupération. Chacun ne fonctionne qu'une fois.",
     "passkeys": "Clés d'accès"
   },

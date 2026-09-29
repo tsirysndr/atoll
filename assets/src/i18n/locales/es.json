@@ -96,6 +96,7 @@
     "disable": "Desactivar la autenticación en dos pasos",
     "recovery": "Sustituir los códigos de recuperación",
     "secret": "Escanea esto en tu aplicación de autenticación, o introduce la clave a mano.",
+    "qrTitle": "Código de configuración del autenticador",
     "recoveryCodes": "Guarda estos códigos de recuperación. Cada uno funciona una sola vez.",
     "passkeys": "Claves de acceso"
   },

@@ -96,6 +96,7 @@
     "disable": "Disattiva l'autenticazione a due fattori",
     "recovery": "Sostituisci i codici di recupero",
     "secret": "Scansiona questo codice nella tua app di autenticazione, oppure inserisci la chiave manualmente.",
+    "qrTitle": "Codice di configurazione dell'autenticatore",
     "recoveryCodes": "Conserva questi codici di recupero. Ognuno funziona una sola volta.",
     "passkeys": "Passkey"
   },

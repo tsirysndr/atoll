@@ -889,7 +889,10 @@ defmodule AtollWeb.BrowserConsentTest do
       "view" => value(page, "view"),
       "handle" => "alice.users.example.com",
       "email" => "alice@example.com",
-      "password" => "signup account password"
+      "password" => "signup account password",
+      # The browser form posts this alongside the password; the server accepts
+      # and drops it rather than refusing the whole request.
+      "confirmPassword" => "signup account password"
     }
 
   defp signup(page, changes \\ %{}),
