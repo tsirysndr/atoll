@@ -17,7 +17,7 @@
     "title": "Entrar",
     "subtitle": "Use o seu nome de utilizador ou endereço de e-mail",
     "identifier": "Nome de utilizador ou e-mail",
-    "identifierPlaceholder": "alice.example.com",
+    "identifierPlaceholder": "alice{{domain}}",
     "password": "Palavra-passe",
     "passwordPlaceholder": "Introduza a sua palavra-passe",
     "trust": "Só introduza a sua palavra-passe em sites de confiança.",

@@ -17,7 +17,7 @@
     "title": "Sign in",
     "subtitle": "Use your username or email address",
     "identifier": "Username or email address",
-    "identifierPlaceholder": "alice.example.com",
+    "identifierPlaceholder": "alice{{domain}}",
     "password": "Password",
     "passwordPlaceholder": "Enter your password",
     "trust": "Only enter your password on sites you trust.",

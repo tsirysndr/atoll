@@ -3,7 +3,10 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient } from "@tanstack/react-query";
 import { App } from "../App";
+import { http, HttpResponse } from "msw";
 import { loginFixture } from "../test/fixtures";
+import { describeServer } from "../mocks/handlers";
+import { server } from "../mocks/server";
 
 const client = () => new QueryClient({ defaultOptions: { queries: { retry: false } } });
 
@@ -13,6 +16,17 @@ describe("LoginScreen", () => {
 
     expect(screen.getByLabelText(/username or email address/i)).toBeInTheDocument();
     expect(screen.queryByText(/DID/)).not.toBeInTheDocument();
+  });
+
+  it("offers an example handle on the server's own domain", async () => {
+    server.use(
+      http.get("/xrpc/com.atproto.server.describeServer", () =>
+        HttpResponse.json({ ...describeServer, availableUserDomains: [".rocksky.social"] }),
+      ),
+    );
+    render(<App data={loginFixture} client={client()} />);
+
+    expect(await screen.findByPlaceholderText("alice.rocksky.social")).toBeInTheDocument();
   });
 
   it("prefills the identifier the OAuth request asked for", () => {

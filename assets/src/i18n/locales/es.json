@@ -17,7 +17,7 @@
     "title": "Iniciar sesión",
     "subtitle": "Usa tu nombre de usuario o dirección de correo",
     "identifier": "Nombre de usuario o correo",
-    "identifierPlaceholder": "alice.example.com",
+    "identifierPlaceholder": "alice{{domain}}",
     "password": "Contraseña",
     "passwordPlaceholder": "Introduce tu contraseña",
     "trust": "Introduce tu contraseña solo en sitios de confianza.",

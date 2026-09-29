@@ -35,6 +35,7 @@ export function LoginScreen({ data }: { data: LoginData }) {
   const api = useServerForm(form);
   const showTwoFactor = open || data.showTwoFactor;
   const links = description.data?.links;
+  const domain = description.data?.availableUserDomains?.[0] ?? ".example.com";
 
   return (
     <AuthCard
@@ -49,7 +50,7 @@ export function LoginScreen({ data }: { data: LoginData }) {
       <ServerForm action="/account/login" csrf={data.csrf} api={api}>
         <TextField
           label={t("login.identifier")}
-          placeholder={t("login.identifierPlaceholder")}
+          placeholder={t("login.identifierPlaceholder", { domain })}
           registration={form.register("identifier")}
           error={form.formState.errors.identifier}
           startContent={<IconAt size={18} stroke={1.75} className="text-default-400" aria-hidden />}

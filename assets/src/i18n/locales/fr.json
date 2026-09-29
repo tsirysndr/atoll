@@ -17,7 +17,7 @@
     "title": "Se connecter",
     "subtitle": "Utilisez votre nom d'utilisateur ou votre adresse e-mail",
     "identifier": "Nom d'utilisateur ou adresse e-mail",
-    "identifierPlaceholder": "alice.example.com",
+    "identifierPlaceholder": "alice{{domain}}",
     "password": "Mot de passe",
     "passwordPlaceholder": "Saisissez votre mot de passe",
     "trust": "Ne saisissez votre mot de passe que sur des sites de confiance.",

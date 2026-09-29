@@ -17,7 +17,7 @@
     "title": "Accedi",
     "subtitle": "Usa il tuo nome utente o indirizzo email",
     "identifier": "Nome utente o email",
-    "identifierPlaceholder": "alice.example.com",
+    "identifierPlaceholder": "alice{{domain}}",
     "password": "Password",
     "passwordPlaceholder": "Inserisci la tua password",
     "trust": "Inserisci la password solo su siti di cui ti fidi.",
