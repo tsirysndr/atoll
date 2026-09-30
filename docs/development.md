@@ -6,9 +6,11 @@ Running Atoll locally and the development-only conveniences.
 
 Use `GET /health` for process liveness and `GET /health/ready` for PostgreSQL
 connectivity readiness. Both responses disable caching. Readiness runs `SELECT 1`
-with a one-second query timeout and no pool queueing, returning HTTP 200 with
-`{"status":"ok"}` or HTTP 503 with `{"status":"unavailable"}`. A busy pool can
-therefore report unavailable. Database errors and credentials are never included
+with a one-second query timeout, waiting briefly for a connection, and returns
+HTTP 200 with `{"status":"ok"}` or HTTP 503 with `{"status":"unavailable"}`.
+Queueing for a connection keeps a busy server from reporting itself unreachable,
+which matters most on SQLite, where one connection serves every query.
+Database errors and credentials are never included
 in the response. This probe does not verify migrations, signing keys, S3, or
 external identity services. Configure deployment probe intervals and failure
 thresholds accordingly; it is not a complete production-readiness assessment.

@@ -22,7 +22,11 @@ defmodule Atoll.Readiness do
            {:ok, %{rows: [[1]]}},
            Ecto.Adapters.SQL.query(repo.get_dynamic_repo(), "SELECT 1", [],
              timeout: 1_000,
-             queue: false,
+             # Wait briefly for a connection rather than refuse to queue for one.
+             # SQLite runs a single connection, so a query in flight would
+             # otherwise report a merely busy server as an unreachable one.
+             queue_target: 500,
+             queue_interval: 1_000,
              log: false
            )
          )
