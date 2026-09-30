@@ -34,6 +34,8 @@ defmodule AtollWeb.ConnCase do
 
   setup tags do
     Atoll.DataCase.setup_sandbox(tags)
+    # Budgets are keyed by caller address, which every test shares.
+    Atoll.Accounts.SessionLimiter.reset()
     {:ok, conn: Phoenix.ConnTest.build_conn()}
   end
 end
