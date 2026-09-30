@@ -32,7 +32,10 @@ export function useServerForm<T extends FieldValues>(form: UseFormReturn<T>): Se
 
   return {
     formRef,
-    submitting,
+    // Validation runs before the native submit, so the click would otherwise
+    // sit with no feedback until it finishes. isSubmitting covers the whole
+    // submit; the flag above then keeps the spinner up while the page navigates.
+    submitting: submitting || form.formState.isSubmitting,
     onSubmit: form.handleSubmit(submitNative),
     submitWith: (name, value) => {
       intent.current = { name, value };
