@@ -203,7 +203,13 @@ defmodule AtollWeb.IdentityController do
   def resolve_handle(conn, params) do
     opts = Application.get_env(:atoll, :identity_resolution_options, [])
 
-    case Handle.resolve(params["handle"], opts) do
+    result =
+      case hosted_did(params["handle"]) do
+        nil -> Handle.resolve(params["handle"], opts)
+        did -> {:ok, did}
+      end
+
+    case result do
       {:ok, did} ->
         json(conn, %{did: did})
 
@@ -216,4 +222,21 @@ defmodule AtollWeb.IdentityController do
         |> json(%{error: "UnableToResolveHandle", message: "Unable to resolve handle."})
     end
   end
+
+  # This server is authoritative for the accounts it hosts, so it answers for
+  # them from its own records. Resolving such a handle outward asks whichever
+  # server owns the domain's wildcard, which in a shared namespace is a different
+  # server that has never heard of the account.
+  defp hosted_did(handle) when is_binary(handle) do
+    handle = handle |> String.trim() |> String.downcase()
+
+    if Atoll.Syntax.handle?(handle) do
+      case Atoll.Repo.get_by(Atoll.Accounts.Profile, [handle: handle], log: false) do
+        %Atoll.Accounts.Profile{did: did} -> did
+        nil -> nil
+      end
+    end
+  end
+
+  defp hosted_did(_), do: nil
 end

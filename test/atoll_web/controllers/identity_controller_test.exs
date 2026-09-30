@@ -15,6 +15,26 @@ defmodule AtollWeb.IdentityControllerTest do
     :ok
   end
 
+  test "answers for an account hosted here without asking the network", %{conn: conn} do
+    {:ok, _} =
+      Atoll.Repositories.create("did:plc:hostedlocally0000000000a", Atoll.SigningKey.generate())
+
+    Atoll.Repo.insert!(%Atoll.Accounts.Profile{
+      did: "did:plc:hostedlocally0000000000a",
+      handle: "hosted.example.com"
+    })
+
+    # Another server owns the wildcard for this domain, so resolution finds
+    # nothing. This server still knows the account is its own.
+    Application.put_env(:atoll, :identity_resolution_options,
+      txt_lookup: fn _ -> raise "must not resolve a hosted handle over the network" end
+    )
+
+    assert conn |> get(@route, %{handle: "Hosted.Example.com"}) |> json_response(200) == %{
+             "did" => "did:plc:hostedlocally0000000000a"
+           }
+  end
+
   test "returns a forward DNS claim without authentication", %{conn: conn} do
     Application.put_env(:atoll, :identity_resolution_options,
       txt_lookup: fn name ->
