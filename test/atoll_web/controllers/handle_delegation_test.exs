@@ -53,6 +53,14 @@ defmodule AtollWeb.HandleDelegationTest do
     assert conn |> get("/tls-check", %{domain: "delegated.example.test"}) |> response(200) == ""
   end
 
+  test "resolveHandle answers for a delegate's account", %{conn: conn} do
+    answers(@did)
+
+    assert conn
+           |> get("/xrpc/com.atproto.identity.resolveHandle", %{handle: "delegated.example.test"})
+           |> json_response(200) == %{"did" => @did}
+  end
+
   test "a handle no delegate claims is still refused", %{conn: conn} do
     refuses()
 

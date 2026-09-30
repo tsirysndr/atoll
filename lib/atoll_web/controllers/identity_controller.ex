@@ -205,7 +205,7 @@ defmodule AtollWeb.IdentityController do
 
     result =
       case hosted_did(params["handle"]) do
-        nil -> Handle.resolve(params["handle"], opts)
+        nil -> delegated_or_remote(params["handle"], opts)
         did -> {:ok, did}
       end
 
@@ -220,6 +220,20 @@ defmodule AtollWeb.IdentityController do
         conn
         |> put_status(400)
         |> json(%{error: "UnableToResolveHandle", message: "Unable to resolve handle."})
+    end
+  end
+
+  # A handle inside this server's own namespace that no local account holds may
+  # belong to a delegate, since this server owns the wildcard and answers for the
+  # whole namespace. Anything outside it resolves over the network as usual, so
+  # delegates are not consulted for handles they could never speak for.
+  defp delegated_or_remote(handle, opts) do
+    with true <- is_binary(handle),
+         true <- Atoll.Accounts.Signup.hosted_handle?(String.downcase(String.trim(handle))),
+         {:ok, did} <- Atoll.Identity.Delegates.resolve(handle) do
+      {:ok, did}
+    else
+      _ -> Handle.resolve(handle, opts)
     end
   end
 
