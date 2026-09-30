@@ -58,7 +58,16 @@ defmodule Atoll.Identity.DelegatesTest do
   end
 
   describe "caching" do
-    test "an answer is reused so a repeated resolution costs no round trip" do
+    setup do
+      cache =
+        start_supervised!(
+          {Atoll.Identity.Cache, name: :"delegate_cache_#{System.unique_integer([:positive])}"}
+        )
+
+      %{cache: cache}
+    end
+
+    test "an answer is reused so a repeated resolution costs no round trip", %{cache: cache} do
       calls = :counters.new(1, [])
 
       Req.Test.stub(__MODULE__, fn conn ->
@@ -67,12 +76,12 @@ defmodule Atoll.Identity.DelegatesTest do
       end)
 
       handle = "cached#{System.unique_integer([:positive])}.example.com"
-      assert {:ok, @did} = Delegates.resolve(handle, plug: {Req.Test, __MODULE__})
-      assert {:ok, @did} = Delegates.resolve(handle, plug: {Req.Test, __MODULE__})
+      assert {:ok, @did} = Delegates.resolve(handle, cache: cache, plug: {Req.Test, __MODULE__})
+      assert {:ok, @did} = Delegates.resolve(handle, cache: cache, plug: {Req.Test, __MODULE__})
       assert :counters.get(calls, 1) == 1
     end
 
-    test "a delegate that does not answer is asked again" do
+    test "a delegate that does not answer is asked again", %{cache: cache} do
       answered = :counters.new(1, [])
 
       Req.Test.stub(__MODULE__, fn conn ->
@@ -84,8 +93,8 @@ defmodule Atoll.Identity.DelegatesTest do
       end)
 
       handle = "retried#{System.unique_integer([:positive])}.example.com"
-      assert :error = Delegates.resolve(handle, plug: {Req.Test, __MODULE__})
-      assert {:ok, @did} = Delegates.resolve(handle, plug: {Req.Test, __MODULE__})
+      assert :error = Delegates.resolve(handle, cache: cache, plug: {Req.Test, __MODULE__})
+      assert {:ok, @did} = Delegates.resolve(handle, cache: cache, plug: {Req.Test, __MODULE__})
     end
   end
 

@@ -14,6 +14,10 @@ config :opentelemetry_experimental,
 config :atoll, :development_identity, true
 config :atoll, :metrics_database_polling_enabled, false
 
+# A cache shared by every test leaks one test's delegate answer into the next.
+# The tests that cover caching start their own.
+config :atoll, :delegate_cache_ttl_seconds, 0
+
 # Configure your database
 #
 # The MIX_TEST_PARTITION environment variable can be used

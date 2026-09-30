@@ -548,6 +548,7 @@
   { path = "prop-types"; url = "https://registry.npmjs.org/prop-types/-/prop-types-15.8.1.tgz"; hash = "sha512-oj87CgZICdulUohogVAR7AjlC0327U4el4L6eAvOqCeudMDVU0NThNaV+b9Df4dXgSP1gXMTnPdhfe/2qDH5cg=="; bins = [ ]; }
   { path = "prop-types/node_modules/react-is"; url = "https://registry.npmjs.org/react-is/-/react-is-16.13.1.tgz"; hash = "sha512-24e6ynE2H+OKt4kqsOvNd8kBpV65zoxbA4BVsEOB3ARVWQki/DHzaUoC5KuON/BiccDaCCTZBuOcfZs70kR8bQ=="; bins = [ ]; }
   { path = "punycode"; url = "https://registry.npmjs.org/punycode/-/punycode-2.3.1.tgz"; hash = "sha512-vYt7UD1U9Wg6138shLtLOvdAu+8DsC/ilFtEVHcH+wydcSpNE20AfSOduf6MkRFahL5FY7X1oU7nKVZFtfq8Fg=="; bins = [ ]; }
+  { path = "qrcode.react"; url = "https://registry.npmjs.org/qrcode.react/-/qrcode.react-4.2.0.tgz"; hash = "sha512-QpgqWi8rD9DsS9EP3z7BT+5lY5SFhsqGjpgW5DY/i3mK4M9DTBNz3ErMi8BWYEfI3L0d8GIbGmcdFAS1uIRGjA=="; bins = [ ]; }
   { path = "react"; url = "https://registry.npmjs.org/react/-/react-19.3.0.tgz"; hash = "sha512-E8LUcbtBWt20bbl2YoHfx4ZDBdxVTfOKtCZn9cDSJ4l6/nuoApcpIBcj47t2wZoVX8g2ZHuMHbiShgCR1T5Sog=="; bins = [ ]; }
   { path = "react-aria"; url = "https://registry.npmjs.org/react-aria/-/react-aria-3.52.1.tgz"; hash = "sha512-fdZZruC9/x/joCg0mhKGs5aHpwrXLCSZ4GOJmhhYyiE0ffyEsk9MLFt9LCOCF9tn8ErTD+UDQP4oDUSlZkmpCg=="; bins = [ ]; }
   { path = "react-aria-components"; url = "https://registry.npmjs.org/react-aria-components/-/react-aria-components-1.21.1.tgz"; hash = "sha512-J88WflYY0z+EhLX0ce+GjFlQ3ag3ubIgfUTjpKSrBQBu92Xtl4Ub9o118HItUddtbk1Ido0jzyPy94/klZy1hg=="; bins = [ ]; }
