@@ -35,4 +35,22 @@ defmodule Atoll.Accounts.SessionLimiterTest do
     assert SessionLimiter.check(:three, 1, server) == :ok
     assert map_size(:sys.get_state(server).entries) == 1
   end
+
+  test "reset clears every budget so one caller's spend does not deny the next" do
+    server = start_supervised!({SessionLimiter, name: nil})
+
+    assert SessionLimiter.check(:one, 1, server) == :ok
+    assert SessionLimiter.check(:two, 1, server) == :ok
+    assert SessionLimiter.check(:one, 1, server) == {:error, 300}
+
+    assert SessionLimiter.reset(server) == :ok
+
+    assert map_size(:sys.get_state(server).entries) == 0
+    assert SessionLimiter.check(:one, 1, server) == :ok
+    assert SessionLimiter.check(:two, 1, server) == :ok
+  end
+
+  test "reset succeeds when no limiter is running" do
+    assert SessionLimiter.reset(:limiter_that_does_not_exist) == :ok
+  end
 end

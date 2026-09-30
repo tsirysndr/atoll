@@ -17,6 +17,20 @@ defmodule Atoll.Accounts.SessionLimiter do
   # Explicit servers remain available for isolated clocks and limiter tests.
   def check(key, limit, server), do: GenServer.call(server, {:check, key, limit})
 
+  @doc """
+  Clears every budget on the node-local limiter.
+
+  Budgets are keyed by caller address, which is the same for every request a
+  test suite makes, so without this one test's requests spend the next test's
+  allowance and whichever test runs past the limit fails.
+  """
+  def reset(server \\ __MODULE__) do
+    case GenServer.whereis(server) do
+      nil -> :ok
+      pid -> GenServer.call(pid, :reset)
+    end
+  end
+
   def backend_from_env!(nil), do: :memory
   def backend_from_env!("memory"), do: :memory
   def backend_from_env!("postgres"), do: :postgres
@@ -56,6 +70,9 @@ defmodule Atoll.Accounts.SessionLimiter do
         {:reply, :ok, put_in(state.entries[key], {1, now + @window})}
     end
   end
+
+  @impl true
+  def handle_call(:reset, _from, state), do: {:reply, :ok, %{state | entries: %{}}}
 
   @impl true
   def handle_info(:sweep, state) do
