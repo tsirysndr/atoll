@@ -348,6 +348,20 @@ case System.get_env("ATOLL_IDENTITY_REFRESH_ENABLED", "false") do
   _ -> raise "ATOLL_IDENTITY_REFRESH_ENABLED must be true or false"
 end
 
+case System.get_env("ATOLL_IDENTITY_RESOLUTION_RATE_LIMIT") do
+  nil ->
+    :ok
+
+  value ->
+    case Integer.parse(value) do
+      {limit, ""} when limit in 1..1_000_000 ->
+        config :atoll, :identity_resolution_rate_limit, limit
+
+      _ ->
+        raise "ATOLL_IDENTITY_RESOLUTION_RATE_LIMIT must be an integer from 1 to 1000000"
+    end
+end
+
 case System.get_env("ATOLL_SESSION_RATE_LIMIT_ENABLED", "true") do
   "true" -> config :atoll, :session_rate_limit_enabled, true
   "false" -> config :atoll, :session_rate_limit_enabled, false

@@ -24,6 +24,8 @@ if System.get_env("ATOLL_DATABASE", "postgres") in ["postgres", "postgresql"] do
     username: "postgres",
     password: "postgres",
     hostname: "localhost",
+    # A second server on this machine may already hold the default port.
+    port: String.to_integer(System.get_env("PGPORT") || "5432"),
     database: "atoll_test#{System.get_env("MIX_TEST_PARTITION")}",
     pool: Ecto.Adapters.SQL.Sandbox,
     pool_size: System.schedulers_online() * 2

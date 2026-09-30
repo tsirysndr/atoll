@@ -38,18 +38,35 @@ defmodule Atoll.Identity.Delegates do
     Enum.map(origins, &String.trim_trailing(&1, "/"))
   end
 
-  @doc "The DID a delegate claims for `handle`, or `:error` when none does."
+  @doc """
+  The DID a delegate claims for `handle`, or `:error` when none does.
+
+  An answer is cached for the delegate cache's lifetime. Every resolution in
+  this namespace otherwise costs a round trip to another server, on paths that
+  run per request — the handle's well-known document and the TLS ask among them
+  — and a delegate that is briefly slow then looks like a handle that does not
+  exist. Only answers are cached; a failure is retried.
+  """
   def resolve(handle, opts \\ []) do
     if handle?(handle) do
-      Enum.reduce_while(configured(), :error, fn origin, _ ->
-        case ask(origin, handle, opts) do
-          {:ok, did} -> {:halt, {:ok, did}}
-          :error -> {:cont, :error}
-        end
-      end)
+      loader = fn -> ask_delegates(handle, opts) end
+
+      case Keyword.get(opts, :cache, Atoll.Identity.DelegateCache) do
+        false -> loader.()
+        server -> Atoll.Identity.Cache.fetch(server, {:handle, handle}, false, loader)
+      end
     else
       :error
     end
+  end
+
+  defp ask_delegates(handle, opts) do
+    Enum.reduce_while(configured(), :error, fn origin, _ ->
+      case ask(origin, handle, opts) do
+        {:ok, did} -> {:halt, {:ok, did}}
+        :error -> {:cont, :error}
+      end
+    end)
   end
 
   @doc """
@@ -61,7 +78,10 @@ defmodule Atoll.Identity.Delegates do
   name unproven, so an outage there does not stop registration here.
   """
   def available(handle, did \\ nil, opts \\ []) do
-    case resolve(handle, opts) do
+    # Allocation asks live. A cached answer only ever says a name is taken, and
+    # serving that from cache refuses a name that has since been given up, or
+    # one this caller is entitled to; the read paths carry the cache instead.
+    case resolve(handle, Keyword.put_new(opts, :cache, false)) do
       {:ok, ^did} -> :ok
       {:ok, _} -> {:error, :handle_not_available}
       :error -> :ok

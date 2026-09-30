@@ -38,7 +38,9 @@ defmodule Atoll.Identity.DelegatesTest do
   test "a delegate cannot answer with something that is not a DID" do
     for answer <- ["not-a-did", "did:plc:short", "", "did:plc:4zc47fuogx2rdgxolokayzaw\nX"] do
       Req.Test.expect(__MODULE__, fn conn -> Req.Test.json(conn, %{did: answer}) end)
-      assert :error = Delegates.resolve("alice.example.com", plug: {Req.Test, __MODULE__})
+
+      assert :error =
+               Delegates.resolve("alice.example.com", cache: false, plug: {Req.Test, __MODULE__})
     end
   end
 
@@ -52,7 +54,39 @@ defmodule Atoll.Identity.DelegatesTest do
 
   test "no delegates configured means nothing is asked" do
     Application.put_env(:atoll, :handle_delegates, [])
-    assert :error = Delegates.resolve("alice.example.com")
+    assert :error = Delegates.resolve("alice.example.com", cache: false)
+  end
+
+  describe "caching" do
+    test "an answer is reused so a repeated resolution costs no round trip" do
+      calls = :counters.new(1, [])
+
+      Req.Test.stub(__MODULE__, fn conn ->
+        :counters.add(calls, 1, 1)
+        Req.Test.json(conn, %{did: @did})
+      end)
+
+      handle = "cached#{System.unique_integer([:positive])}.example.com"
+      assert {:ok, @did} = Delegates.resolve(handle, plug: {Req.Test, __MODULE__})
+      assert {:ok, @did} = Delegates.resolve(handle, plug: {Req.Test, __MODULE__})
+      assert :counters.get(calls, 1) == 1
+    end
+
+    test "a delegate that does not answer is asked again" do
+      answered = :counters.new(1, [])
+
+      Req.Test.stub(__MODULE__, fn conn ->
+        :counters.add(answered, 1, 1)
+
+        if :counters.get(answered, 1) == 1,
+          do: Plug.Conn.send_resp(conn, 503, ""),
+          else: Req.Test.json(conn, %{did: @did})
+      end)
+
+      handle = "retried#{System.unique_integer([:positive])}.example.com"
+      assert :error = Delegates.resolve(handle, plug: {Req.Test, __MODULE__})
+      assert {:ok, @did} = Delegates.resolve(handle, plug: {Req.Test, __MODULE__})
+    end
   end
 
   describe "available/3" do
@@ -60,13 +94,20 @@ defmodule Atoll.Identity.DelegatesTest do
       Req.Test.expect(__MODULE__, fn conn -> Req.Test.json(conn, %{did: @did}) end)
 
       assert {:error, :handle_not_available} =
-               Delegates.available("alice.example.com", nil, plug: {Req.Test, __MODULE__})
+               Delegates.available("alice.example.com", nil,
+                 cache: false,
+                 plug: {Req.Test, __MODULE__}
+               )
     end
 
     test "a name the same DID already holds is not a collision" do
       Req.Test.expect(__MODULE__, fn conn -> Req.Test.json(conn, %{did: @did}) end)
 
-      assert :ok = Delegates.available("alice.example.com", @did, plug: {Req.Test, __MODULE__})
+      assert :ok =
+               Delegates.available("alice.example.com", @did,
+                 cache: false,
+                 plug: {Req.Test, __MODULE__}
+               )
     end
 
     # Only an answered claim proves a name is taken, so a delegate that is down
@@ -79,13 +120,18 @@ defmodule Atoll.Identity.DelegatesTest do
             fn conn -> Req.Test.transport_error(conn, :econnrefused) end
           ] do
         Req.Test.expect(__MODULE__, answer)
-        assert :ok = Delegates.available("alice.example.com", nil, plug: {Req.Test, __MODULE__})
+
+        assert :ok =
+                 Delegates.available("alice.example.com", nil,
+                   cache: false,
+                   plug: {Req.Test, __MODULE__}
+                 )
       end
     end
 
     test "no delegates configured asks nothing and allocates freely" do
       Application.put_env(:atoll, :handle_delegates, [])
-      assert :ok = Delegates.available("alice.example.com")
+      assert :ok = Delegates.available("alice.example.com", nil, cache: false)
     end
   end
 

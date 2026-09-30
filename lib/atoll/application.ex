@@ -27,6 +27,17 @@ defmodule Atoll.Application do
          max_bytes: 1_048_576},
         id: Atoll.Identity.HandleCache
       ),
+      # Delegate answers are kept apart from verified resolution: a delegate is
+      # trusted by configuration rather than by proving the handle, so its
+      # answers must not satisfy a caller asking for a verified binding.
+      Supervisor.child_spec(
+        {Atoll.Identity.Cache,
+         name: Atoll.Identity.DelegateCache,
+         ttl_ms: Application.get_env(:atoll, :delegate_cache_ttl_seconds, 300) * 1000,
+         max_entries: 1024,
+         max_bytes: 1_048_576},
+        id: Atoll.Identity.DelegateCache
+      ),
       {DNSCluster, query: Application.get_env(:atoll, :dns_cluster_query) || :ignore},
       {Phoenix.PubSub, name: Atoll.PubSub},
       # Start to serve requests, typically the last entry

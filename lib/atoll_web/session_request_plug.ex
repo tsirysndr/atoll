@@ -90,7 +90,11 @@ defmodule AtollWeb.SessionRequestPlug do
       {bucket, limit} =
         cond do
           path in @identity_queries ->
-            {:identity_resolution, 60}
+            # This server answers handle resolution for its whole namespace, so
+            # this budget is spent by the network's infrastructure — relays and
+            # AppViews arriving from a handful of addresses — not by one person.
+            {:identity_resolution,
+             Application.get_env(:atoll, :identity_resolution_rate_limit, 60)}
 
           path in [
             "/xrpc/com.atproto.identity.submitPlcOperation",
