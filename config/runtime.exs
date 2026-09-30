@@ -348,6 +348,12 @@ case System.get_env("ATOLL_IDENTITY_REFRESH_ENABLED", "false") do
   _ -> raise "ATOLL_IDENTITY_REFRESH_ENABLED must be true or false"
 end
 
+case System.get_env("ATOLL_SESSION_RATE_LIMIT_ENABLED", "true") do
+  "true" -> config :atoll, :session_rate_limit_enabled, true
+  "false" -> config :atoll, :session_rate_limit_enabled, false
+  _ -> raise "ATOLL_SESSION_RATE_LIMIT_ENABLED must be true or false"
+end
+
 if encoded = System.get_env("ATOLL_KEY_ENCRYPTION_KEY") do
   case Base.decode64(encoded) do
     {:ok, <<_::binary-size(32)>> = key} -> config :atoll, :key_encryption_key, key

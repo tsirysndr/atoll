@@ -110,7 +110,7 @@ defmodule AtollWeb.SessionRequestPlug do
             {:session, 300}
         end
 
-      case Atoll.Accounts.SessionLimiter.check({bucket, conn.remote_ip}, limit) do
+      case admit({bucket, conn.remote_ip}, limit) do
         :ok ->
           parse(conn, path)
 
@@ -124,6 +124,17 @@ defmodule AtollWeb.SessionRequestPlug do
       |> put_resp_header("allow", method)
       |> error(405, "MethodNotAllowed", "Unsupported request method.")
     end
+  end
+
+  # These buckets key on the peer address. Behind a proxy that presents one
+  # address for every client they cannot isolate a caller: a single busy client,
+  # or a sibling server resolving handles here, spends the budget for everyone
+  # and locks the rest out. Turn them off where the peer address carries no
+  # information, and limit at the proxy instead.
+  defp admit(key, limit) do
+    if Application.get_env(:atoll, :session_rate_limit_enabled, true),
+      do: Atoll.Accounts.SessionLimiter.check(key, limit),
+      else: :ok
   end
 
   defp parse(conn, path) do

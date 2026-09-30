@@ -107,6 +107,15 @@ defmodule AtollWeb.SessionControllerTest do
     assert login(conn) |> json_response(200)
   end
 
+  test "peer-address admission can be turned off where the address is shared", %{conn: conn} do
+    Application.put_env(:atoll, :session_rate_limit_enabled, false)
+    on_exit(fn -> Application.delete_env(:atoll, :session_rate_limit_enabled) end)
+
+    # Every request here shares one peer address, which is what a proxy presents.
+    # With admission off none of them is refused for the others' traffic.
+    for _ <- 1..25, do: assert(login(conn) |> json_response(200))
+  end
+
   test "creates, inspects, refreshes and deletes a session", %{conn: conn} do
     created = login(conn)
     assert get_resp_header(created, "cache-control") == ["no-store"]
