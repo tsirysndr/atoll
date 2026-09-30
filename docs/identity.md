@@ -230,6 +230,12 @@ requests fail fast — two seconds to connect, three to answer — because the a
 endpoint runs on the TLS handshake path. A local account always wins: delegates
 are consulted only when this server has no account for the handle.
 
+Two servers may name each other, so a request sent to a delegate carries an
+`atoll-delegate-hop` header, and a resolution request that arrives with it is
+answered from local records alone. Without that stop, a handle nobody holds is
+passed back and forth between them, each hop asking every other delegate, until
+every hop's timeout expires — enough traffic to exhaust a small server.
+
 Allocation asks them too. A hosted handle would otherwise be free to hand out on
 the strength of owning the domain, which stops being true once a delegate issues
 names in the same namespace, so account creation and any move onto a hosted

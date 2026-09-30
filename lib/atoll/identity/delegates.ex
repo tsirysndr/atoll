@@ -95,12 +95,19 @@ defmodule Atoll.Identity.Delegates do
       Regex.match?(~r/\A[a-z0-9.-]+\z/, handle)
   end
 
+  @doc "Marks a resolution request as one delegate asking another."
+  def hop_header, do: "atoll-delegate-hop"
+
   # This runs on the TLS handshake path through the ask endpoint, so it fails
   # fast rather than holding a connection open.
   defp ask(origin, handle, opts) do
     request = [
       url: "#{origin}/xrpc/com.atproto.identity.resolveHandle",
       params: [handle: handle],
+      # Delegates that name each other would otherwise pass the same question
+      # back and forth, each hop fanning out to every other delegate, until the
+      # timeouts unwind. A marked request is answered from local records only.
+      headers: [{hop_header(), "1"}],
       redirect: false,
       retry: false,
       connect_options: [timeout: 2_000],

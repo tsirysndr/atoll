@@ -72,6 +72,17 @@ defmodule AtollWeb.HandleDelegationTest do
     assert conn |> get("/tls-check", %{domain: "nobody.example.test"}) |> response(404)
   end
 
+  test "a delegate's own question is not passed on to this server's delegates", %{conn: conn} do
+    # Two servers naming each other would otherwise trade the question back and
+    # forth. No stub is installed, so asking a delegate would fail the test.
+    response =
+      conn
+      |> put_req_header(Atoll.Identity.Delegates.hop_header(), "1")
+      |> get("/xrpc/com.atproto.identity.resolveHandle", %{handle: "delegated.example.test"})
+
+    assert json_response(response, 400)["error"] == "UnableToResolveHandle"
+  end
+
   test "a host outside this namespace is never delegated", %{conn: conn} do
     # No stub is installed, so any outbound request would fail the test.
     assert %{conn | host: "alice.elsewhere.test"}

@@ -27,6 +27,16 @@ defmodule Atoll.Identity.DelegatesTest do
              Delegates.resolve("alice.example.com", plug: {Req.Test, __MODULE__})
   end
 
+  test "marks its request so the delegate answers without asking its own delegates" do
+    Req.Test.expect(__MODULE__, fn conn ->
+      assert Plug.Conn.get_req_header(conn, Delegates.hop_header()) == ["1"]
+      Req.Test.json(conn, %{did: @did})
+    end)
+
+    assert {:ok, @did} =
+             Delegates.resolve("alice.example.com", cache: false, plug: {Req.Test, __MODULE__})
+  end
+
   test "an unknown handle is not claimed" do
     Req.Test.expect(__MODULE__, fn conn ->
       Plug.Conn.send_resp(conn, 400, ~s({"error":"UnableToResolveHandle"}))

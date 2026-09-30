@@ -204,9 +204,10 @@ defmodule AtollWeb.IdentityController do
     opts = Application.get_env(:atoll, :identity_resolution_options, [])
 
     result =
-      case hosted_did(params["handle"]) do
-        nil -> delegated_or_remote(params["handle"], opts)
-        did -> {:ok, did}
+      case {hosted_did(params["handle"]), delegate_hop?(conn)} do
+        {nil, false} -> delegated_or_remote(params["handle"], opts)
+        {nil, true} -> {:error, :not_hosted}
+        {did, _} -> {:ok, did}
       end
 
     case result do
@@ -222,6 +223,13 @@ defmodule AtollWeb.IdentityController do
         |> json(%{error: "UnableToResolveHandle", message: "Unable to resolve handle."})
     end
   end
+
+  # One delegate asking another only ever wants what that server itself hosts.
+  # Forwarding the question instead lets two delegates that name each other trade
+  # it back and forth, each hop asking every other delegate, until the request
+  # budget is spent on a handle nobody holds.
+  defp delegate_hop?(conn),
+    do: get_req_header(conn, Atoll.Identity.Delegates.hop_header()) != []
 
   # A handle inside this server's own namespace that no local account holds may
   # belong to a delegate, since this server owns the wildcard and answers for the
