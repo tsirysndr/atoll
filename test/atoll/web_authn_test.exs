@@ -341,4 +341,46 @@ defmodule Atoll.Accounts.WebAuthnTest do
 
   defp base(bytes), do: Base.url_encode64(bytes, padding: false)
   defp unbase(bytes), do: Base.url_decode64!(bytes, padding: false)
+
+  describe "the relying party a credential is bound to" do
+    test "defaults to this host, so nothing changes unless configured" do
+      assert {:ok, %{rp_id: "pds.example.com", origins: ["https://pds.example.com"]}} =
+               WebAuthn.challenge("https://pds.example.com")
+    end
+
+    test "can be the parent domain shared with a sign-in page in front of it" do
+      # A browser only uses a credential whose RP ID is the page's own domain or
+      # a parent of it, so a credential registered under `radxa.rocksky.social`
+      # can never be used from `rocksky.social`. The shared parent works from
+      # both.
+      Application.put_env(:atoll, :webauthn_rp_id, "rocksky.social")
+      on_exit(fn -> Application.delete_env(:atoll, :webauthn_rp_id) end)
+
+      assert {:ok, %{rp_id: "rocksky.social"}} =
+               WebAuthn.challenge("https://radxa.rocksky.social")
+    end
+
+    test "is refused when it is not this host or a parent of it" do
+      # Otherwise a server could claim credentials for a domain it does not
+      # answer for.
+      for bad <- ["example.com", "social", "ocksky.social", "sub.radxa.rocksky.social"] do
+        Application.put_env(:atoll, :webauthn_rp_id, bad)
+
+        assert {:error, :invalid_webauthn_rp_id} =
+                 WebAuthn.relying_party_id("radxa.rocksky.social")
+      end
+
+      Application.delete_env(:atoll, :webauthn_rp_id)
+    end
+
+    test "a configured origin may drive a ceremony, and nothing else may" do
+      Application.put_env(:atoll, :webauthn_origins, ["https://rocksky.social"])
+      on_exit(fn -> Application.delete_env(:atoll, :webauthn_origins) end)
+
+      assert {:ok, %{origins: origins}} = WebAuthn.challenge("https://radxa.rocksky.social")
+      assert "https://radxa.rocksky.social" in origins
+      assert "https://rocksky.social" in origins
+      refute "https://evil.example.com" in origins
+    end
+  end
 end

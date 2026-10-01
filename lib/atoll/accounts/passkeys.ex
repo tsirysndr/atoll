@@ -383,7 +383,17 @@ defmodule Atoll.Accounts.Passkeys do
   end
 
   defp credential(_), do: nil
-  defp context(row), do: Map.take(row, [:challenge, :origin, :rp_id])
+  # Which origins may drive a ceremony is server configuration, not ceremony
+  # state, so it is read now rather than stored with the challenge. The stored
+  # `origin` stays what it was: this node's own.
+  defp context(row) do
+    stored = Map.take(row, [:challenge, :origin, :rp_id])
+
+    case WebAuthn.allowed_origins(stored.origin) do
+      {:ok, origins} -> Map.put(stored, :origins, origins)
+      _ -> stored
+    end
+  end
 
   defp binding?(value) when is_binary(value) and byte_size(value) == 43 do
     case Base.url_decode64(value, padding: false) do

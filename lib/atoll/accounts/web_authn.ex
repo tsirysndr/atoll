@@ -25,13 +25,73 @@ defmodule Atoll.Accounts.WebAuthn do
          true <- uri.path in [nil, ""],
          true <- is_integer(uri.port) and uri.port in 1..65535,
          true <- URI.to_string(uri) == origin do
-      {:ok, %{challenge: :crypto.strong_rand_bytes(32), origin: origin, rp_id: uri.host}}
+      with {:ok, rp_id} <- relying_party_id(uri.host),
+           {:ok, origins} <- allowed_origins(origin) do
+        {:ok,
+         %{
+           challenge: :crypto.strong_rand_bytes(32),
+           origin: origin,
+           origins: origins,
+           rp_id: rp_id
+         }}
+      end
     else
       _ -> {:error, :invalid_webauthn_origin}
     end
   end
 
   def challenge(_), do: {:error, :invalid_webauthn_origin}
+
+  @doc """
+  The relying party this server registers credentials under.
+
+  A credential is bound to its RP ID for life, and a browser will only use one
+  whose RP ID equals the page's own domain or is a parent of it. Left alone that
+  means a credential registered on `radxa.example.com` cannot be used from
+  `example.com`, so a shared sign-in page in front of several nodes can never
+  drive it. Configuring the common parent instead makes one credential work
+  from both the node and the page in front of it.
+
+  A configured value must still be this host or a parent of it: anything else
+  would claim credentials for a domain this server does not answer for.
+  """
+  def relying_party_id(host) when is_binary(host) do
+    case Application.get_env(:atoll, :webauthn_rp_id) do
+      nil ->
+        {:ok, host}
+
+      configured when is_binary(configured) ->
+        configured = String.downcase(configured)
+
+        if configured == host or
+             (String.contains?(configured, ".") and
+                String.ends_with?(host, "." <> configured)) do
+          {:ok, configured}
+        else
+          {:error, :invalid_webauthn_rp_id}
+        end
+
+      _ ->
+        {:error, :invalid_webauthn_rp_id}
+    end
+  end
+
+  @doc """
+  Origins allowed to run a ceremony, this server's own always among them.
+
+  The page driving the ceremony need not be this node: a gateway console in
+  front of the fleet is a different origin, and `clientDataJSON` carries the
+  page's origin, not the server's.
+  """
+  def allowed_origins(own) when is_binary(own) do
+    configured = Application.get_env(:atoll, :webauthn_origins, [])
+
+    if is_list(configured) and Enum.all?(configured, &is_binary/1) do
+      {:ok, Enum.uniq([own | configured])}
+    else
+      {:error, :invalid_webauthn_origin}
+    end
+  end
 
   @doc "Verify an unattested registration; returned public credential data still needs authorized persistence."
   def register(response, %{challenge: <<_::256>>, origin: origin, rp_id: rp_id} = context)
@@ -109,6 +169,10 @@ defmodule Atoll.Accounts.WebAuthn do
 
   defp envelope(_), do: invalid()
 
+  # A context stored before origins were configurable carries only `origin`.
+  defp origins(%{origins: origins}) when is_list(origins) and origins != [], do: origins
+  defp origins(%{origin: origin}), do: [origin]
+
   defp client_data(encoded, context, type) do
     with {:ok, raw} <- unbase(encoded, 4096),
          {:ok, %Jason.OrderedObject{values: pairs}} <-
@@ -117,7 +181,7 @@ defmodule Atoll.Accounts.WebAuthn do
          data = Map.new(pairs),
          ^type <- data["type"],
          true <- data["challenge"] == Base.url_encode64(context.challenge, padding: false),
-         true <- data["origin"] == context.origin,
+         true <- data["origin"] in origins(context),
          false <- Map.get(data, "crossOrigin", false),
          false <- Map.has_key?(data, "topOrigin") do
       {:ok, raw}
