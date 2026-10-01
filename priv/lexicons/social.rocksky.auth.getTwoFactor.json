@@ -1,0 +1,14 @@
+{
+  "lexicon": 1,
+  "id": "social.rocksky.auth.getTwoFactor",
+  "defs": {
+    "main": {
+      "type": "query",
+      "description": "Whether two-factor authentication is on for the calling account.",
+      "output": {
+        "encoding": "application/json",
+        "schema": { "type": "ref", "ref": "social.rocksky.auth.defs#twoFactorStatus" }
+      }
+    }
+  }
+}

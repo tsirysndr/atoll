@@ -77,6 +77,15 @@ defmodule AtollWeb.OAuthPolicyPlug do
     com.atproto.server.reserveSigningKey
     com.atproto.server.requestPasswordReset
     com.atproto.server.resetPassword
+    social.rocksky.auth.getTwoFactor
+    social.rocksky.auth.beginTwoFactor
+    social.rocksky.auth.confirmTwoFactor
+    social.rocksky.auth.disableTwoFactor
+    social.rocksky.auth.regenerateRecoveryCodes
+    social.rocksky.auth.listPasskeys
+    social.rocksky.auth.beginPasskeyRegistration
+    social.rocksky.auth.finishPasskeyRegistration
+    social.rocksky.auth.deletePasskey
   )
 
   def init(opts), do: opts

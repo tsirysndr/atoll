@@ -73,6 +73,27 @@ defmodule AtollWeb.Router do
     post "/com.atproto.server.activateAccount", SessionController, :activate
     post "/com.atproto.server.deactivateAccount", SessionController, :deactivate
 
+    get "/social.rocksky.auth.getTwoFactor", AuthApiController, :two_factor
+    post "/social.rocksky.auth.beginTwoFactor", AuthApiController, :begin_two_factor
+    post "/social.rocksky.auth.confirmTwoFactor", AuthApiController, :confirm_two_factor
+    post "/social.rocksky.auth.disableTwoFactor", AuthApiController, :disable_two_factor
+
+    post "/social.rocksky.auth.regenerateRecoveryCodes",
+         AuthApiController,
+         :regenerate_recovery_codes
+
+    get "/social.rocksky.auth.listPasskeys", AuthApiController, :list_passkeys
+
+    post "/social.rocksky.auth.beginPasskeyRegistration",
+         AuthApiController,
+         :begin_passkey_registration
+
+    post "/social.rocksky.auth.finishPasskeyRegistration",
+         AuthApiController,
+         :finish_passkey_registration
+
+    post "/social.rocksky.auth.deletePasskey", AuthApiController, :delete_passkey
+
     get "/app.bsky.actor.getPreferences", ActorController, :get_preferences
     post "/app.bsky.actor.putPreferences", ActorController, :put_preferences
     post "/com.atproto.identity.submitPlcOperation", IdentityController, :submit_operation

@@ -1,0 +1,41 @@
+{
+  "lexicon": 1,
+  "id": "social.rocksky.auth.beginTwoFactor",
+  "defs": {
+    "main": {
+      "type": "procedure",
+      "description": "Starts enrolment and returns a secret to add to an authenticator. The secret is not in force until confirmTwoFactor succeeds.",
+      "input": {
+        "encoding": "application/json",
+        "schema": {
+          "type": "object",
+          "required": ["password"],
+          "properties": { "password": { "type": "string" } }
+        }
+      },
+      "output": {
+        "encoding": "application/json",
+        "schema": {
+          "type": "object",
+          "required": ["state", "secret", "uri"],
+          "properties": {
+            "state": { "type": "ref", "ref": "social.rocksky.auth.defs#twoFactorState" },
+            "secret": {
+              "type": "string",
+              "description": "The shared secret, base32, for entering by hand."
+            },
+            "uri": {
+              "type": "string",
+              "description": "otpauth:// URI for the QR code."
+            }
+          }
+        }
+      },
+      "errors": [
+        { "name": "InvalidCredentials" },
+        { "name": "AlreadyEnabled" },
+        { "name": "RateLimited" }
+      ]
+    }
+  }
+}

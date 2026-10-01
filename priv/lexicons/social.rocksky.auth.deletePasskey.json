@@ -1,0 +1,36 @@
+{
+  "lexicon": 1,
+  "id": "social.rocksky.auth.deletePasskey",
+  "defs": {
+    "main": {
+      "type": "procedure",
+      "description": "Removes a passkey from the calling account.",
+      "input": {
+        "encoding": "application/json",
+        "schema": {
+          "type": "object",
+          "required": [
+            "id",
+            "password"
+          ],
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "password": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "errors": [
+        {
+          "name": "NotFound"
+        },
+        {
+          "name": "InvalidCredentials"
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "lexicon": 1,
+  "id": "social.rocksky.auth.listPasskeys",
+  "defs": {
+    "main": {
+      "type": "query",
+      "description": "The passkeys registered to the calling account.",
+      "output": {
+        "encoding": "application/json",
+        "schema": {
+          "type": "object",
+          "required": ["passkeys"],
+          "properties": {
+            "passkeys": {
+              "type": "array",
+              "items": { "type": "ref", "ref": "social.rocksky.auth.defs#passkey" }
+            }
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,37 @@
+{
+  "lexicon": 1,
+  "id": "social.rocksky.auth.regenerateRecoveryCodes",
+  "defs": {
+    "main": {
+      "type": "procedure",
+      "description": "Replaces the recovery codes. Any previously issued code stops working.",
+      "input": {
+        "encoding": "application/json",
+        "schema": {
+          "type": "object",
+          "required": ["password", "code"],
+          "properties": {
+            "password": { "type": "string" },
+            "code": { "type": "string" }
+          }
+        }
+      },
+      "output": {
+        "encoding": "application/json",
+        "schema": {
+          "type": "object",
+          "required": ["recoveryCodes"],
+          "properties": {
+            "recoveryCodes": { "type": "array", "items": { "type": "string" } }
+          }
+        }
+      },
+      "errors": [
+        { "name": "InvalidCredentials" },
+        { "name": "InvalidCode" },
+        { "name": "NotEnrolled" },
+        { "name": "RateLimited" }
+      ]
+    }
+  }
+}

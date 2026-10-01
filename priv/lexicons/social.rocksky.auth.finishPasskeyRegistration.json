@@ -1,0 +1,39 @@
+{
+  "lexicon": 1,
+  "id": "social.rocksky.auth.finishPasskeyRegistration",
+  "defs": {
+    "main": {
+      "type": "procedure",
+      "description": "Completes a WebAuthn registration ceremony and stores the credential.",
+      "input": {
+        "encoding": "application/json",
+        "schema": {
+          "type": "object",
+          "required": ["requestId", "credential"],
+          "properties": {
+            "requestId": { "type": "string" },
+            "credential": {
+              "type": "unknown",
+              "description": "The PublicKeyCredential from navigator.credentials.create(), as WebAuthn JSON."
+            }
+          }
+        }
+      },
+      "output": {
+        "encoding": "application/json",
+        "schema": {
+          "type": "object",
+          "required": ["passkey"],
+          "properties": {
+            "passkey": { "type": "ref", "ref": "social.rocksky.auth.defs#passkey" }
+          }
+        }
+      },
+      "errors": [
+        { "name": "InvalidPasskey" },
+        { "name": "RequestExpired" },
+        { "name": "AlreadyRegistered" }
+      ]
+    }
+  }
+}

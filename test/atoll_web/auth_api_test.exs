@@ -1,0 +1,120 @@
+defmodule AtollWeb.AuthApiTest do
+  @moduledoc """
+  `social.rocksky.auth.*` is the contract a client uses against any PDS, so what
+  matters here is the state machine it sees over XRPC and what it is refused.
+  """
+  use AtollWeb.ConnCase, async: false
+  alias Atoll.Accounts.{Credentials, Sessions, TOTP}
+
+  @password "authenticator password"
+
+  setup %{conn: conn} do
+    for name <- [:session_signing_key, :key_encryption_key, :previous_key_encryption_keys] do
+      previous = Application.fetch_env(:atoll, name)
+      Application.put_env(:atoll, name, :crypto.strong_rand_bytes(32))
+
+      on_exit(fn ->
+        case previous do
+          {:ok, value} -> Application.put_env(:atoll, name, value)
+          :error -> Application.delete_env(:atoll, name)
+        end
+      end)
+    end
+
+    Application.put_env(:atoll, :previous_key_encryption_keys, [])
+
+    did = "did:plc:authapi"
+    {:ok, _} = Atoll.Repositories.create(did, Atoll.SigningKey.generate())
+    {:ok, _} = Credentials.create(did, @password)
+    Atoll.Repo.insert!(%Atoll.Accounts.Profile{did: did, handle: "alice.example.test"})
+    {:ok, pair} = Sessions.create(did, @password)
+
+    %{conn: conn, did: did, access: pair.access_jwt}
+  end
+
+  defp authed(conn, token),
+    do: Plug.Conn.put_req_header(conn, "authorization", "Bearer " <> token)
+
+  defp call(conn, token, method, nsid, body \\ nil) do
+    conn = authed(conn, token)
+
+    case method do
+      :get -> get(conn, "/xrpc/" <> nsid)
+      :post -> post(conn, "/xrpc/" <> nsid, body || %{})
+    end
+  end
+
+  defp code_for(secret) do
+    # The code the authenticator would be showing for the secret just issued.
+    {:ok, raw} = Base.decode32(secret, padding: false)
+    {:ok, code} = TOTP.code(raw, System.system_time(:second))
+    code
+  end
+
+  test "two-factor goes disabled -> pending -> enabled", c do
+    disabled = call(c.conn, c.access, :get, "social.rocksky.auth.getTwoFactor")
+    assert json_response(disabled, 200)["state"] == "disabled"
+
+    begun =
+      call(build_conn(), c.access, :post, "social.rocksky.auth.beginTwoFactor", %{
+        "password" => @password
+      })
+
+    body = json_response(begun, 200)
+    assert body["state"] == "pending"
+    assert body["uri"] =~ "otpauth://totp/"
+    assert is_binary(body["secret"])
+
+    pending = call(build_conn(), c.access, :get, "social.rocksky.auth.getTwoFactor")
+    assert json_response(pending, 200)["state"] == "pending"
+
+    confirmed =
+      call(build_conn(), c.access, :post, "social.rocksky.auth.confirmTwoFactor", %{
+        "code" => code_for(body["secret"])
+      })
+
+    result = json_response(confirmed, 200)
+    assert result["state"] == "enabled"
+    assert length(result["recoveryCodes"]) > 0
+
+    enabled = call(build_conn(), c.access, :get, "social.rocksky.auth.getTwoFactor")
+    assert json_response(enabled, 200)["recoveryRemaining"] == length(result["recoveryCodes"])
+  end
+
+  test "the password is required to begin enrollment", c do
+    refused =
+      call(c.conn, c.access, :post, "social.rocksky.auth.beginTwoFactor", %{
+        "password" => "not the password"
+      })
+
+    # An access token proves the session, not the owner.
+    assert json_response(refused, 401)["error"] == "InvalidCredentials"
+
+    state = call(build_conn(), c.access, :get, "social.rocksky.auth.getTwoFactor")
+    assert json_response(state, 200)["state"] == "disabled"
+  end
+
+  test "a missing password is a bad request, not a crash", c do
+    refused = call(c.conn, c.access, :post, "social.rocksky.auth.beginTwoFactor", %{})
+    assert json_response(refused, 400)["error"]
+  end
+
+  test "an unauthenticated caller gets nothing", c do
+    assert json_response(get(c.conn, "/xrpc/social.rocksky.auth.getTwoFactor"), 401)
+    assert json_response(get(build_conn(), "/xrpc/social.rocksky.auth.listPasskeys"), 401)
+  end
+
+  test "passkeys start empty and a malformed request id is refused", c do
+    listed = call(c.conn, c.access, :get, "social.rocksky.auth.listPasskeys")
+    assert json_response(listed, 200)["passkeys"] == []
+
+    refused =
+      call(build_conn(), c.access, :post, "social.rocksky.auth.finishPasskeyRegistration", %{
+        "requestId" => ".no-reference",
+        "credential" => %{}
+      })
+
+    # An empty half is not a usable half.
+    assert json_response(refused, 400)["error"] == "InvalidPasskey"
+  end
+end

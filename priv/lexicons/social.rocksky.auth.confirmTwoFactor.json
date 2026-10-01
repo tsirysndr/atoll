@@ -1,0 +1,39 @@
+{
+  "lexicon": 1,
+  "id": "social.rocksky.auth.confirmTwoFactor",
+  "defs": {
+    "main": {
+      "type": "procedure",
+      "description": "Confirms enrolment with a code from the authenticator, putting two-factor in force and issuing recovery codes.",
+      "input": {
+        "encoding": "application/json",
+        "schema": {
+          "type": "object",
+          "required": ["code"],
+          "properties": { "code": { "type": "string" } }
+        }
+      },
+      "output": {
+        "encoding": "application/json",
+        "schema": {
+          "type": "object",
+          "required": ["state", "recoveryCodes"],
+          "properties": {
+            "state": { "type": "ref", "ref": "social.rocksky.auth.defs#twoFactorState" },
+            "recoveryCodes": {
+              "type": "array",
+              "description": "Shown once. Each may be used in place of a code.",
+              "items": { "type": "string" }
+            }
+          }
+        }
+      },
+      "errors": [
+        { "name": "InvalidCode" },
+        { "name": "NotEnrolled" },
+        { "name": "EnrollmentExpired" },
+        { "name": "RateLimited" }
+      ]
+    }
+  }
+}

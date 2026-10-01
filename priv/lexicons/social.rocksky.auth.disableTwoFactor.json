@@ -1,0 +1,37 @@
+{
+  "lexicon": 1,
+  "id": "social.rocksky.auth.disableTwoFactor",
+  "defs": {
+    "main": {
+      "type": "procedure",
+      "description": "Turns two-factor off. Requires both the password and a current code, so a stolen session cannot remove it.",
+      "input": {
+        "encoding": "application/json",
+        "schema": {
+          "type": "object",
+          "required": ["password", "code"],
+          "properties": {
+            "password": { "type": "string" },
+            "code": { "type": "string" }
+          }
+        }
+      },
+      "output": {
+        "encoding": "application/json",
+        "schema": {
+          "type": "object",
+          "required": ["state"],
+          "properties": {
+            "state": { "type": "ref", "ref": "social.rocksky.auth.defs#twoFactorState" }
+          }
+        }
+      },
+      "errors": [
+        { "name": "InvalidCredentials" },
+        { "name": "InvalidCode" },
+        { "name": "NotEnrolled" },
+        { "name": "RateLimited" }
+      ]
+    }
+  }
+}
