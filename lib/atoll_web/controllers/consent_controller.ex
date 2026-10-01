@@ -20,7 +20,10 @@ defmodule AtollWeb.ConsentController do
       conn = put_session(conn, :oauth_pending, context)
 
       if BrowserConsent.creation_required?(context, request) do
-        go(conn, "/account/signup")
+        # `flow=oauth` keeps a gateway console in front of this server from
+        # answering the page itself: the ceremony lives in this session, and a
+        # sign-in done anywhere else leaves it stranded.
+        go(conn, "/account/signup?flow=oauth")
       else
         case Sessions.authenticate_management(get_session(conn, :account_access)) do
           {:ok, %{did: did, status: :active}} ->
@@ -34,7 +37,7 @@ defmodule AtollWeb.ConsentController do
             |> delete_session(:account_access)
             |> delete_session(:account_refresh)
             |> delete_session(:account_expires_at)
-            |> go("/account/login")
+            |> go("/account/login?flow=oauth")
         end
       end
     else

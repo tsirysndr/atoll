@@ -183,6 +183,10 @@ defmodule AtollWeb.BrowserConsentTest do
     start =
       get(c.conn, "/oauth/authorize?" <> URI.encode_query(%{client_id: client, request_uri: uri}))
 
+    # The ceremony's own redirect is marked, so a gateway console in front of
+    # this server lets the request through to this page instead of answering it.
+    assert redirected_to(start, 303) == "/account/login?flow=oauth"
+
     login = start |> browser() |> get("/account/login")
 
     signed =
@@ -880,7 +884,7 @@ defmodule AtollWeb.BrowserConsentTest do
 
   defp signup_page(c) do
     start = begin(c)
-    assert redirected_to(start, 303) == "/account/signup"
+    assert redirected_to(start, 303) == "/account/signup?flow=oauth"
     start |> browser() |> get("/account/signup")
   end
 
@@ -911,7 +915,7 @@ defmodule AtollWeb.BrowserConsentTest do
 
   defp consent_page(c) do
     start = begin(c)
-    assert redirected_to(start, 303) == "/account/login"
+    assert redirected_to(start, 303) == "/account/login?flow=oauth"
     login = start |> browser() |> get("/account/login")
 
     signed =
