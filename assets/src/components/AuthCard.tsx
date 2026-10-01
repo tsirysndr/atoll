@@ -1,3 +1,4 @@
+import { AuthBackdrop } from "./AuthBackdrop";
 import { useEffect, type ReactNode } from "react";
 import { Card, CardBody, Select, SelectItem } from "@heroui/react";
 import { useAtom } from "jotai";
@@ -37,7 +38,10 @@ export function AuthCard({
   }, [i18n, language]);
 
   return (
-    <div className="flex min-h-svh flex-col items-center justify-center gap-4 px-4 py-8 sm:py-12">
+    <>
+      <AuthBackdrop />
+      {/* Above the backdrop, which is fixed at z-0. */}
+      <div className="relative z-10 flex min-h-svh flex-col items-center justify-center gap-4 px-4 py-8 sm:py-12">
       <Card
         className={`w-full ${widths[width]} border border-default-200/60 bg-content1 shadow-sm`}
         shadow="none"
@@ -76,5 +80,6 @@ export function AuthCard({
         </Select>
       </div>
     </div>
+    </>
   );
 }
