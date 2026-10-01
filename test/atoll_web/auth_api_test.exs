@@ -81,6 +81,51 @@ defmodule AtollWeb.AuthApiTest do
     assert json_response(enabled, 200)["recoveryRemaining"] == length(result["recoveryCodes"])
   end
 
+  test "a wrong code is refused as a bad code, not a server error", c do
+    begun =
+      call(c.conn, c.access, :post, "social.rocksky.auth.beginTwoFactor", %{
+        "password" => @password
+      })
+
+    assert json_response(begun, 200)["state"] == "pending"
+
+    refused =
+      call(build_conn(), c.access, :post, "social.rocksky.auth.confirmTwoFactor", %{
+        "code" => "000000"
+      })
+
+    # The common case when finishing setup: a mistyped or drifted code. It must
+    # say so, not 500.
+    assert json_response(refused, 400)["error"] == "InvalidCode"
+
+    # And the enrollment survives, so the owner can simply try again.
+    state = call(build_conn(), c.access, :get, "social.rocksky.auth.getTwoFactor")
+    assert json_response(state, 200)["state"] == "pending"
+  end
+
+  test "every error the factor layer can return is answered, never crashed", _c do
+    # The factor layer's own atoms. An unmapped one used to raise inside the
+    # shared XRPC mapping and surface as a 500.
+    for reason <- [
+          :invalid_totp,
+          :totp_required,
+          :totp_rate_limited,
+          :totp_already_enabled,
+          :totp_not_enrolled,
+          :totp_enrollment_expired,
+          :totp_store_unavailable,
+          :invalid_credentials,
+          :invalid_token,
+          :totp_inside_transaction,
+          :some_future_reason
+        ] do
+      conn = AtollWeb.AuthApiFallback.call(build_conn(), {:error, reason})
+      assert conn.status in 400..503, "#{reason} gave #{conn.status}"
+      body = Jason.decode!(conn.resp_body)
+      assert is_binary(body["error"]), "#{reason} returned no error name"
+    end
+  end
+
   test "the password is required to begin enrollment", c do
     refused =
       call(c.conn, c.access, :post, "social.rocksky.auth.beginTwoFactor", %{

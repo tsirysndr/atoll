@@ -29,6 +29,19 @@ defmodule AtollWeb.AuthApiFallback do
   def call(conn, {:error, :totp_not_enrolled}),
     do: error(conn, 400, "NotEnrolled", "No authenticator is enrolled.")
 
+  # A wrong or drifted code is the most common outcome of confirming, so it must
+  # read as such rather than as a server failure.
+  def call(conn, {:error, :invalid_totp}),
+    do: error(conn, 400, "InvalidCode", "That code is not valid.")
+
+  def call(conn, {:error, :totp_required}),
+    do: error(conn, 401, "InvalidCode", "A two-factor code is required.")
+
+  def call(conn, {:error, reason})
+      when reason in [:totp_store_unavailable, :key_vault_unconfigured, :key_decryption_failed] do
+    error(conn, 503, "ServiceUnavailable", "Account security storage is unavailable.")
+  end
+
   def call(conn, {:error, :totp_enrollment_expired}),
     do: error(conn, 400, "EnrollmentExpired", "Enrollment expired; start again.")
 
@@ -40,6 +53,20 @@ defmodule AtollWeb.AuthApiFallback do
 
   def call(conn, {:error, :passkeys_disabled}),
     do: error(conn, 501, "NotSupported", "Passkeys are not enabled on this server.")
+
+  # Anything named above is answered precisely. Anything else is still an error
+  # tuple, so it must not reach a mapping that raises on an unknown atom: a new
+  # error in the factor layer would otherwise surface as a crash.
+  def call(conn, {:error, reason} = other) when is_atom(reason) do
+    try do
+      AtollWeb.XRPCFallback.call(conn, other)
+    rescue
+      FunctionClauseError ->
+        require Logger
+        Logger.error("unmapped social.rocksky.auth error: #{inspect(reason)}")
+        error(conn, 400, "InvalidRequest", "That request could not be completed.")
+    end
+  end
 
   def call(conn, other), do: AtollWeb.XRPCFallback.call(conn, other)
 
