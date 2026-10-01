@@ -469,21 +469,22 @@ case System.get_env("ATOLL_PASSKEYS_ENABLED") do
 
   _ ->
     raise "ATOLL_PASSKEYS_ENABLED must be true or false"
-    # A credential is bound to its relying party for life, and a browser only uses
-    # one whose RP ID is the page's own domain or a parent of it. Set this to the
-    # domain shared with any sign-in page put in front of this node, so one
-    # credential works from both. It must be this host or a parent of it.
-    if rp_id = System.get_env("ATOLL_WEBAUTHN_RP_ID") do
-      config :atoll, :webauthn_rp_id, rp_id
-    end
+end
 
-    # Origins allowed to run a ceremony, beyond this node's own. A console in front
-    # of the fleet is a different origin, and clientDataJSON carries the page's.
-    if origins = System.get_env("ATOLL_WEBAUTHN_ORIGINS") do
-      config :atoll,
-             :webauthn_origins,
-             origins |> String.split(",", trim: true) |> Enum.map(&String.trim/1)
-    end
+# A credential is bound to its relying party for life, and a browser only uses
+# one whose RP ID is the page's own domain or a parent of it. Set this to the
+# domain shared with any sign-in page put in front of this node, so one
+# credential works from both. It must be this host or a parent of it.
+if rp_id = System.get_env("ATOLL_WEBAUTHN_RP_ID") do
+  config :atoll, :webauthn_rp_id, rp_id
+end
+
+# Origins allowed to run a ceremony, beyond this node's own. A console in front
+# of the fleet is a different origin, and clientDataJSON carries the page's.
+if origins = System.get_env("ATOLL_WEBAUTHN_ORIGINS") do
+  config :atoll,
+         :webauthn_origins,
+         origins |> String.split(",", trim: true) |> Enum.map(&String.trim/1)
 end
 
 if value = System.get_env("ATOLL_METRICS_ENABLED") do
