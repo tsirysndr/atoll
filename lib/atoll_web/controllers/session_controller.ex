@@ -270,6 +270,14 @@ defmodule AtollWeb.SessionController do
 
   defp bearer(conn), do: AtollWeb.BearerToken.get(conn)
 
+  @doc """
+  The `createSession` payload for an already-issued session pair.
+
+  Shared so another way of signing in — a passkey, say — answers with exactly
+  the same shape rather than resolving identity a second time.
+  """
+  def session_payload(pair), do: session_response(pair)
+
   defp session_response(pair) do
     Map.merge(identity(pair), %{accessJwt: pair.access_jwt, refreshJwt: pair.refresh_jwt})
   end

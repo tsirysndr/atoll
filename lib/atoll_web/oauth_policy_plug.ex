@@ -86,6 +86,8 @@ defmodule AtollWeb.OAuthPolicyPlug do
     social.rocksky.auth.beginPasskeyRegistration
     social.rocksky.auth.finishPasskeyRegistration
     social.rocksky.auth.deletePasskey
+    social.rocksky.auth.beginPasskeyLogin
+    social.rocksky.auth.finishPasskeyLogin
   )
 
   def init(opts), do: opts

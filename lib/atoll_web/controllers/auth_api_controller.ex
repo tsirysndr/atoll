@@ -99,6 +99,29 @@ defmodule AtollWeb.AuthApiController do
     end
   end
 
+  # --- signing in with a passkey -------------------------------------------
+  # Unauthenticated by design: these are how a session begins.
+
+  def begin_passkey_login(conn, _params) do
+    browser = new_binding()
+
+    with {:ok, request} <- Passkeys.begin_login(browser) do
+      json(conn, %{
+        requestId: request_id(request.reference, browser),
+        publicKey: request.public_key
+      })
+    end
+  end
+
+  def finish_passkey_login(conn, params) do
+    with {:ok, raw} <- field(params, "requestId"),
+         {:ok, {reference, browser}} <- split_request_id(raw),
+         {:ok, credential} <- field(params, "credential"),
+         {:ok, pair} <- Passkeys.complete_login(browser, reference, credential) do
+      json(conn, AtollWeb.SessionController.session_payload(pair))
+    end
+  end
+
   def delete_passkey(conn, params) do
     with {:ok, token} <- BearerToken.get(conn),
          {:ok, password} <- field(params, "password"),

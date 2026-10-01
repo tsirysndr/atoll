@@ -94,6 +94,14 @@ defmodule AtollWeb.Router do
 
     post "/social.rocksky.auth.deletePasskey", AuthApiController, :delete_passkey
 
+    post "/social.rocksky.auth.beginPasskeyLogin",
+         AuthApiController,
+         :begin_passkey_login
+
+    post "/social.rocksky.auth.finishPasskeyLogin",
+         AuthApiController,
+         :finish_passkey_login
+
     get "/app.bsky.actor.getPreferences", ActorController, :get_preferences
     post "/app.bsky.actor.putPreferences", ActorController, :put_preferences
     post "/com.atproto.identity.submitPlcOperation", IdentityController, :submit_operation

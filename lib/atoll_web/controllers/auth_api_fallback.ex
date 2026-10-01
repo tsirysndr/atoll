@@ -51,6 +51,9 @@ defmodule AtollWeb.AuthApiFallback do
   def call(conn, {:error, :invalid_passkey}),
     do: error(conn, 400, "InvalidPasskey", "That passkey request is not valid.")
 
+  def call(conn, {:error, :passkey_store_unavailable}),
+    do: error(conn, 503, "ServiceUnavailable", "Passkey storage is unavailable.")
+
   def call(conn, {:error, :passkeys_disabled}),
     do: error(conn, 501, "NotSupported", "Passkeys are not enabled on this server.")
 

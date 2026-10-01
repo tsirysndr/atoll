@@ -1,0 +1,44 @@
+{
+  "lexicon": 1,
+  "id": "social.rocksky.auth.beginPasskeyLogin",
+  "defs": {
+    "main": {
+      "type": "procedure",
+      "description": "Starts a WebAuthn assertion ceremony for signing in. Takes no authentication: this is how a session begins. The server holds the challenge against `requestId` until the ceremony finishes or expires.",
+      "input": {
+        "encoding": "application/json",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "identifier": {
+              "type": "string",
+              "description": "The handle or DID signing in. Required by implementations that look the account up before offering a challenge; ignored by those that accept a discoverable credential. A client should send it whenever it knows it, which it does here because it had to resolve the handle to reach this server at all."
+            }
+          }
+        }
+      },
+      "output": {
+        "encoding": "application/json",
+        "schema": {
+          "type": "object",
+          "required": ["requestId", "publicKey"],
+          "properties": {
+            "requestId": {
+              "type": "string",
+              "description": "Opaque handle for this ceremony, returned to finishPasskeyLogin."
+            },
+            "publicKey": {
+              "type": "unknown",
+              "description": "PublicKeyCredentialRequestOptions as WebAuthn JSON, for navigator.credentials.get()."
+            }
+          }
+        }
+      },
+      "errors": [
+        { "name": "NotSupported" },
+        { "name": "AccountNotFound" },
+        { "name": "RateLimited" }
+      ]
+    }
+  }
+}

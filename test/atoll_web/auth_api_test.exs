@@ -126,6 +126,45 @@ defmodule AtollWeb.AuthApiTest do
     end
   end
 
+  test "a passkey ceremony can be started without signing in first", c do
+    # This is how a session begins, so it takes no bearer token.
+    started = post(c.conn, "/xrpc/social.rocksky.auth.beginPasskeyLogin", %{})
+    body = json_response(started, 200)
+
+    assert is_binary(body["requestId"])
+    assert body["publicKey"]["challenge"]
+    assert body["publicKey"]["userVerification"] == "required"
+  end
+
+  test "a passkey login refuses a request id it did not issue", c do
+    for request_id <- [".no-reference", "no-separator", "aaa."] do
+      refused =
+        post(c.conn, "/xrpc/social.rocksky.auth.finishPasskeyLogin", %{
+          "requestId" => request_id,
+          "credential" => %{}
+        })
+
+      assert json_response(refused, 400)["error"] == "InvalidPasskey",
+             "accepted #{request_id}"
+    end
+  end
+
+  test "a passkey login refuses a well-formed but unknown ceremony", c do
+    started = post(c.conn, "/xrpc/social.rocksky.auth.beginPasskeyLogin", %{})
+    issued = json_response(started, 200)["requestId"]
+    [reference, _browser] = String.split(issued, ".", parts: 2)
+
+    # The right reference with the wrong secret must not be claimable: the pair
+    # is what authorises it.
+    refused =
+      post(build_conn(), "/xrpc/social.rocksky.auth.finishPasskeyLogin", %{
+        "requestId" => reference <> ".not-the-binding",
+        "credential" => %{}
+      })
+
+    assert json_response(refused, 400)["error"] in ["InvalidPasskey", "InvalidRequest"]
+  end
+
   test "the password is required to begin enrollment", c do
     refused =
       call(c.conn, c.access, :post, "social.rocksky.auth.beginTwoFactor", %{

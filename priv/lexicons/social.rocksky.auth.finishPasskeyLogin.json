@@ -1,0 +1,53 @@
+{
+  "lexicon": 1,
+  "id": "social.rocksky.auth.finishPasskeyLogin",
+  "defs": {
+    "main": {
+      "type": "procedure",
+      "description": "Completes a WebAuthn assertion and returns a session, in the same shape as com.atproto.server.createSession. An account with a second factor still requires one: a passkey replaces the password, not the factor on top of it.",
+      "input": {
+        "encoding": "application/json",
+        "schema": {
+          "type": "object",
+          "required": ["requestId", "credential"],
+          "properties": {
+            "requestId": { "type": "string" },
+            "credential": {
+              "type": "unknown",
+              "description": "The PublicKeyCredential from navigator.credentials.get(), as WebAuthn JSON."
+            },
+            "totpCode": {
+              "type": "string",
+              "description": "Authenticator or recovery code, when the account has an authenticator."
+            },
+            "authFactorToken": {
+              "type": "string",
+              "description": "Emailed code, when the account has the email factor."
+            }
+          }
+        }
+      },
+      "output": {
+        "encoding": "application/json",
+        "schema": {
+          "type": "object",
+          "required": ["did", "handle", "accessJwt", "refreshJwt"],
+          "properties": {
+            "did": { "type": "string", "format": "did" },
+            "handle": { "type": "string", "format": "handle" },
+            "accessJwt": { "type": "string" },
+            "refreshJwt": { "type": "string" },
+            "active": { "type": "boolean" },
+            "email": { "type": "string" }
+          }
+        }
+      },
+      "errors": [
+        { "name": "InvalidPasskey" },
+        { "name": "RequestExpired" },
+        { "name": "AuthFactorTokenRequired" },
+        { "name": "InvalidCode" }
+      ]
+    }
+  }
+}
