@@ -148,6 +148,12 @@ defmodule AtollWeb.AuthApiController do
   defp stamp(nil), do: nil
   defp stamp(%DateTime{} = value), do: DateTime.to_iso8601(value)
   defp stamp(%NaiveDateTime{} = value), do: NaiveDateTime.to_iso8601(value)
+
+  # Passkey rows keep Unix seconds. Printed bare, a browser reads "1790879337"
+  # as the year 1790.
+  defp stamp(value) when is_integer(value),
+    do: value |> DateTime.from_unix!() |> DateTime.to_iso8601()
+
   defp stamp(value), do: to_string(value)
 
   defp field(params, name) do

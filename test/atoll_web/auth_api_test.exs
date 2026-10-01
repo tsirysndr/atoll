@@ -188,6 +188,35 @@ defmodule AtollWeb.AuthApiTest do
     assert json_response(get(build_conn(), "/xrpc/social.rocksky.auth.listPasskeys"), 401)
   end
 
+  test "a listed passkey's timestamps read as ISO 8601, not bare Unix seconds", c do
+    # The rows keep Unix seconds; printed bare, a browser reads "1790879337" as
+    # the year 1790 and showed passkeys as added in 1797.
+    {:ok, context} = Atoll.Accounts.WebAuthn.challenge(AtollWeb.Endpoint.url())
+
+    Atoll.Repo.insert!(%Atoll.Accounts.PasskeyUser{
+      did: c.did,
+      user_handle: :crypto.strong_rand_bytes(32)
+    })
+
+    Atoll.Repo.insert!(%Atoll.Accounts.Passkey{
+      did: c.did,
+      credential_id: :crypto.strong_rand_bytes(32),
+      public_key: :crypto.strong_rand_bytes(65),
+      rp_id: context.rp_id,
+      name: "Macbook Air",
+      sign_count: 0,
+      backup_eligible: false,
+      backup_state: false,
+      created_at: 1_790_879_337,
+      last_used_at: 1_790_879_426
+    })
+
+    listed = call(c.conn, c.access, :get, "social.rocksky.auth.listPasskeys")
+    assert [%{"name" => "Macbook Air"} = row] = json_response(listed, 200)["passkeys"]
+    assert row["createdAt"] == "2026-10-01T18:28:57Z"
+    assert row["lastUsedAt"] == "2026-10-01T18:30:26Z"
+  end
+
   test "passkeys start empty and a malformed request id is refused", c do
     listed = call(c.conn, c.access, :get, "social.rocksky.auth.listPasskeys")
     assert json_response(listed, 200)["passkeys"] == []
