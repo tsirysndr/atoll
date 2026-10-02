@@ -29,7 +29,8 @@
     "totpCodeHint": "If two-factor authentication is enabled",
     "passkey": "Sign in with a passkey",
     "noAccount": "No account?",
-    "createOne": "Create one"
+    "createOne": "Create one",
+    "forgot": "Forgot password?"
   },
   "signup": {
     "title": "Create an account",
@@ -147,5 +148,26 @@
     "passkeys_unavailable": "Passkeys are temporarily unavailable. Try again later.",
     "passkeys_disabled": "Passkey setup and sign-in are disabled. You can still use your password.",
     "passkey_limit": "You can have up to ten passkeys. Remove one before adding another."
+  },
+  "forgot": {
+    "link": "Forgot password?",
+    "email": "Account email",
+    "emailPlaceholder": "you@example.com",
+    "submit": "Email me a reset link",
+    "sent": "If that address has an account here, a reset link is on its way.",
+    "failed": "The reset request could not be sent. Try again."
+  },
+  "reset": {
+    "title": "Reset password",
+    "subtitle": "Choose a new password for your account.",
+    "code": "Reset code",
+    "codePlaceholder": "Code from the email",
+    "newPassword": "New password",
+    "passwordPlaceholder": "At least 8 characters",
+    "confirmPassword": "Confirm new password",
+    "confirmPlaceholder": "Re-enter your new password",
+    "submit": "Set the new password",
+    "done": "Your password is changed. Sign in with the new one.",
+    "failed": "That link is invalid or has expired. Request a new one from the sign-in page."
   }
 }

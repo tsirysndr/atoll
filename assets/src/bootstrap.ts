@@ -111,7 +111,13 @@ export type MessageData = Common & {
   link: { href: string; label: string } | null;
 };
 
+export type ResetData = Common & {
+  screen: "reset";
+  token: string;
+};
+
 export type Bootstrap =
+  | ResetData
   | LoginData
   | SignupData
   | AuthorizeData

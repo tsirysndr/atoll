@@ -29,7 +29,8 @@
     "totpCodeHint": "Se l'autenticazione a due fattori è attiva",
     "passkey": "Accedi con una passkey",
     "noAccount": "Non hai un account?",
-    "createOne": "Creane uno"
+    "createOne": "Creane uno",
+    "forgot": "Password dimenticata?"
   },
   "signup": {
     "title": "Crea un account",
@@ -147,5 +148,26 @@
     "passkeys_unavailable": "Le passkey non sono disponibili al momento. Riprova più tardi.",
     "passkeys_disabled": "La configurazione e l'accesso con passkey sono disattivati. Puoi comunque usare la password.",
     "passkey_limit": "Puoi avere al massimo dieci passkey. Rimuovine una prima di aggiungerne un'altra."
+  },
+  "forgot": {
+    "link": "Password dimenticata?",
+    "email": "E-mail dell'account",
+    "emailPlaceholder": "tu@example.com",
+    "submit": "Inviami un link di reimpostazione",
+    "sent": "Se quell'indirizzo ha un account qui, un link di reimpostazione è in arrivo.",
+    "failed": "La richiesta non è stata inviata. Riprova."
+  },
+  "reset": {
+    "title": "Reimposta la password",
+    "subtitle": "Scegli una nuova password per il tuo account.",
+    "code": "Codice di reimpostazione",
+    "codePlaceholder": "Codice dall'e-mail",
+    "newPassword": "Nuova password",
+    "passwordPlaceholder": "Almeno 8 caratteri",
+    "confirmPassword": "Conferma la nuova password",
+    "confirmPlaceholder": "Scrivi di nuovo la tua nuova password",
+    "submit": "Imposta la nuova password",
+    "done": "La tua password è cambiata. Accedi con quella nuova.",
+    "failed": "Quel link non è valido o è scaduto. Richiedine uno nuovo dalla pagina di accesso."
   }
 }

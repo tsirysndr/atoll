@@ -5,14 +5,18 @@ defmodule AtollWeb.AccountBrowserPlug do
 
   @passkey_paths ~w(/account/passkeys /account/passkeys/register/begin /account/passkeys/register/finish /account/passkeys/login/begin /account/passkeys/login/finish /account/passkeys/revoke)
   @paths @passkey_paths ++
-           ~w(/account/signup /account/login /account/sessions /account/sessions/revoke /account/logout /oauth/authorize /account/security /account/security/begin /account/security/confirm /account/security/recovery /account/security/disable)
+           ~w(/account/signup /account/login /account/reset /account/sessions /account/sessions/revoke /account/logout /oauth/authorize /account/security /account/security/begin /account/security/confirm /account/security/recovery /account/security/disable)
 
   def init(opts), do: opts
 
   def call(conn, _) do
     path = "/" <> Enum.map_join(conn.path_info, "/", &URI.decode/1)
 
-    if path in @paths do
+    # The reset link from the email carries its token in the path, so the
+    # route is a prefix rather than one of the fixed pages.
+    route = if reset_path?(path), do: "/account/reset", else: path
+
+    if route in @paths do
       conn =
         conn
         |> put_resp_header("cache-control", "no-store")
@@ -29,9 +33,9 @@ defmodule AtollWeb.AccountBrowserPlug do
         conn.request_path != path ->
           fail(conn, 400, "Invalid request.")
 
-        conn.method not in methods(path) ->
+        conn.method not in methods(route) ->
           conn
-          |> put_resp_header("allow", Enum.join(methods(path), ", "))
+          |> put_resp_header("allow", Enum.join(methods(route), ", "))
           |> fail(405, "Method not allowed.")
 
         true ->
@@ -42,7 +46,8 @@ defmodule AtollWeb.AccountBrowserPlug do
     end
   end
 
-  defp methods(path) when path in ["/account/security", "/account/passkeys"], do: ["GET"]
+  defp methods(path) when path in ["/account/security", "/account/passkeys", "/account/reset"],
+    do: ["GET"]
 
   defp methods(path)
        when path in ["/account/signup", "/account/login", "/account/sessions", "/oauth/authorize"],
@@ -53,6 +58,9 @@ defmodule AtollWeb.AccountBrowserPlug do
          )
 
   defp methods(_), do: ["POST"]
+  defp reset_path?("/account/reset"), do: true
+  defp reset_path?("/account/reset/" <> token), do: byte_size(token) in 1..256
+  defp reset_path?(_), do: false
 
   defp limited(conn, path) do
     login? =

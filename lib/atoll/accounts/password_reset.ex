@@ -18,7 +18,7 @@ defmodule Atoll.Accounts.PasswordReset do
               to: recipient,
               subject: "Reset your Atoll password",
               text:
-                "Your Atoll password reset code is: #{code}\n\nThis code expires in 15 minutes. If you did not request this reset, ignore this email."
+                "Your Atoll password reset code is: #{code}\n\nOr open this link to set a new password:\n#{AtollWeb.Endpoint.url()}/account/reset/#{code}\n\nThis code expires in 15 minutes. If you did not request this reset, ignore this email."
             },
             Base.url_encode64(:crypto.strong_rand_bytes(24), padding: false),
             Application.get_env(:atoll, :email_delivery_options, [])

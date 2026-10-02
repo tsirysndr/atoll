@@ -7,6 +7,7 @@ import { IconAt, IconChevronRight, IconFingerprint, IconLock } from "@tabler/ico
 import type { LoginData } from "../bootstrap";
 import { loginSchema, type LoginValues } from "../schemas";
 import { AuthCard } from "../components/AuthCard";
+import { ForgotPassword } from "../components/ForgotPassword";
 import { Alert } from "../components/Alert";
 import { ClientPanel } from "../components/ClientPanel";
 import { TextField, PasswordField } from "../components/Field";
@@ -143,6 +144,8 @@ export function LoginScreen({ data }: { data: LoginData }) {
           </PostForm>
         </>
       ) : null}
+
+      <ForgotPassword />
 
       {data.signupEnabled ? (
         <p className="text-center text-sm text-default-500">

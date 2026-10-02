@@ -29,7 +29,8 @@
     "totpCodeHint": "Si l'authentification à deux facteurs est activée",
     "passkey": "Se connecter avec une clé d'accès",
     "noAccount": "Pas de compte ?",
-    "createOne": "Créez-en un"
+    "createOne": "Créez-en un",
+    "forgot": "Mot de passe oublié ?"
   },
   "signup": {
     "title": "Créer un compte",
@@ -147,5 +148,26 @@
     "passkeys_unavailable": "Les clés d'accès sont temporairement indisponibles. Réessayez plus tard.",
     "passkeys_disabled": "La configuration et la connexion par clé d'accès sont désactivées. Vous pouvez toujours utiliser votre mot de passe.",
     "passkey_limit": "Vous pouvez avoir jusqu'à dix clés d'accès. Supprimez-en une avant d'en ajouter une autre."
+  },
+  "forgot": {
+    "link": "Mot de passe oublié ?",
+    "email": "E-mail du compte",
+    "emailPlaceholder": "vous@example.com",
+    "submit": "M'envoyer un lien de réinitialisation",
+    "sent": "Si cette adresse a un compte ici, un lien de réinitialisation est en route.",
+    "failed": "La demande de réinitialisation n'a pas pu être envoyée. Réessayez."
+  },
+  "reset": {
+    "title": "Réinitialiser le mot de passe",
+    "subtitle": "Choisissez un nouveau mot de passe pour votre compte.",
+    "code": "Code de réinitialisation",
+    "codePlaceholder": "Code reçu par e-mail",
+    "newPassword": "Nouveau mot de passe",
+    "passwordPlaceholder": "Au moins 8 caractères",
+    "confirmPassword": "Confirmer le nouveau mot de passe",
+    "confirmPlaceholder": "Saisissez à nouveau votre nouveau mot de passe",
+    "submit": "Définir le nouveau mot de passe",
+    "done": "Votre mot de passe est changé. Connectez-vous avec le nouveau.",
+    "failed": "Ce lien est invalide ou a expiré. Demandez-en un nouveau depuis la page de connexion."
   }
 }

@@ -29,7 +29,8 @@
     "totpCodeHint": "Se a autenticação de dois fatores estiver ativa",
     "passkey": "Entrar com uma chave de acesso",
     "noAccount": "Ainda não tem conta?",
-    "createOne": "Crie uma"
+    "createOne": "Crie uma",
+    "forgot": "Esqueceu a palavra-passe?"
   },
   "signup": {
     "title": "Criar uma conta",
@@ -147,5 +148,26 @@
     "passkeys_unavailable": "As chaves de acesso estão temporariamente indisponíveis. Tente mais tarde.",
     "passkeys_disabled": "A configuração e o início de sessão com chaves de acesso estão desativados. Pode continuar a usar a sua palavra-passe.",
     "passkey_limit": "Pode ter até dez chaves de acesso. Remova uma antes de adicionar outra."
+  },
+  "forgot": {
+    "link": "Esqueceu a palavra-passe?",
+    "email": "E-mail da conta",
+    "emailPlaceholder": "voce@example.com",
+    "submit": "Enviar-me uma ligação de reposição",
+    "sent": "Se esse endereço tiver uma conta aqui, uma ligação de reposição está a caminho.",
+    "failed": "Não foi possível enviar o pedido. Tente de novo."
+  },
+  "reset": {
+    "title": "Repor a palavra-passe",
+    "subtitle": "Escolha uma nova palavra-passe para a sua conta.",
+    "code": "Código de reposição",
+    "codePlaceholder": "Código do e-mail",
+    "newPassword": "Nova palavra-passe",
+    "passwordPlaceholder": "Pelo menos 8 caracteres",
+    "confirmPassword": "Confirmar a nova palavra-passe",
+    "confirmPlaceholder": "Escreva de novo a sua nova palavra-passe",
+    "submit": "Definir a nova palavra-passe",
+    "done": "A sua palavra-passe foi alterada. Inicie sessão com a nova.",
+    "failed": "Essa ligação é inválida ou expirou. Peça uma nova na página de início de sessão."
   }
 }

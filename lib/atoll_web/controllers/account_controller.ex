@@ -11,6 +11,17 @@ defmodule AtollWeb.AccountController do
 
   def dispatch(conn, "/oauth/authorize"), do: AtollWeb.ConsentController.dispatch(conn)
 
+  # The reset link from the email, its token in the path. The screen posts a
+  # new password straight to the XRPC endpoint, so no browser session or CSRF
+  # token is involved; the emailed token is the whole proof.
+  def dispatch(%{method: "GET"} = conn, "/account/reset" <> rest) do
+    Shell.render(conn, 200, %{
+      screen: "reset",
+      title: "Reset password",
+      token: String.trim_leading(rest, "/")
+    })
+  end
+
   def dispatch(%{method: "GET"} = conn, "/account/login") do
     if get_session(conn, :account_access),
       do: go(conn, after_login(conn)),

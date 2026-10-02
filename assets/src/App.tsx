@@ -5,6 +5,7 @@ import { I18nextProvider } from "react-i18next";
 import type { Bootstrap } from "./bootstrap";
 import i18n from "./i18n";
 import { LoginScreen } from "./screens/LoginScreen";
+import { ResetScreen } from "./screens/ResetScreen";
 import { SignupScreen } from "./screens/SignupScreen";
 import { AuthorizeScreen } from "./screens/AuthorizeScreen";
 import { SessionsScreen } from "./screens/SessionsScreen";
@@ -16,6 +17,8 @@ export function Screen({ data }: { data: Bootstrap }) {
   switch (data.screen) {
     case "login":
       return <LoginScreen data={data} />;
+    case "reset":
+      return <ResetScreen data={data} />;
     case "signup":
       return <SignupScreen data={data} />;
     case "authorize":
