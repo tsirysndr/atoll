@@ -116,7 +116,14 @@ export type ResetData = Common & {
   token: string;
 };
 
+export type ConfirmData = Common & {
+  screen: "confirm";
+  did: string;
+  token: string;
+};
+
 export type Bootstrap =
+  | ConfirmData
   | ResetData
   | LoginData
   | SignupData

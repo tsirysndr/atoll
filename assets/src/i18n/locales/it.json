@@ -169,5 +169,12 @@
     "submit": "Imposta la nuova password",
     "done": "La tua password è cambiata. Accedi con quella nuova.",
     "failed": "Quel link non è valido o è scaduto. Richiedine uno nuovo dalla pagina di accesso."
+  },
+  "confirm": {
+    "title": "Conferma l'e-mail",
+    "subtitle": "Un clic conferma l'indirizzo a cui è stato inviato questo messaggio.",
+    "submit": "Conferma la mia e-mail",
+    "done": "Il tuo indirizzo e-mail è confermato.",
+    "failed": "Quel link non è valido o è scaduto. Richiedi una nuova e-mail di conferma dalla tua pagina account."
   }
 }

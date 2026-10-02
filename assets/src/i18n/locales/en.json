@@ -169,5 +169,12 @@
     "submit": "Set the new password",
     "done": "Your password is changed. Sign in with the new one.",
     "failed": "That link is invalid or has expired. Request a new one from the sign-in page."
+  },
+  "confirm": {
+    "title": "Confirm email",
+    "subtitle": "One click confirms the address this message was sent to.",
+    "submit": "Confirm my email",
+    "done": "Your email address is confirmed.",
+    "failed": "That link is invalid or has expired. Request a new confirmation email from your account page."
   }
 }

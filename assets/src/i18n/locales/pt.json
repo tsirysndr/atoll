@@ -169,5 +169,12 @@
     "submit": "Definir a nova palavra-passe",
     "done": "A sua palavra-passe foi alterada. Inicie sessão com a nova.",
     "failed": "Essa ligação é inválida ou expirou. Peça uma nova na página de início de sessão."
+  },
+  "confirm": {
+    "title": "Confirmar o e-mail",
+    "subtitle": "Um clique confirma o endereço para o qual esta mensagem foi enviada.",
+    "submit": "Confirmar o meu e-mail",
+    "done": "O seu endereço de e-mail está confirmado.",
+    "failed": "Essa ligação é inválida ou expirou. Peça um novo e-mail de confirmação na sua página de conta."
   }
 }

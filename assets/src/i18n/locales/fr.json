@@ -169,5 +169,12 @@
     "submit": "Définir le nouveau mot de passe",
     "done": "Votre mot de passe est changé. Connectez-vous avec le nouveau.",
     "failed": "Ce lien est invalide ou a expiré. Demandez-en un nouveau depuis la page de connexion."
+  },
+  "confirm": {
+    "title": "Confirmer l'e-mail",
+    "subtitle": "Un clic confirme l'adresse à laquelle ce message a été envoyé.",
+    "submit": "Confirmer mon e-mail",
+    "done": "Votre adresse e-mail est confirmée.",
+    "failed": "Ce lien est invalide ou a expiré. Demandez un nouvel e-mail de confirmation depuis votre page de compte."
   }
 }

@@ -22,6 +22,44 @@ defmodule AtollWeb.AccountController do
     })
   end
 
+  # The confirmation link from the email: the DID locates the account, the
+  # single-use code is the proof. The screen posts both back to the POST
+  # handler below; no session or CSRF is involved.
+  def dispatch(%{method: "GET"} = conn, "/account/confirm" <> rest) do
+    {did, token} =
+      case String.split(String.trim_leading(rest, "/"), "/", parts: 2) do
+        [did, token] -> {did, token}
+        _ -> {"", ""}
+      end
+
+    Shell.render(conn, 200, %{
+      screen: "confirm",
+      title: "Confirm email",
+      did: did,
+      token: token
+    })
+  end
+
+  def dispatch(%{method: "POST"} = conn, "/account/confirm") do
+    p = conn.body_params
+
+    with did when is_binary(did) <- p["did"],
+         token when is_binary(token) <- p["token"],
+         {:ok, :confirmed} <- Atoll.Accounts.EmailConfirmation.confirm_by_link(did, token) do
+      conn
+      |> put_resp_content_type("application/json")
+      |> send_resp(200, ~s({"confirmed":true}))
+    else
+      _ ->
+        conn
+        |> put_resp_content_type("application/json")
+        |> send_resp(
+          400,
+          ~s({"error":"InvalidToken","message":"That link is invalid or has expired."})
+        )
+    end
+  end
+
   def dispatch(%{method: "GET"} = conn, "/account/login") do
     if get_session(conn, :account_access),
       do: go(conn, after_login(conn)),

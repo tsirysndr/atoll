@@ -169,5 +169,12 @@
     "submit": "Establecer la nueva contraseña",
     "done": "Tu contraseña ha cambiado. Inicia sesión con la nueva.",
     "failed": "Ese enlace es inválido o ha caducado. Pide uno nuevo desde la página de inicio de sesión."
+  },
+  "confirm": {
+    "title": "Confirmar el correo",
+    "subtitle": "Un clic confirma la dirección a la que se envió este mensaje.",
+    "submit": "Confirmar mi correo",
+    "done": "Tu dirección de correo está confirmada.",
+    "failed": "Ese enlace es inválido o ha caducado. Pide un nuevo correo de confirmación desde tu página de cuenta."
   }
 }
