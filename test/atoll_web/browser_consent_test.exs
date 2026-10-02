@@ -187,7 +187,7 @@ defmodule AtollWeb.BrowserConsentTest do
     # this server lets the request through to this page instead of answering it.
     assert redirected_to(start, 303) == "/account/login?flow=oauth"
 
-    login = start |> browser() |> get("/account/login")
+    login = start |> browser() |> get("/account/login?flow=oauth")
 
     signed =
       post_form(login, "/account/login", %{
@@ -278,7 +278,7 @@ defmodule AtollWeb.BrowserConsentTest do
     start =
       get(c.conn, "/oauth/authorize?" <> URI.encode_query(%{client_id: client, request_uri: uri}))
 
-    login = start |> browser() |> get("/account/login")
+    login = start |> browser() |> get("/account/login?flow=oauth")
 
     signed =
       post_form(login, "/account/login", %{
@@ -650,7 +650,7 @@ defmodule AtollWeb.BrowserConsentTest do
   test "signup requires a live create request, correct view and CSRF before side effects", c do
     # Direct signup is refused here because this server has signup disabled.
     assert get(c.conn, "/account/signup").status == 403
-    ordinary = begin(c) |> browser() |> get("/account/signup")
+    ordinary = begin(c) |> browser() |> get("/account/signup?flow=oauth")
     assert ordinary.status == 400
     c = create_request(c)
     page = signup_page(c)
@@ -785,7 +785,7 @@ defmodule AtollWeb.BrowserConsentTest do
         Fixture.registration(fixture)
       )
 
-    login = begin(c) |> browser() |> get("/account/login")
+    login = begin(c) |> browser() |> get("/account/login?flow=oauth")
     ceremony = post_form(login, "/account/passkeys/login/begin", %{})
     options = Atoll.Bootstrap.read(ceremony)["ceremony"]["publicKey"]
 
@@ -885,7 +885,7 @@ defmodule AtollWeb.BrowserConsentTest do
   defp signup_page(c) do
     start = begin(c)
     assert redirected_to(start, 303) == "/account/signup?flow=oauth"
-    start |> browser() |> get("/account/signup")
+    start |> browser() |> get("/account/signup?flow=oauth")
   end
 
   defp signup_params(page),
@@ -916,7 +916,7 @@ defmodule AtollWeb.BrowserConsentTest do
   defp consent_page(c) do
     start = begin(c)
     assert redirected_to(start, 303) == "/account/login?flow=oauth"
-    login = start |> browser() |> get("/account/login")
+    login = start |> browser() |> get("/account/login?flow=oauth")
 
     signed =
       post_form(login, "/account/login", %{

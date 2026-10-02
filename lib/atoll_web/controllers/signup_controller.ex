@@ -9,7 +9,10 @@ defmodule AtollWeb.SignupController do
     context = get_session(conn, :oauth_pending)
 
     cond do
-      conn.query_string != "" ->
+      # `flow=oauth` is this server's own ceremony marker, set by the consent
+      # redirect so a gateway console in front lets the request through instead
+      # of answering the page itself. Anything else in the query stays refused.
+      conn.query_string not in ["", "flow=oauth"] ->
         UI.message(conn, 400, "signup_request_invalid")
 
       # Direct signup, outside any application request.
