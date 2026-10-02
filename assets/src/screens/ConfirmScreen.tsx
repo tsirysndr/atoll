@@ -24,7 +24,11 @@ export function ConfirmScreen({ data }: { data: ConfirmData }) {
         method: "POST",
         headers: { "content-type": "application/x-www-form-urlencoded" },
         credentials: "same-origin",
-        body: new URLSearchParams({ did: data.did, token: data.token }).toString(),
+        body: new URLSearchParams({
+          _csrf_token: data.csrf,
+          did: data.did,
+          token: data.token,
+        }).toString(),
       });
       if (!response.ok) {
         setState({ done: false, busy: false, error: t("confirm.failed") });

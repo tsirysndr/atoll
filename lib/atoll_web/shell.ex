@@ -35,7 +35,7 @@ defmodule AtollWeb.Shell do
   # Screens without a form must not mint a token: error pages can be rendered
   # before the session plug runs.
   defp csrf_token(%{screen: screen})
-       when screen in ~w(login signup authorize sessions security passkeys),
+       when screen in ~w(login signup authorize sessions security passkeys confirm),
        do: Plug.CSRFProtection.get_csrf_token()
 
   defp csrf_token(_), do: ""
