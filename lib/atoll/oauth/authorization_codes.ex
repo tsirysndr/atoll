@@ -88,6 +88,7 @@ defmodule Atoll.OAuth.AuthorizationCodes do
 
       response = %{
         redirect_uri: request.parameters["redirect_uri"],
+        response_mode: request.parameters["response_mode"],
         state: request.parameters["state"],
         iss: request.issuer
       }

@@ -239,7 +239,10 @@ defmodule AtollWeb.OAuthTokenTest do
     assert send_form(c, body, "/oauth/token?state=override") |> json_response(400)
 
     for {header, value, status} <- [
-          {"content-type", "application/json", 415},
+          # JSON is now a supported body on the OAuth protocol endpoints, so a
+          # form payload labelled as JSON fails at parsing rather than at the
+          # media type.
+          {"content-type", "application/json", 400},
           {"content-type", "application/x-www-form-urlencoded; charset=latin1", 415},
           {"content-encoding", "gzip", 415},
           {"authorization", "Basic arbitrary", 401}

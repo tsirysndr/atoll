@@ -69,7 +69,7 @@ defmodule AtollWeb.OAuthRequestPlug do
       get_req_header(conn, "content-encoding") not in [[], ["identity"]] ->
         error(conn, 415, "invalid_request")
 
-      not form_content_type?(get_req_header(conn, "content-type")) ->
+      body_content_type(get_req_header(conn, "content-type")) == nil ->
         error(conn, 415, "invalid_request")
 
       not length_allowed?(get_req_header(conn, "content-length")) ->
@@ -98,7 +98,7 @@ defmodule AtollWeb.OAuthRequestPlug do
   defp read(conn) do
     case read_body(conn, length: @limit, read_length: @limit + 1, read_timeout: 5000) do
       {:ok, body, conn} when byte_size(body) <= @limit ->
-        case Form.decode(body) do
+        case decode(body_content_type(get_req_header(conn, "content-type")), body) do
           {:ok, params} -> admit(conn, params)
           _ -> error(conn, 400, "invalid_request")
         end
@@ -227,17 +227,39 @@ defmodule AtollWeb.OAuthRequestPlug do
 
   defp headers_allowed?(_), do: false
 
-  defp form_content_type?([value]) do
-    case Plug.Conn.Utils.media_type(value) do
-      {:ok, "application", "x-www-form-urlencoded", params} ->
-        String.downcase(Map.get(params, "charset", "utf-8")) == "utf-8"
+  defp decode(:form, body), do: Form.decode(body)
+
+  # Several OAuth clients send PAR as JSON rather than a form. The shape is the
+  # same flat map of strings, so it is accepted with the same bounds.
+  defp decode(:json, body) do
+    case Jason.decode(body) do
+      {:ok, params} when is_map(params) ->
+        if Enum.all?(params, fn {key, value} -> is_binary(key) and is_binary(value) end) and
+             map_size(params) <= 131,
+           do: {:ok, params},
+           else: :error
 
       _ ->
-        false
+        :error
     end
   end
 
-  defp form_content_type?(_), do: false
+  defp decode(_, _), do: :error
+
+  defp body_content_type([value]) do
+    case Plug.Conn.Utils.media_type(value) do
+      {:ok, "application", "x-www-form-urlencoded", params} ->
+        if String.downcase(Map.get(params, "charset", "utf-8")) == "utf-8", do: :form
+
+      {:ok, "application", "json", params} ->
+        if String.downcase(Map.get(params, "charset", "utf-8")) == "utf-8", do: :json
+
+      _ ->
+        nil
+    end
+  end
+
+  defp body_content_type(_), do: nil
   defp length_allowed?([]), do: true
 
   defp length_allowed?([value]) do

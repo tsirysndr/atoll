@@ -73,7 +73,7 @@ defmodule AtollWeb.OAuthPARTest do
   end
 
   test "explicit query response mode is retained and unsupported modes are rejected", c do
-    for mode <- ["fragment", "form_post", "", "QUERY"] do
+    for mode <- ["form_post", "", "QUERY"] do
       params = Map.put(c.params, "response_mode", mode)
 
       assert %{"error" => "invalid_request"} =
@@ -86,6 +86,31 @@ defmodule AtollWeb.OAuthPARTest do
     result = send_form(c, URI.encode_query(params)) |> json_response(201)
     assert {:ok, row} = PAR.get(@id, result["request_uri"])
     assert row.parameters["response_mode"] == "query"
+
+    # The fragment is the other half of the atproto profile: some apps can only
+    # read location.hash. A fresh challenge and state, because the push above
+    # already consumed this test's PKCE challenge.
+    fragment =
+      c.params
+      |> Map.put("response_mode", "fragment")
+      |> Map.put("state", random())
+      |> Map.put(
+        "code_challenge",
+        Base.url_encode64(:crypto.strong_rand_bytes(32), padding: false)
+      )
+
+    result = send_form(c, URI.encode_query(fragment)) |> json_response(201)
+    assert {:ok, row} = PAR.get(@id, result["request_uri"])
+    assert row.parameters["response_mode"] == "fragment"
+  end
+
+  test "a JSON body pushes the same request a form does", c do
+    result =
+      c
+      |> send_json(Jason.encode!(c.params))
+      |> json_response(201)
+
+    assert {:ok, _} = PAR.get(@id, result["request_uri"])
   end
 
   test "nonce challenge happens before metadata fetch or assertion consumption", c do
@@ -164,7 +189,9 @@ defmodule AtollWeb.OAuthPARTest do
     assert send_form(c, body, "/oauth/par?state=override") |> json_response(400)
 
     for {header, value, status} <- [
-          {"content-type", "application/json", 415},
+          # JSON is now a supported PAR body, so a form payload labelled as
+          # JSON fails at parsing rather than at the media type.
+          {"content-type", "application/json", 400},
           {"content-type", "application/x-www-form-urlencoded; charset=latin1", 415},
           {"content-encoding", "gzip", 415},
           {"authorization", "Basic arbitrary", 400}
@@ -287,6 +314,13 @@ defmodule AtollWeb.OAuthPARTest do
       lookup: fn _ -> {:ok, {8, 8, 8, 8}} end
     )
   end
+
+  defp send_json(c, body, path \\ "/oauth/par"),
+    do:
+      c.conn
+      |> put_req_header("content-type", "application/json")
+      |> put_req_header("dpop", proof(c))
+      |> post(path, body)
 
   defp send_form(c, body, path \\ "/oauth/par"),
     do:

@@ -55,18 +55,24 @@ defmodule Atoll.OAuth.BrowserConsent do
   def callback(result) do
     uri = URI.parse(result.redirect_uri)
 
-    existing =
-      URI.query_decoder(uri.query || "")
-      |> Enum.reject(fn {key, _} ->
-        key in ~w(code state iss error error_description error_uri)
-      end)
-
     fields =
       result
       |> Map.take([:code, :error, :state, :iss])
       |> Enum.map(fn {k, v} -> {Atom.to_string(k), v} end)
 
-    URI.to_string(%{uri | query: URI.encode_query(existing ++ fields)})
+    # The client chose where the response lands at PAR time: the fragment is
+    # for apps that can only read location.hash, the query for everyone else.
+    if Map.get(result, :response_mode) == "fragment" do
+      URI.to_string(%{uri | fragment: URI.encode_query(fields)})
+    else
+      existing =
+        URI.query_decoder(uri.query || "")
+        |> Enum.reject(fn {key, _} ->
+          key in ~w(code state iss error error_description error_uri)
+        end)
+
+      URI.to_string(%{uri | query: URI.encode_query(existing ++ fields)})
+    end
   end
 
   defp hash(value), do: :crypto.hash(:sha256, value) |> Base.url_encode64(padding: false)

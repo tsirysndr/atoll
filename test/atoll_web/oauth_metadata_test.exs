@@ -46,7 +46,7 @@ defmodule AtollWeb.OAuthMetadataTest do
     assert authorization["token_endpoint"] == @origin <> "/oauth/token"
     assert authorization["grant_types_supported"] == ["authorization_code", "refresh_token"]
     assert authorization["response_types_supported"] == ["code"]
-    assert authorization["response_modes_supported"] == ["query"]
+    assert authorization["response_modes_supported"] == ["query", "fragment"]
     assert authorization["code_challenge_methods_supported"] == ["S256"]
     assert authorization["token_endpoint_auth_methods_supported"] == ["none", "private_key_jwt"]
     assert authorization["token_endpoint_auth_signing_alg_values_supported"] == ["ES256"]

@@ -100,7 +100,8 @@ defmodule Atoll.OAuth.PAR do
       text?(params["scope"], 4096) and
       (not Map.has_key?(params, "login_hint") or text?(params["login_hint"], 2048)) and
       (not Map.has_key?(params, "prompt") or params["prompt"] == "create") and
-      (not Map.has_key?(params, "response_mode") or params["response_mode"] == "query")
+      (not Map.has_key?(params, "response_mode") or
+         params["response_mode"] in ["query", "fragment"])
   end
 
   defp valid_input?(_), do: false
