@@ -487,6 +487,15 @@ if origins = System.get_env("ATOLL_WEBAUTHN_ORIGINS") do
          origins |> String.split(",", trim: true) |> Enum.map(&String.trim/1)
 end
 
+# Behind a gateway or proxy on the same host, every request arrives from
+# loopback; without this they all share one rate-limit budget.
+case System.get_env("ATOLL_RATE_LIMIT_EXEMPT_LOOPBACK") do
+  nil -> :ok
+  "true" -> config :atoll, :rate_limit_exempt_loopback, true
+  "false" -> config :atoll, :rate_limit_exempt_loopback, false
+  _ -> raise "ATOLL_RATE_LIMIT_EXEMPT_LOOPBACK must be true or false"
+end
+
 if value = System.get_env("ATOLL_METRICS_ENABLED") do
   config :atoll, :metrics_enabled, Atoll.Metrics.enabled_from_env!(value)
 end

@@ -78,7 +78,11 @@ defmodule AtollWeb.StreamConnections do
                per_ip in 1..100_000) ->
         {:reply, {:error, :unavailable}, state}
 
-      map_size(state.entries) >= total or Map.get(state.peers, peer, 0) >= per_ip ->
+      # The total cap always applies; a loopback peer exempted by configuration
+      # skips only the per-address one.
+      map_size(state.entries) >= total or
+          (Map.get(state.peers, peer, 0) >= per_ip and
+             not Atoll.Accounts.SessionLimiter.loopback_exempt?(peer)) ->
         {:reply, {:error, :full}, state}
 
       true ->

@@ -7,6 +7,28 @@ defmodule Atoll.Accounts.SessionLimiter do
     do: GenServer.start_link(__MODULE__, opts, name: Keyword.get(opts, :name, __MODULE__))
 
   def check(key, limit) do
+    if exempt?(key), do: :ok, else: check_backend(key, limit)
+  end
+
+  @doc """
+  Whether a budget key belongs to a loopback caller exempted by configuration.
+
+  Off unless `ATOLL_RATE_LIMIT_EXEMPT_LOOPBACK` is set. When this server sits
+  behind a gateway or proxy on the same host, every request arrives from
+  loopback and would otherwise share one budget.
+  """
+  def exempt?({_bucket, address}), do: loopback_exempt?(address)
+  def exempt?(_), do: false
+
+  def loopback_exempt?(address),
+    do: Application.get_env(:atoll, :rate_limit_exempt_loopback, false) and loopback?(address)
+
+  defp loopback?({127, _, _, _}), do: true
+  defp loopback?({0, 0, 0, 0, 0, 0, 0, 1}), do: true
+  defp loopback?({0, 0, 0, 0, 0, 0xFFFF, high, _}), do: Bitwise.bsr(high, 8) == 127
+  defp loopback?(_), do: false
+
+  defp check_backend(key, limit) do
     case Application.get_env(:atoll, :rate_limit_backend, :memory) do
       :memory -> check(key, limit, __MODULE__)
       :postgres -> Atoll.Accounts.DistributedLimiter.check(key, limit)
