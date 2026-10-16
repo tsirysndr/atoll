@@ -526,6 +526,16 @@ defmodule AtollWeb.BrowserConsentTest do
     assert Repo.aggregate(AuthorizationCode, :count) == 1
   end
 
+  test "signup expands short usernames before checking the OAuth handle hint", c do
+    c = create_request(c, %{"login_hint" => "alice.users.example.com"})
+    page = signup_page(c)
+    accept_registration()
+
+    signed = signup(page, %{"handle" => "alice"})
+    assert redirected_to(signed, 303) == "/oauth/authorize"
+    assert Repo.get_by!(Atoll.Accounts.Profile, handle: "alice.users.example.com")
+  end
+
   test "custom reservation is separately opt-in, honors hints/invites, and bounds new pending state",
        c do
     c = create_request(c, %{"login_hint" => "alice.example.com"})

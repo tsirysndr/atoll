@@ -38,6 +38,7 @@
     "forClient": "Crie uma conta para se ligar a esta aplicação. Irá rever as permissões antes de ligar.",
     "handle": "Nome de utilizador",
     "handleHint": "O seu identificador completo, por exemplo alice{{domain}}",
+    "usernameHint": "Introduza o seu nome de utilizador ou um identificador completo. Adicionamos {{domain}} automaticamente aos nomes de utilizador.",
     "handleAvailable": "Esse nome de utilizador está disponível",
     "handleTaken": "Esse nome de utilizador já está ocupado",
     "email": "Endereço de e-mail",

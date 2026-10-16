@@ -44,12 +44,16 @@ export function SignupScreen({ data }: { data: SignupData }) {
 
   const api = useServerForm(form);
   const handle = form.watch("handle");
-  const debouncedHandle = useDebounced(handle ?? "");
-  const availability = useHandleAvailability(debouncedHandle, debouncedHandle.length > 3);
 
   const domains = data.handleDomains.length
     ? data.handleDomains
     : (description.data?.availableUserDomains ?? []);
+  const domain = domains[0] ?? "";
+  const username = (handle ?? "").trim();
+  const showSuffix = Boolean(domain) && !username.includes(".");
+  const fullHandle = username && showSuffix ? `${username}${domain}` : username;
+  const debouncedHandle = useDebounced(fullHandle);
+  const availability = useHandleAvailability(debouncedHandle, debouncedHandle.length > 3);
   const inviteRequired = data.inviteRequired || Boolean(description.data?.inviteCodeRequired);
 
   const availabilityHint =
@@ -64,7 +68,7 @@ export function SignupScreen({ data }: { data: SignupData }) {
         {t("signup.handleTaken")}
       </span>
     ) : (
-      t("signup.handleHint", { domain: domains[0] ?? ".example.com" })
+      t(domain ? "signup.usernameHint" : "signup.handleHint", { domain })
     );
 
   return (
@@ -108,7 +112,12 @@ export function SignupScreen({ data }: { data: SignupData }) {
       >
         <TextField
           label={t("signup.handle")}
-          placeholder={`alice${domains[0] ?? ".example.com"}`}
+          placeholder={domain ? "alice" : "alice.example.com"}
+          endContent={
+            showSuffix ? (
+              <span className="pointer-events-none shrink-0 text-sm text-default-500">{domain}</span>
+            ) : null
+          }
           description={availabilityHint}
           registration={form.register("handle")}
           error={form.formState.errors.handle}

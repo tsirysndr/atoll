@@ -16,6 +16,28 @@ describe("SignupScreen", () => {
     expect(container.querySelector("input[name='view']")).not.toBeInTheDocument();
   });
 
+  it("shows the configured suffix only for short usernames", async () => {
+    const user = userEvent.setup();
+    render(<App data={{ ...signupFixture, handleDomains: [".users.test"] }} client={client()} />);
+    const input = screen.getByLabelText(/username/i);
+
+    expect(screen.getByText(".users.test")).toBeInTheDocument();
+    await user.type(input, "alice");
+    expect(screen.getByText(".users.test")).toBeInTheDocument();
+    await user.type(input, ".other.test");
+    expect(screen.queryByText(".users.test")).not.toBeInTheDocument();
+    expect(input).toHaveValue("alice.other.test");
+  });
+
+  it("checks short usernames using the configured domain", async () => {
+    const user = userEvent.setup();
+    render(<App data={signupFixture} client={client()} />);
+    await user.type(screen.getByLabelText(/username/i), "taken");
+    await waitFor(() => expect(screen.getByText(/that username is taken/i)).toBeInTheDocument(), {
+      timeout: 3000,
+    });
+  });
+
   it("keeps the OAuth view token when one is present", () => {
     const { container } = render(
       <App data={{ ...signupFixture, view: "view-token" }} client={client()} />,

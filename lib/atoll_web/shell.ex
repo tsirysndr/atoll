@@ -85,6 +85,7 @@ defmodule AtollWeb.Shell do
     form("/account/signup", payload.csrf, """
     #{view}
     <label>Username<input name="handle" value="#{e(payload.handle)}" autocomplete="username" required maxlength="253"></label>
+    <p>#{if domain = List.first(payload.handleDomains), do: "Enter your username (we add #{e(domain)} automatically) or a full handle.", else: "Enter your full handle."}</p>
     <label>Email (optional)<input type="email" name="email" autocomplete="email" maxlength="320"></label>
     <label>Password<input type="password" name="password" autocomplete="new-password" required minlength="8" maxlength="1024"></label>
     #{invite}

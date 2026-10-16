@@ -38,6 +38,7 @@
     "forClient": "Create an account to connect to this application. You will review permissions before connecting.",
     "handle": "Username",
     "handleHint": "Your full handle, for example alice{{domain}}",
+    "usernameHint": "Enter your username or a full handle. We add {{domain}} to usernames automatically.",
     "handleAvailable": "That username is available",
     "handleTaken": "That username is taken",
     "email": "Email address",

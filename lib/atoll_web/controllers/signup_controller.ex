@@ -43,7 +43,7 @@ defmodule AtollWeb.SignupController do
   end
 
   defp create(conn, context, request) do
-    p = conn.body_params
+    p = Map.update(conn.body_params, "handle", nil, &expand_handle/1)
 
     # confirmPassword is checked in the browser and posted with the form; it is
     # accepted here and dropped below rather than failing the whole request.
@@ -129,6 +129,20 @@ defmodule AtollWeb.SignupController do
     end
   end
 
+  defp expand_handle(handle) when is_binary(handle) do
+    handle = String.trim(handle)
+    domain = List.first(handle_domains())
+
+    if handle != "" and not String.contains?(handle, ".") and is_binary(domain),
+      do: handle <> domain,
+      else: handle
+  end
+
+  defp expand_handle(handle), do: handle
+
+  defp handle_domains,
+    do: Application.get_env(:atoll, :pds, []) |> Keyword.get(:available_user_domains, [])
+
   defp input(params) do
     params
     |> Map.take(~w(handle email password inviteCode))
@@ -148,8 +162,7 @@ defmodule AtollWeb.SignupController do
       view: context && context["view"],
       handle: handle,
       email: "",
-      handleDomains:
-        Application.get_env(:atoll, :pds, []) |> Keyword.get(:available_user_domains, []),
+      handleDomains: handle_domains(),
       inviteRequired: Atoll.Accounts.Invites.required?(),
       customDomainEnabled: Signup.self_service_custom_enabled?(),
       reservation:

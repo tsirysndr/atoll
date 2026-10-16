@@ -38,6 +38,7 @@
     "forClient": "Crea un account per collegarti a questa applicazione. Esaminerai le autorizzazioni prima di collegarti.",
     "handle": "Nome utente",
     "handleHint": "Il tuo handle completo, ad esempio alice{{domain}}",
+    "usernameHint": "Inserisci il tuo nome utente o un handle completo. Aggiungiamo automaticamente {{domain}} ai nomi utente.",
     "handleAvailable": "Questo nome utente è disponibile",
     "handleTaken": "Questo nome utente è già in uso",
     "email": "Indirizzo email",
