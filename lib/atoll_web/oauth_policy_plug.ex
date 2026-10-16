@@ -12,6 +12,7 @@ defmodule AtollWeb.OAuthPolicyPlug do
 
   @public ~w(
     _health
+    social.rocksky.auth.searchHandles
     com.atproto.server.describeServer
     com.atproto.sync.getHead
     com.atproto.identity.resolveDid

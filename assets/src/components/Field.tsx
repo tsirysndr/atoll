@@ -10,6 +10,7 @@ export type FieldProps = {
   error?: FieldError;
   registration: UseFormRegisterReturn;
   type?: string;
+  list?: string;
   autoComplete?: string;
   autoFocus?: boolean;
   maxLength?: number;
@@ -33,6 +34,7 @@ export function TextField({
   error,
   registration,
   type = "text",
+  list,
   autoComplete,
   autoFocus,
   maxLength,
@@ -51,6 +53,7 @@ export function TextField({
       variant="bordered"
       radius="sm"
       labelPlacement="outside"
+      list={list}
       autoComplete={autoComplete}
       autoFocus={autoFocus}
       maxLength={maxLength}

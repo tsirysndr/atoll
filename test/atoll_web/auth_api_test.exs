@@ -32,6 +32,24 @@ defmodule AtollWeb.AuthApiTest do
     %{conn: conn, did: did, access: pair.access_jwt}
   end
 
+  test "handle suggestions expose only active local handles", c do
+    path = "/xrpc/social.rocksky.auth.searchHandles"
+
+    assert json_response(get(c.conn, path, %{q: "AL"}), 200) == %{
+             "handles" => ["alice.example.test"]
+           }
+
+    for query <- ["", "a", "a%", "a_", "alice@example.test"] do
+      assert json_response(get(build_conn(), path, %{q: query}), 200) == %{"handles" => []}
+    end
+
+    assert json_response(get(build_conn(), path, %{q: String.duplicate("a", 254)}), 400)["error"] ==
+             "InvalidRequest"
+
+    assert {:ok, _} = Atoll.Repositories.set_status(c.did, :deactivated)
+    assert json_response(get(build_conn(), path, %{q: "al"}), 200) == %{"handles" => []}
+  end
+
   defp authed(conn, token),
     do: Plug.Conn.put_req_header(conn, "authorization", "Bearer " <> token)
 

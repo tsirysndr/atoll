@@ -18,6 +18,29 @@ defmodule AtollWeb.AuthApiController do
 
   action_fallback AtollWeb.AuthApiFallback
 
+  def search_handles(conn, params) do
+    import Ecto.Query
+    query = params["q"]
+    query = if is_binary(query), do: query |> String.trim() |> String.downcase(), else: ""
+
+    handles =
+      if Regex.match?(~r/\A[a-z0-9.-]{2,253}\z/, query) do
+        Atoll.Repo.all(
+          from p in Atoll.Accounts.Profile,
+            join: r in Atoll.Repositories.Head,
+            on: r.did == p.did,
+            where: r.status == :active and like(p.handle, ^(query <> "%")),
+            order_by: p.handle,
+            limit: 10,
+            select: p.handle
+        )
+      else
+        []
+      end
+
+    json(conn, %{handles: handles})
+  end
+
   def two_factor(conn, _params) do
     with {:ok, token} <- BearerToken.get(conn),
          {:ok, factor} <- Authenticator.status(token) do

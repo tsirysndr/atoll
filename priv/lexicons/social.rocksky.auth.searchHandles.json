@@ -1,0 +1,41 @@
+{
+  "lexicon": 1,
+  "id": "social.rocksky.auth.searchHandles",
+  "defs": {
+    "main": {
+      "type": "query",
+      "description": "Suggest up to ten active local account handles matching a prefix. Gateways merge their configured PDS fleet.",
+      "parameters": {
+        "type": "params",
+        "required": [
+          "q"
+        ],
+        "properties": {
+          "q": {
+            "type": "string",
+            "maxLength": 253
+          }
+        }
+      },
+      "output": {
+        "encoding": "application/json",
+        "schema": {
+          "type": "object",
+          "required": [
+            "handles"
+          ],
+          "properties": {
+            "handles": {
+              "type": "array",
+              "maxLength": 10,
+              "items": {
+                "type": "string",
+                "format": "handle"
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,3 +1,4 @@
+import { HandleSuggestions } from "../components/HandleSuggestions";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { Divider } from "@heroui/react";
@@ -49,7 +50,9 @@ export function LoginScreen({ data }: { data: LoginData }) {
       <Alert>{errorMessage(data.error, t)}</Alert>
 
       <ServerForm action="/account/login" csrf={data.csrf} api={api}>
+        <HandleSuggestions id="login-handles" value={form.watch("identifier") ?? ""} />
         <TextField
+          list="login-handles"
           label={t("login.identifier")}
           placeholder={t("login.identifierPlaceholder", { domain })}
           registration={form.register("identifier")}

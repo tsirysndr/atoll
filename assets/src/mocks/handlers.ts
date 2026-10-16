@@ -13,6 +13,10 @@ export const describeServer = {
 export const takenHandles = new Set(["taken.example.com"]);
 
 export const handlers = [
+  http.get("*/xrpc/social.rocksky.auth.searchHandles", ({ request }) => {
+    const query = new URL(request.url).searchParams.get("q") ?? "";
+    return HttpResponse.json({ handles: ["alice.example.com"].filter((handle) => query.length >= 2 && handle.startsWith(query)) });
+  }),
   http.get("/xrpc/com.atproto.server.describeServer", () => HttpResponse.json(describeServer)),
 
   http.get("/xrpc/com.atproto.identity.resolveHandle", ({ request }) => {

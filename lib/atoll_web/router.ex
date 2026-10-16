@@ -73,6 +73,8 @@ defmodule AtollWeb.Router do
     post "/com.atproto.server.activateAccount", SessionController, :activate
     post "/com.atproto.server.deactivateAccount", SessionController, :deactivate
 
+    get "/social.rocksky.auth.searchHandles", AuthApiController, :search_handles
+
     get "/social.rocksky.auth.getTwoFactor", AuthApiController, :two_factor
     post "/social.rocksky.auth.beginTwoFactor", AuthApiController, :begin_two_factor
     post "/social.rocksky.auth.confirmTwoFactor", AuthApiController, :confirm_two_factor
