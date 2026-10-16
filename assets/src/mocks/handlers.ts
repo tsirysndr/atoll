@@ -13,6 +13,7 @@ export const describeServer = {
 export const takenHandles = new Set(["taken.example.com"]);
 
 export const handlers = [
+  http.get("*/xrpc/com.atproto.repo.getRecord", () => HttpResponse.json({ error: "RecordNotFound" }, { status: 404 })),
   http.get("*/xrpc/social.rocksky.auth.searchHandles", ({ request }) => {
     const query = new URL(request.url).searchParams.get("q") ?? "";
     return HttpResponse.json({ handles: ["alice.example.com"].filter((handle) => query.length >= 2 && handle.startsWith(query)) });

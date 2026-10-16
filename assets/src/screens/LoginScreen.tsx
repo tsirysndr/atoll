@@ -1,4 +1,4 @@
-import { HandleSuggestions } from "../components/HandleSuggestions";
+import { HandleAutocomplete } from "../components/HandleAutocomplete";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { Divider } from "@heroui/react";
@@ -50,9 +50,9 @@ export function LoginScreen({ data }: { data: LoginData }) {
       <Alert>{errorMessage(data.error, t)}</Alert>
 
       <ServerForm action="/account/login" csrf={data.csrf} api={api}>
-        <HandleSuggestions id="login-handles" value={form.watch("identifier") ?? ""} />
-        <TextField
-          list="login-handles"
+        <HandleAutocomplete
+          value={form.watch("identifier") ?? ""}
+          onValueChange={(value) => form.setValue("identifier", value, { shouldDirty: true })}
           label={t("login.identifier")}
           placeholder={t("login.identifierPlaceholder", { domain })}
           registration={form.register("identifier")}

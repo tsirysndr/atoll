@@ -8,8 +8,8 @@ import { languageAtom } from "../atoms";
 import { languages } from "../i18n";
 
 const widths = {
-  narrow: "max-w-[26rem]",
-  wide: "max-w-[34rem]",
+  narrow: "max-w-[34rem]",
+  wide: "max-w-[42rem]",
   full: "max-w-3xl",
 } as const;
 
@@ -63,7 +63,7 @@ export function AuthCard({
         </CardBody>
       </Card>
 
-      <div className="flex w-full max-w-[26rem] flex-col items-center gap-3">
+      <div className="flex w-full max-w-[34rem] flex-col items-center gap-3">
         {footer}
         <Select
           aria-label={t("common.language")}
