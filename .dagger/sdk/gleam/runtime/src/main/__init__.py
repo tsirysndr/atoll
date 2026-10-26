@@ -44,13 +44,18 @@ class GleamSdk:
             .with_directory("/src", mod_source.context_directory())
             .with_workdir(workdir)
         )
-        if introspection_json is None:
-            return base, subpath, workdir
-        base = (base
-            .with_directory("dagger_sdk", sdk_source, exclude=["build", "test", "examples", "runtime"])
-            .with_file("/schema.json", introspection_json)
-            .with_exec(["python3", "dagger_sdk/codegen/generate.py", "/schema.json", "--output", "dagger_sdk/src/dagger"])
-        )
+        # Runtime loading can omit introspection even on a clean checkout.
+        # Preserve generated dependency bindings when present, otherwise use
+        # the bundled core API. Always create the shipment launcher below.
+        if introspection_json is not None or not await base.directory(".").exists("dagger_sdk/gleam.toml"):
+            base = base.with_directory(
+                "dagger_sdk", sdk_source, exclude=["build", "test", "examples", "runtime"]
+            )
+        if introspection_json is not None:
+            base = (base
+                .with_file("/schema.json", introspection_json)
+                .with_exec(["python3", "dagger_sdk/codegen/generate.py", "/schema.json", "--output", "dagger_sdk/src/dagger"])
+            )
         entries = await base.directory(".").entries()
         if "gleam.toml" not in entries:
             template = sdk_source.directory("runtime/template")
