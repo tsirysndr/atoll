@@ -7,42 +7,25 @@ permissions:
   contents: read
 
 concurrency:
-  group: nix-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  build:
-    name: nix build .#${{ matrix.target }}
+  nix:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
-
     strategy:
       fail-fast: false
       matrix:
-        target:
-          - sqlite
-          - postgres
-
+        target: [sqlite, postgres]
     steps:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
-
-      - uses: oven-sh/setup-bun@v2
+      - name: Install Dagger
+        uses: dagger/dagger-for-github@27b130bf0f79a7f6fbbbe0fbca6760dc9bb40a77
         with:
-          bun-version: "1.4.2"
-
-      - uses: DeterminateSystems/nix-installer-action@v23
-
-      - name: Build the release
-        run: nix build .#${{ matrix.target }} --print-build-logs
-
-      # The release keeps no cookie in the store, so one comes from the
-      # environment; every release command reads it.
-      - name: Check the release runs
-        env:
-          RELEASE_COOKIE: nix-smoke-test
-        run: ./result/bin/atoll version
-
-      - name: Check the development shell
-        run: nix develop .#${{ matrix.target }} --command mix --version
+          version: v1.0.0-beta.21
+      - name: Build and smoke-test Nix release
+        working-directory: .dagger
+        run: dagger api call -m ci nix --source .. --target "${{ matrix.target }}"

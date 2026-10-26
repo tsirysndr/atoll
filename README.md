@@ -107,3 +107,7 @@ suites; see [docs/testing.md](docs/testing.md) for how to run each.
 ## License
 
 [MIT](LICENSE)
+
+## Continuous integration
+
+Build and test checks run through the Gleam Dagger module. See [Dagger CI](.dagger/README.md) for commands, services, caching, and pipeline development.

@@ -1,0 +1,9 @@
+[modules.gleam]
+source = ".dagger/sdk/gleam"
+
+[sdks.gleam]
+module = "gleam"
+
+[sdks.gleam.scopes.".dagger/ci"]
+is-module = true
+name = "project-ci"

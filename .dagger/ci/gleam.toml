@@ -1,0 +1,7 @@
+name = "project_ci"
+version = "0.1.0"
+target = "erlang"
+
+[dependencies]
+dagger = { path = "dagger_sdk" }
+gleam_stdlib = ">= 1.0.0 and < 2.0.0"

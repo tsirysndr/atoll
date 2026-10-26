@@ -2,6 +2,7 @@ name: ci
 
 on:
   push:
+  pull_request:
   workflow_dispatch:
 
 permissions:
@@ -12,154 +13,32 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  test:
-    name: Elixir, browser and MinIO tests
+  postgres:
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
-    env:
-      MIX_ENV: test
-      ATOLL_BLOB_STORAGE: postgres
-      ATOLL_BLOB_CLEANUP_ENABLED: "false"
-      ATOLL_IDENTITY_REFRESH_ENABLED: "false"
-
-    services:
-      postgres:
-        image: postgres:18
-        env:
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgres
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U postgres"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
-
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
-
-      - uses: erlef/setup-beam@v1
-        id: beam
+      - name: Install Dagger
+        uses: dagger/dagger-for-github@27b130bf0f79a7f6fbbbe0fbca6760dc9bb40a77
         with:
-          otp-version: "28"
-          elixir-version: "1.19.5"
-
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: "1.4.2"
-
-      - name: Cache frontend dependencies
-        uses: actions/cache@v6
-        with:
-          path: ~/.bun/install/cache
-          key: ${{ runner.os }}-bun-${{ hashFiles('assets/bun.lock') }}
-
-      - name: Cache dependencies
-        uses: actions/cache@v6
-        with:
-          path: deps
-          key: ${{ runner.os }}-${{ runner.arch }}-otp-${{ steps.beam.outputs.otp-version }}-elixir-${{ steps.beam.outputs.elixir-version }}-${{ hashFiles('mix.lock') }}
-
-      - name: Install dependencies
-        run: mix deps.get
-
-      - name: Check formatting
-        run: mix format --check-formatted
-
-      # The test alias creates and migrates the database automatically.
-      - name: Run project checks and tests
-        run: mix precommit
-
-      # Ubuntu's default client may be older than the PostgreSQL service.
-      # Repository setup: https://www.postgresql.org/download/linux/ubuntu/
-      - name: Set up PostgreSQL 18 archive tools
-        run: |
-          if [ ! -x /usr/lib/postgresql/18/bin/pg_dump ]; then
-            sudo install -d /usr/share/postgresql-common/pgdg
-            sudo curl --fail --silent --show-error --location \
-              https://www.postgresql.org/media/keys/ACCC4CF8.asc \
-              -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc
-            echo 'deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt noble-pgdg main' \
-              | sudo tee /etc/apt/sources.list.d/atoll-pgdg.list >/dev/null
-            sudo apt-get update
-            sudo apt-get install --yes --no-install-recommends postgresql-client-18
-          fi
-          echo '/usr/lib/postgresql/18/bin' >> "$GITHUB_PATH"
-
-      - name: Run database archive and Atoll restore drills
-        timeout-minutes: 5
-        env:
-          PGHOST: localhost
-          PGPORT: "5432"
-          PGUSER: postgres
-          PGPASSWORD: postgres
-        run: |
-          pg_dump --version
-          python3 scripts/test_recovery_set.py
-          python3 scripts/test_database_backup.py
-          python3 scripts/test_atoll_database_backup.py
-
-      - name: Check monitoring alert rules
-        run: bash scripts/test_monitoring.sh
-
-      - name: Run passkey browser integration
-        env:
-          CHROME_BIN: google-chrome
-        run: mix test --include browser test/atoll_web/passkey_browser_e2e_test.exs
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v4
-
-      - name: Build cached MinIO test image
-        uses: docker/build-push-action@v7
-        with:
-          context: scripts/minio
-          load: true
-          tags: atoll-minio-test:2025-09-07
-          cache-from: type=gha,scope=atoll-minio-linux-amd64
-          cache-to: type=gha,scope=atoll-minio-linux-amd64,mode=max
-
-      - name: Run MinIO integration tests
-        env:
-          PGHOST: localhost
-          PGPORT: "5432"
-          PGUSER: postgres
-          PGPASSWORD: postgres
-        run: bash scripts/test_minio.sh --skip-build
-
-      - name: Ensure checks did not modify tracked files
-        run: git diff --exit-code
+          version: v1.0.0-beta.21
+      - name: Run postgres checks
+        working-directory: .dagger
+        run: dagger api call -m ci postgres --source ..
 
   sqlite:
-    name: SQLite tests
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
-    env:
-      MIX_ENV: test
-      ATOLL_DATABASE: sqlite
-      ATOLL_BLOB_STORAGE: postgres
-      ATOLL_BLOB_CLEANUP_ENABLED: "false"
-      ATOLL_IDENTITY_REFRESH_ENABLED: "false"
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
-      - uses: erlef/setup-beam@v1
+      - name: Install Dagger
+        uses: dagger/dagger-for-github@27b130bf0f79a7f6fbbbe0fbca6760dc9bb40a77
         with:
-          otp-version: "28"
-          elixir-version: "1.19.5"
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: "1.4.2"
-      - name: Cache frontend dependencies
-        uses: actions/cache@v6
-        with:
-          path: ~/.bun/install/cache
-          key: ${{ runner.os }}-bun-${{ hashFiles('assets/bun.lock') }}
-      - name: Install dependencies
-        run: mix deps.get
-      - name: Run SQLite project checks and tests
-        run: mix precommit
+          version: v1.0.0-beta.21
+      - name: Run sqlite checks
+        working-directory: .dagger
+        run: dagger api call -m ci sqlite --source ..

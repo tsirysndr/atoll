@@ -27,7 +27,7 @@ if System.get_env("ATOLL_DATABASE", "postgres") in ["postgres", "postgresql"] do
   config :atoll, Atoll.Repo,
     username: "postgres",
     password: "postgres",
-    hostname: "localhost",
+    hostname: System.get_env("PGHOST") || "localhost",
     # A second server on this machine may already hold the default port.
     port: String.to_integer(System.get_env("PGPORT") || "5432"),
     database: "atoll_test#{System.get_env("MIX_TEST_PARTITION")}",

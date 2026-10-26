@@ -2,53 +2,28 @@ name: frontend
 
 on:
   push:
-    paths:
-      - "assets/**"
-      - ".github/workflows/frontend.yml"
+  pull_request:
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: frontend-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
-defaults:
-  run:
-    working-directory: assets
-
 jobs:
-  test:
-    name: Types, tests and bundle
+  frontend:
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
-
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
-
-      - uses: oven-sh/setup-bun@v2
+      - name: Install Dagger
+        uses: dagger/dagger-for-github@27b130bf0f79a7f6fbbbe0fbca6760dc9bb40a77
         with:
-          bun-version: "1.4.2"
-
-      - run: bun install --frozen-lockfile
-
-      - name: Check types
-        run: bun run check
-
-      - name: Run tests
-        run: bun run test
-
-      - name: Build the bundle
-        run: bun run build
-
-      - name: Build Storybook
-        run: bun run storybook:build
-
-      - name: Check the Nix dependency set is current
-        working-directory: .
-        run: |
-          python3 scripts/bun2nix.py
-          git diff --exit-code nix/bun-deps.nix
+          version: v1.0.0-beta.21
+      - name: Run frontend checks
+        working-directory: .dagger
+        run: dagger api call -m ci frontend --source ..

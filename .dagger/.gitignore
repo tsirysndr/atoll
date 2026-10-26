@@ -1,0 +1,7 @@
+**/build/
+**/.cpcache/
+**/target/
+**/erl_crash.dump
+ci/dagger_sdk/
+ci/dagger-sdk/
+ci/dagger_sdk_entrypoint.sh

@@ -14,7 +14,9 @@ const [origin, did, password] = process.argv.slice(2);
 if (!origin || !did || !password || new URL(origin).hostname !== 'localhost') {
   throw Error('Run through the synthetic local ExUnit browser test');
 }
-const browser = spawn(binary, ['--headless', '--disable-gpu', '--no-first-run',
+// Dagger already isolates this synthetic browser inside a disposable container.
+const sandboxArgs = process.env.ATOLL_BROWSER_NO_SANDBOX === 'true' ? ['--no-sandbox'] : [];
+const browser = spawn(binary, [...sandboxArgs, '--headless', '--disable-gpu', '--no-first-run',
   '--disable-background-networking', '--disable-component-update',
   '--no-default-browser-check', '--password-store=basic', '--use-mock-keychain',
   `--user-data-dir=${profile}`, '--remote-debugging-port=0', 'about:blank'], {stdio: 'ignore'});
