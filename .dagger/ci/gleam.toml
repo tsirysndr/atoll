@@ -5,3 +5,6 @@ target = "erlang"
 [dependencies]
 dagger = { path = "dagger_sdk" }
 gleam_stdlib = ">= 1.0.0 and < 2.0.0"
+
+[dev-dependencies]
+gleam_json = ">= 3.0.0 and < 4.0.0"
