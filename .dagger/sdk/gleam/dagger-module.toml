@@ -1,0 +1,8 @@
+name = "gleam-sdk"
+engineVersion = "v1.0.0-beta.21"
+source = "runtime"
+include = ["src/**", "codegen/**", "gleam.toml", "manifest.toml", "LICENSE", "NOTICE"]
+disableDefaultFunctionCaching = true
+
+[runtime]
+  source = "python"
