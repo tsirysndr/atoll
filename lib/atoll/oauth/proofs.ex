@@ -32,8 +32,6 @@ defmodule Atoll.OAuth.Proofs do
         if now >= verified_nonce.expires_at or now > proof.issued_at + 300,
           do: Repo.rollback(:use_dpop_nonce)
 
-        Admission.prune!(ProofUse, now)
-
         digest =
           :crypto.hash(
             :sha256,
@@ -46,9 +44,11 @@ defmodule Atoll.OAuth.Proofs do
             ])
           )
 
-        if Repo.get(ProofUse, digest, log: false), do: Repo.rollback(:dpop_replayed)
+        status = Admission.prune_and_status!(ProofUse, now, digest)
 
-        if Repo.aggregate(ProofUse, :count) >= @capacity,
+        if status.replayed, do: Repo.rollback(:dpop_replayed)
+
+        if status.count >= @capacity,
           do: Repo.rollback(:oauth_proof_store_full)
 
         Repo.insert!(%ProofUse{digest: digest, expires_at: verified_nonce.expires_at}, log: false)

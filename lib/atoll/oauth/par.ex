@@ -165,9 +165,6 @@ defmodule Atoll.OAuth.PAR do
     Repo.transaction(fn ->
       now = Admission.start!(@lock)
 
-      Admission.prune!(PushedRequest, now)
-      Admission.prune!(PKCEUse, now)
-
       challenge_digest =
         :crypto.hash(
           :sha256,
@@ -178,21 +175,22 @@ defmodule Atoll.OAuth.PAR do
           ])
         )
 
-      if Repo.get(PKCEUse, challenge_digest, log: false),
+      status = Admission.request_status!(now, challenge_digest)
+
+      if status.replayed,
         do: Repo.rollback(:pkce_challenge_reused)
 
-      if Repo.aggregate(PushedRequest, :count) >= 10_000 or
-           Repo.aggregate(PKCEUse, :count) >= 100_000,
-         do: Repo.rollback(:oauth_par_store_full)
+      if status.requests >= 10_000 or status.challenges >= 100_000,
+        do: Repo.rollback(:oauth_par_store_full)
 
       # Long enough for a person to sign in, clear a second factor and review
       # permissions: every step of the browser flow revalidates this request.
       lifetime = 600
       uri = @prefix <> Base.url_encode64(:crypto.strong_rand_bytes(32), padding: false)
       {:ok, digest} = request_digest(uri)
-      Repo.insert!(%PKCEUse{digest: challenge_digest, expires_at: now + 86_400}, log: false)
 
-      Repo.insert!(
+      Admission.insert_request!(
+        %PKCEUse{digest: challenge_digest, expires_at: now + 86_400},
         %PushedRequest{
           digest: digest,
           issuer: issuer,
@@ -202,8 +200,7 @@ defmodule Atoll.OAuth.PAR do
           client_binding: binding,
           dpop_jkt: jkt,
           expires_at: now + lifetime
-        },
-        log: false
+        }
       )
 
       %{request_uri: uri, expires_in: lifetime}

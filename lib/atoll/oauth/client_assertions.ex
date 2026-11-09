@@ -107,7 +107,6 @@ defmodule Atoll.OAuth.ClientAssertions do
       if now >= verified.expires_at or now > verified.issued_at + 300,
         do: Repo.rollback(:invalid_client_assertion)
 
-      Admission.prune!(ClientAssertionUse, now)
       # JTI uniqueness spans client key rotation and all endpoints for this issuer.
       digest =
         :crypto.hash(
@@ -120,10 +119,12 @@ defmodule Atoll.OAuth.ClientAssertions do
           ])
         )
 
-      if Repo.get(ClientAssertionUse, digest, log: false),
+      status = Admission.prune_and_status!(ClientAssertionUse, now, digest)
+
+      if status.replayed,
         do: Repo.rollback(:client_assertion_replayed)
 
-      if Repo.aggregate(ClientAssertionUse, :count) >= @capacity,
+      if status.count >= @capacity,
         do: Repo.rollback(:oauth_assertion_store_full)
 
       Repo.insert!(%ClientAssertionUse{digest: digest, expires_at: verified.expires_at},

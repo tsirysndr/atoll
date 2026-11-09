@@ -1,5 +1,6 @@
 defmodule Atoll.OAuth.PARTest do
   use Atoll.DataCase, async: false
+  require Atoll.Database
   alias Atoll.OAuth.{PAR, Nonce, PushedRequest, PKCEUse, ProofUse}
   @issuer "https://pds.example.com"
   @id "https://app.example.com/metadata.json"
@@ -176,7 +177,9 @@ defmodule Atoll.OAuth.PARTest do
         "client_assertion_type" => "urn:ietf:params:oauth:client-assertion-type:jwt-bearer"
       })
 
+    watch_signup_queries()
     assert {:ok, result} = push(%{c | params: params})
+    if Atoll.Database.postgres?(), do: assert(length(signup_queries()) == 17)
     assert {:ok, row} = PAR.get(@id, result.request_uri, c.opts)
     assert row.parameters == c.params
 
@@ -323,6 +326,26 @@ defmodule Atoll.OAuth.PARTest do
     assert Repo.aggregate(PushedRequest, :count) == 0
     assert Repo.aggregate(PKCEUse, :count) == 0
     assert {:error, :dpop_replayed} = PAR.push(c.params, [signed], opts)
+  end
+
+  defp watch_signup_queries do
+    owner = self()
+    id = {__MODULE__, make_ref()}
+    :ok = :telemetry.attach(id, [:atoll, :repo, :query], &__MODULE__.capture_signup/4, owner)
+    on_exit(fn -> :telemetry.detach(id) end)
+  end
+
+  @doc false
+  def capture_signup(_, _, metadata, owner) do
+    if self() == owner, do: send(owner, {:signup_statement, metadata.query})
+  end
+
+  defp signup_queries(acc \\ []) do
+    receive do
+      {:signup_statement, query} -> signup_queries([query | acc])
+    after
+      0 -> Enum.reverse(acc)
+    end
   end
 
   defp transport(doc),
