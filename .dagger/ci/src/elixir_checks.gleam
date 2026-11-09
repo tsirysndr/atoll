@@ -94,7 +94,7 @@ pub fn postgres(
     ci.image(context.client, "postgres:18.6-bookworm")
     |> container.with_env_variable("POSTGRES_PASSWORD", "postgres")
     |> container.with_exposed_port(5432)
-    |> container.as_service
+    |> container.as_service_with([container.AsServiceUseEntrypoint(True)])
   let minio =
     source
     |> directory.directory("scripts/minio")
@@ -106,7 +106,7 @@ pub fn postgres(
     )
     |> container.with_default_args(["server", "/data"])
     |> container.with_exposed_port(9000)
-    |> container.as_service
+    |> container.as_service_with([container.AsServiceUseEntrypoint(True)])
   let tested =
     elixir(context, source, "postgres")
     |> container.with_service_binding("postgres", db)
