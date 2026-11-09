@@ -5,9 +5,8 @@ defmodule Atoll.OAuth.ClientAssertions do
   Call authenticate before the request mutation transaction. Options are trusted;
   pass binding: %{kid: ..., alg: ..., jkt: ...} for an existing session.
   """
-  import Ecto.Query
   alias Atoll.Repo
-  alias Atoll.OAuth.{ClientKeys, ClientMetadata, ClientAssertionUse}
+  alias Atoll.OAuth.{Admission, ClientKeys, ClientMetadata, ClientAssertionUse}
   @type_uri "urn:ietf:params:oauth:client-assertion-type:jwt-bearer"
   @lock 4_182_026_051
   @capacity 100_000
@@ -100,17 +99,15 @@ defmodule Atoll.OAuth.ClientAssertions do
 
   defp admit(assertion, client, issuer, opts) do
     Repo.transaction(fn ->
-      Atoll.Database.limits!(1_000, 5_000)
-      now = clock!()
+      now = Admission.start!()
       options = Keyword.take(opts, [:binding]) |> Keyword.put(:now, now)
       verified = unwrap!(verify(assertion, client, issuer, options))
-      Atoll.Database.serialize_writes!(@lock)
-      now = clock!()
+      now = Admission.lock_now!(@lock)
 
       if now >= verified.expires_at or now > verified.issued_at + 300,
         do: Repo.rollback(:invalid_client_assertion)
 
-      prune!(now)
+      Admission.prune!(ClientAssertionUse, now)
       # JTI uniqueness spans client key rotation and all endpoints for this issuer.
       digest =
         :crypto.hash(
@@ -167,26 +164,6 @@ defmodule Atoll.OAuth.ClientAssertions do
          true <- Base.url_encode64(bytes, padding: false) == value,
          do: {:ok, bytes},
          else: (_ -> {:error, :invalid_client_assertion})
-  end
-
-  defp clock! do
-    now = Atoll.Database.now_seconds!()
-    now
-  end
-
-  defp prune!(now) do
-    ids =
-      Repo.all(
-        from(u in ClientAssertionUse,
-          where: u.expires_at <= ^now,
-          order_by: [asc: u.expires_at, asc: u.digest],
-          limit: 1000,
-          select: u.digest
-        ),
-        log: false
-      )
-
-    Repo.delete_all(from(u in ClientAssertionUse, where: u.digest in ^ids), log: false)
   end
 
   defp unwrap!({:ok, result}), do: result

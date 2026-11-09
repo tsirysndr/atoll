@@ -4,9 +4,8 @@ defmodule Atoll.OAuth.Proofs do
   Must run before the request's mutation transaction, so a later rollback cannot
   make a used proof reusable. This does not authorize accounts, clients or scopes.
   """
-  import Ecto.Query
   alias Atoll.Repo
-  alias Atoll.OAuth.{DPoP, Nonce, ProofUse}
+  alias Atoll.OAuth.{Admission, DPoP, Nonce, ProofUse}
   @lock 4_182_026_050
   @capacity 100_000
 
@@ -15,8 +14,7 @@ defmodule Atoll.OAuth.Proofs do
       {:error, :oauth_proof_inside_transaction}
     else
       Repo.transaction(fn ->
-        Atoll.Database.limits!(1_000, 5_000)
-        now = clock!()
+        now = Admission.start!()
         nonce = unwrap!(DPoP.peek_nonce(headers))
         nonce_opts = Keyword.take(opts, [:secret, :issuer]) |> Keyword.put(:now, now)
         verified_nonce = unwrap!(Nonce.verify(nonce, role, nonce_opts))
@@ -29,13 +27,12 @@ defmodule Atoll.OAuth.Proofs do
         proof = unwrap!(DPoP.verify(headers, method, url, proof_opts))
 
         # Separate from repository locks; shared by proof admission and pruning.
-        Atoll.Database.serialize_writes!(@lock)
-        now = clock!()
+        now = Admission.lock_now!(@lock)
 
         if now >= verified_nonce.expires_at or now > proof.issued_at + 300,
           do: Repo.rollback(:use_dpop_nonce)
 
-        prune!(now)
+        Admission.prune!(ProofUse, now)
 
         digest =
           :crypto.hash(
@@ -61,26 +58,6 @@ defmodule Atoll.OAuth.Proofs do
   rescue
     _ in [Exqlite.Error, Postgrex.Error, DBConnection.ConnectionError] ->
       {:error, :oauth_proof_store_unavailable}
-  end
-
-  defp clock! do
-    now = Atoll.Database.now_seconds!()
-    now
-  end
-
-  defp prune!(now) do
-    ids =
-      Repo.all(
-        from(u in ProofUse,
-          where: u.expires_at <= ^now,
-          order_by: [asc: u.expires_at, asc: u.digest],
-          limit: 1000,
-          select: u.digest
-        ),
-        log: false
-      )
-
-    Repo.delete_all(from(u in ProofUse, where: u.digest in ^ids), log: false)
   end
 
   defp unwrap!({:ok, value}), do: value

@@ -9,7 +9,17 @@ defmodule Atoll.OAuth.PAR do
   """
   import Ecto.Query
   alias Atoll.Repo
-  alias Atoll.OAuth.{ClientMetadata, ClientAssertions, Proofs, PKCE, PKCEUse, PushedRequest}
+
+  alias Atoll.OAuth.{
+    Admission,
+    ClientMetadata,
+    ClientAssertions,
+    Proofs,
+    PKCE,
+    PKCEUse,
+    PushedRequest
+  }
+
   @prefix "urn:ietf:params:oauth:request_uri:"
   @fields ~w(client_id response_type response_mode redirect_uri scope state code_challenge code_challenge_method login_hint prompt dpop_jkt client_assertion_type client_assertion)
   @stored ~w(client_id response_type response_mode redirect_uri scope state code_challenge code_challenge_method login_hint prompt)
@@ -153,13 +163,10 @@ defmodule Atoll.OAuth.PAR do
 
   defp persist(params, binding, jkt, issuer, permission_sets) do
     Repo.transaction(fn ->
-      Atoll.Database.limits!(1_000, 5_000)
-      lock!()
+      now = Admission.start!(@lock)
 
-      now = Atoll.Database.now_seconds!()
-
-      prune!(PushedRequest, now)
-      prune!(PKCEUse, now)
+      Admission.prune!(PushedRequest, now)
+      Admission.prune!(PKCEUse, now)
 
       challenge_digest =
         :crypto.hash(
@@ -210,19 +217,4 @@ defmodule Atoll.OAuth.PAR do
   end
 
   defp request_digest(_), do: {:error, :invalid_request_uri}
-
-  defp prune!(schema, now) do
-    ids =
-      Repo.all(
-        from(r in schema,
-          where: r.expires_at <= ^now,
-          order_by: [asc: r.expires_at, asc: r.digest],
-          limit: 1000,
-          select: r.digest
-        ),
-        log: false
-      )
-
-    Repo.delete_all(from(r in schema, where: r.digest in ^ids), log: false)
-  end
 end
