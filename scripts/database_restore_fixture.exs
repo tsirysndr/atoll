@@ -47,7 +47,8 @@ s3? = System.get_env("ATOLL_BACKUP_DRILL_S3") == "true"
 storage =
   if s3? do
     endpoint = System.fetch_env!("ATOLL_MINIO_TEST_ENDPOINT")
-    %URI{scheme: "http", host: "127.0.0.1", path: path} = URI.parse(endpoint)
+    %URI{scheme: "http", host: host, path: path} = URI.parse(endpoint)
+    true = host in ["127.0.0.1", "minio"]
     true = path in [nil, "", "/"]
     {:ok, _} = Application.ensure_all_started(:req)
 
