@@ -7,8 +7,9 @@ defmodule Atoll.BlobsMinioTest do
 
   setup do
     endpoint = System.fetch_env!("ATOLL_MINIO_TEST_ENDPOINT")
-    # This suite creates buckets only on the disposable local server launched by the script.
-    assert %URI{scheme: "http", host: "127.0.0.1"} = URI.parse(endpoint)
+    # Only the disposable loopback server or Dagger's private MinIO service is allowed.
+    assert %URI{scheme: "http", host: host} = URI.parse(endpoint)
+    assert host in ["127.0.0.1", "minio"]
     bucket = "atoll-test-" <> Base.encode16(:crypto.strong_rand_bytes(8), case: :lower)
 
     config = [

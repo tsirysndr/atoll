@@ -212,7 +212,8 @@ defmodule AtollWeb.BlobUploadControllerTest do
   @tag :minio
   test "authenticated HTTP upload and public download round trip through real MinIO", c do
     endpoint = System.fetch_env!("ATOLL_MINIO_TEST_ENDPOINT")
-    assert %URI{scheme: "http", host: "127.0.0.1"} = URI.parse(endpoint)
+    assert %URI{scheme: "http", host: host} = URI.parse(endpoint)
+    assert host in ["127.0.0.1", "minio"]
     bucket = "atoll-upload-" <> Base.encode16(:crypto.strong_rand_bytes(8), case: :lower)
 
     credentials = [
