@@ -1,4 +1,5 @@
 {
+  "turnstile": {"error": "Não foi possível concluir a verificação. Tente novamente.", "retry": "Repetir verificação"},
   "common": {
     "signIn": "Entrar",
     "signOut": "Sair",
@@ -117,6 +118,8 @@
     "followDevice": "Siga as instruções do seu dispositivo."
   },
   "errors": {
+    "turnstile_failed": "Conclua a verificação e tente novamente.",
+    "turnstile_unavailable": "A verificação está temporariamente indisponível. Tente novamente.",
     "generic": "Algo correu mal. Tente novamente.",
     "invalid_credentials": "Falha ao entrar. Verifique o seu nome de utilizador ou e-mail e a palavra-passe.",
     "totp_required": "Introduza o código de seis dígitos atual da sua aplicação de autenticação, ou um código de recuperação por usar.",

@@ -4,6 +4,7 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { Snippet } from "@heroui/react";
 import { useTranslation } from "react-i18next";
 import { IconAt, IconCheck, IconLock, IconWorld, IconX } from "@tabler/icons-react";
+import { Turnstile } from "../components/Turnstile";
 import type { SignupData } from "../bootstrap";
 import { signupSchema, type SignupValues } from "../schemas";
 import { AuthCard } from "../components/AuthCard";
@@ -29,6 +30,7 @@ function useDebounced(value: string, delay = 400) {
 export function SignupScreen({ data }: { data: SignupData }) {
   const { t } = useTranslation();
   const description = useServerDescription();
+  const [turnstileToken, setTurnstileToken] = useState("");
 
   const form = useForm<SignupValues>({
     resolver: zodResolver(signupSchema),
@@ -108,7 +110,7 @@ export function SignupScreen({ data }: { data: SignupData }) {
         action="/account/signup"
         csrf={data.csrf}
         api={api}
-        hidden={{ view: data.view }}
+        hidden={{ view: data.view, ...(data.turnstile ? { turnstileToken } : {}) }}
       >
         <TextField
           label={t("signup.handle")}
@@ -167,6 +169,8 @@ export function SignupScreen({ data }: { data: SignupData }) {
           />
         ) : null}
 
+        {data.turnstile && <Turnstile siteKey={data.turnstile.siteKey} onToken={setTurnstileToken} />}
+
         <p className="text-xs text-default-500">{t("signup.keepPassword")}</p>
 
         <SubmitButton
@@ -174,6 +178,7 @@ export function SignupScreen({ data }: { data: SignupData }) {
           size="lg"
           className="font-medium"
           isLoading={api.submitting}
+          isDisabled={Boolean(data.turnstile && !turnstileToken)}
           onPress={() => api.submitWith("action", "create")}
         >
           {t("common.createAccount")}
@@ -186,6 +191,7 @@ export function SignupScreen({ data }: { data: SignupData }) {
               variant="bordered"
               size="lg"
               isLoading={api.submitting}
+          isDisabled={Boolean(data.turnstile && !turnstileToken)}
               onPress={() => api.submitWith("action", "reserve_custom")}
             >
               {t("signup.reserveCustom")}

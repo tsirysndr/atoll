@@ -75,6 +75,7 @@ config :phoenix, :filter_parameters, [
   "state",
   "login_hint",
   "inviteCode",
+  "turnstileToken",
   "note",
   "ref",
   "code",

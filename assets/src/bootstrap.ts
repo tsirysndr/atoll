@@ -70,6 +70,7 @@ export type SignupData = Common & {
   email: string;
   handleDomains: string[];
   inviteRequired: boolean;
+  turnstile?: { siteKey: string; action: "signup" } | null;
   customDomainEnabled: boolean;
   reservation: Reservation | null;
   client: Client | null;

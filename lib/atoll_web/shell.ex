@@ -71,6 +71,9 @@ defmodule AtollWeb.Shell do
     """)
   end
 
+  defp noscript(%{screen: "signup", turnstile: turnstile}) when not is_nil(turnstile),
+    do: "<p>Enable JavaScript to complete signup verification.</p>"
+
   defp noscript(%{screen: "signup"} = payload) do
     invite =
       if payload.inviteRequired,

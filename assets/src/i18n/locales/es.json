@@ -1,4 +1,5 @@
 {
+  "turnstile": {"error": "No se pudo completar la verificación. Inténtalo de nuevo.", "retry": "Reintentar verificación"},
   "common": {
     "signIn": "Iniciar sesión",
     "signOut": "Cerrar sesión",
@@ -117,6 +118,8 @@
     "followDevice": "Sigue las instrucciones de tu dispositivo."
   },
   "errors": {
+    "turnstile_failed": "Completa la verificación e inténtalo de nuevo.",
+    "turnstile_unavailable": "La verificación no está disponible temporalmente. Inténtalo de nuevo.",
     "generic": "Algo salió mal. Inténtalo de nuevo.",
     "invalid_credentials": "No se pudo iniciar sesión. Comprueba tu nombre de usuario o correo y la contraseña.",
     "totp_required": "Introduce el código de seis dígitos actual de tu aplicación de autenticación, o un código de recuperación sin usar.",

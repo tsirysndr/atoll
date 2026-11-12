@@ -49,7 +49,8 @@ defmodule AtollWeb.SignupController do
     # accepted here and dropped below rather than failing the whole request.
     with true <-
            Map.keys(p) --
-             ~w(_csrf_token view handle email password confirmPassword inviteCode action) == [],
+             ~w(_csrf_token view handle email password confirmPassword inviteCode action turnstileToken) ==
+             [],
          true <- is_nil(context) or p["view"] == context["view"],
          true <- is_nil(request) or request.parameters["login_hint"] in [nil, p["handle"]],
          {:ok, result} <- signup_action(p) do
@@ -58,6 +59,12 @@ defmodule AtollWeb.SignupController do
         {:reservation, reservation} -> form(conn, context, request, "", 200, reservation)
       end
     else
+      {:error, :turnstile_failed} ->
+        form(conn, context, request, "turnstile_failed", 400)
+
+      {:error, :turnstile_unavailable} ->
+        form(conn, context, request, "turnstile_unavailable", 503)
+
       {:error, reason} when reason in [:plc_unavailable, :plc_conflict] ->
         form(conn, context, request, "signup_unconfirmed", 503)
 
@@ -145,7 +152,7 @@ defmodule AtollWeb.SignupController do
 
   defp input(params) do
     params
-    |> Map.take(~w(handle email password inviteCode))
+    |> Map.take(~w(handle email password inviteCode turnstileToken))
     |> Enum.reject(fn {key, value} -> key in ["email", "inviteCode"] and value == "" end)
     |> Map.new()
   end
@@ -164,6 +171,7 @@ defmodule AtollWeb.SignupController do
       email: "",
       handleDomains: handle_domains(),
       inviteRequired: Atoll.Accounts.Invites.required?(),
+      turnstile: Atoll.Accounts.Turnstile.description(),
       customDomainEnabled: Signup.self_service_custom_enabled?(),
       reservation:
         reservation &&

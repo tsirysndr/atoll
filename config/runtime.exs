@@ -1,5 +1,7 @@
 import Config
 
+config :atoll, :turnstile, Atoll.Accounts.Turnstile.config_from_env!(System.get_env())
+
 # All three signals use the same resource and collector.
 if config_env() != :test do
   otel = Atoll.Telemetry.Config.from_env!(System.get_env())

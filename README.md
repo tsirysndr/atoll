@@ -111,3 +111,26 @@ suites; see [docs/testing.md](docs/testing.md) for how to run each.
 ## Continuous integration
 
 Build and test checks run through the Gleam Dagger module. See [Dagger CI](.dagger/README.md) for commands, services, caching, and pipeline development.
+
+### Public signup verification
+
+Set both `ATOLL_TURNSTILE_SITE_KEY` and `ATOLL_TURNSTILE_SECRET_KEY` to enable
+Cloudflare Turnstile on public signup. Setting only one fails startup. Leave
+signup enabled and invite requirements disabled; invitations do not bypass
+verification. Keep the secret in your service's private environment file.
+
+`ATOLL_TURNSTILE_HOSTNAMES` is a comma-separated allowlist of the **page hostnames**
+where signup is offered. It defaults to this PDS's public hostname. For a gateway
+fleet, use one shared widget/site key on every signup node and include both
+`rocksky.social` and the direct node signup hostnames in this allowlist and in
+Cloudflare's widget configuration. No wildcard or URL syntax is accepted.
+
+The browser sends `turnstileToken` with registration. The PDS validates the token
+with Cloudflare before account provisioning, requires action `signup` and an
+allowed hostname, and rejects missing/invalid tokens or provider failures. Direct
+XRPC registration and the browser signup flow enforce the same check. Clients
+must obtain a fresh token for each attempt. The server publishes only the site
+key and action as `turnstile` in `com.atproto.server.describeServer`.
+
+For local configuration, export the settings before launching the server, for
+example `set -a; . ./.env.turnstile; set +a`. That file is ignored by Git.

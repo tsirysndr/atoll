@@ -1,4 +1,5 @@
 {
+  "turnstile": {"error": "Impossibile completare la verifica. Riprova.", "retry": "Riprova la verifica"},
   "common": {
     "signIn": "Accedi",
     "signOut": "Esci",
@@ -117,6 +118,8 @@
     "followDevice": "Segui le istruzioni del tuo dispositivo."
   },
   "errors": {
+    "turnstile_failed": "Completa la verifica e riprova.",
+    "turnstile_unavailable": "La verifica è temporaneamente non disponibile. Riprova.",
     "generic": "Qualcosa è andato storto. Riprova.",
     "invalid_credentials": "Accesso non riuscito. Controlla nome utente o email e password.",
     "totp_required": "Inserisci il codice a sei cifre attuale della tua app di autenticazione, o un codice di recupero non usato.",

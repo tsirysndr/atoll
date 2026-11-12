@@ -9,7 +9,8 @@ defmodule Atoll.Accounts.Signup do
   def create(params, opts \\ []) do
     with true <- Application.get_env(:atoll, :signup_enabled, false),
          false <- Repo.in_transaction?(),
-         {:ok, input} <- input(params),
+         :ok <- verify_turnstile(params),
+         {:ok, input} <- input(Map.delete(params, "turnstileToken")),
          {:ok, proof} <- prepare(input),
          :ok <- verify_custom_handle(input.handle, proof.did, opts),
          {:ok, _} <- Registrations.submit(proof.did, Keyword.take(opts, [:plug])),
@@ -144,9 +145,13 @@ defmodule Atoll.Accounts.Signup do
 
   @doc "Password-bound browser reservation; callers must enforce CSRF and signup rate limits."
   def reserve_custom_self_service(params) do
-    if self_service_custom_enabled?(),
-      do: reserve_custom_as(params, "signup"),
-      else: {:error, :signup_disabled}
+    with true <- self_service_custom_enabled?(),
+         :ok <- verify_turnstile(params) do
+      reserve_custom_as(Map.delete(params, "turnstileToken"), "signup")
+    else
+      false -> {:error, :signup_disabled}
+      error -> error
+    end
   end
 
   defp reserve_custom_as(params, actor) do
@@ -204,6 +209,11 @@ defmodule Atoll.Accounts.Signup do
       Repo.exists?(from(r in Registration, where: r.did == ^did and is_nil(r.completed_at)),
         primary: true
       )
+
+  defp verify_turnstile(params) when is_map(params),
+    do: Atoll.Accounts.Turnstile.verify(params["turnstileToken"])
+
+  defp verify_turnstile(_), do: {:error, :invalid_request}
 
   defp input(%{"handle" => handle, "password" => password} = params) do
     with true <-

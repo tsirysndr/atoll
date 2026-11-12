@@ -48,3 +48,6 @@ atoll-*.tar
 /assets/node_modules/
 /assets/storybook-static/
 /assets/.vite/
+
+# Private Turnstile credentials.
+/.env.turnstile

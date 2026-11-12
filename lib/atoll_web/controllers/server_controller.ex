@@ -61,7 +61,8 @@ defmodule AtollWeb.ServerController do
       did: Keyword.fetch!(config, :did),
       availableUserDomains: Keyword.fetch!(config, :available_user_domains),
       blobUploadLimit: Atoll.Blobs.max_size(),
-      inviteCodeRequired: Atoll.Accounts.Invites.required?()
+      inviteCodeRequired: Atoll.Accounts.Invites.required?(),
+      turnstile: Atoll.Accounts.Turnstile.description()
     }
 
     result = if links == %{}, do: result, else: Map.put(result, :links, links)

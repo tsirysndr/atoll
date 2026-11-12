@@ -38,6 +38,18 @@ defmodule AtollWeb.XRPCFallback do
   def call(conn, {:error, :invalid_invite_code}),
     do: error(conn, 400, "InvalidInviteCode", "A valid, available invite code is required.")
 
+  def call(conn, {:error, :turnstile_failed}),
+    do: error(conn, 400, "TurnstileFailed", "Complete the verification and try again.")
+
+  def call(conn, {:error, :turnstile_unavailable}),
+    do:
+      error(
+        conn,
+        503,
+        "TurnstileUnavailable",
+        "Signup verification is temporarily unavailable; try again."
+      )
+
   def call(conn, {:error, :signup_disabled}),
     do: error(conn, 403, "Forbidden", "Fresh signup is disabled.")
 

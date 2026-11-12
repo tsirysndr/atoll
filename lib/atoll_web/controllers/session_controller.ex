@@ -103,7 +103,12 @@ defmodule AtollWeb.SessionController do
     result =
       if Map.has_key?(conn.body_params, "did") do
         with {:ok, token} <- bearer(conn),
-             do: Atoll.Accounts.Provisioning.import_account(token, conn.body_params)
+             :ok <- Atoll.Accounts.Turnstile.verify(conn.body_params["turnstileToken"]),
+             do:
+               Atoll.Accounts.Provisioning.import_account(
+                 token,
+                 Map.delete(conn.body_params, "turnstileToken")
+               )
       else
         opts =
           Keyword.merge(

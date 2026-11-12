@@ -1,4 +1,5 @@
 {
+  "turnstile": {"error": "La vérification a échoué. Veuillez réessayer.", "retry": "Réessayer la vérification"},
   "common": {
     "signIn": "Se connecter",
     "signOut": "Se déconnecter",
@@ -117,6 +118,8 @@
     "followDevice": "Suivez les instructions de votre appareil."
   },
   "errors": {
+    "turnstile_failed": "Terminez la vérification et réessayez.",
+    "turnstile_unavailable": "La vérification est temporairement indisponible. Réessayez.",
     "generic": "Une erreur s'est produite. Réessayez.",
     "invalid_credentials": "Échec de la connexion. Vérifiez votre nom d'utilisateur ou votre adresse e-mail et votre mot de passe.",
     "totp_required": "Saisissez le code à six chiffres actuel de votre application d'authentification, ou un code de récupération inutilisé.",

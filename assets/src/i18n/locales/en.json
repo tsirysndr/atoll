@@ -1,4 +1,5 @@
 {
+  "turnstile": {"error": "Verification could not complete. Please try again.", "retry": "Retry verification"},
   "common": {
     "signIn": "Sign in",
     "signOut": "Sign out",
@@ -117,6 +118,8 @@
     "followDevice": "Follow your device's instructions."
   },
   "errors": {
+    "turnstile_failed": "Complete the verification and try again.",
+    "turnstile_unavailable": "Signup verification is temporarily unavailable. Please try again.",
     "generic": "Something went wrong. Try again.",
     "invalid_credentials": "Sign-in failed. Check your username or email address and password.",
     "totp_required": "Enter the current six-digit code from your authenticator app, or an unused recovery code.",
