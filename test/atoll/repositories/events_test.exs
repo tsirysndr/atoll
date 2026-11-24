@@ -7,6 +7,27 @@ defmodule Atoll.Repositories.EventsTest do
   @path "com.example.record/self"
   @value %{"$type" => "com.example.record", "text" => "hello"}
 
+  @tag :postgres
+  test "maintenance skips a write lock held by another connection" do
+    supervisor = start_supervised!(Task.Supervisor)
+
+    assert {:ok, :ok} =
+             Repo.transaction(fn ->
+               Events.lock!()
+               assert Events.try_lock!()
+
+               task =
+                 Task.Supervisor.async_nolink(supervisor, fn ->
+                   Ecto.Adapters.SQL.Sandbox.unboxed_run(Repo, fn ->
+                     Repo.transaction(fn -> Events.try_lock!() end)
+                   end)
+                 end)
+
+               assert Task.await(task, 5000) == {:ok, false}
+               :ok
+             end)
+  end
+
   test "replays immutable commit transitions with exclusive bounded cursors" do
     key = SigningKey.generate()
     {:ok, initial} = Repositories.create(@did, key)

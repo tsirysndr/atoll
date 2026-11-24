@@ -21,7 +21,10 @@ defmodule Atoll.Readiness do
          match?(
            {:ok, %{rows: [[1]]}},
            Ecto.Adapters.SQL.query(repo.get_dynamic_repo(), "SELECT 1", [],
-             timeout: 1_000,
+             # A one-second client deadline was destroying healthy pooled TLS
+             # connections during startup bursts against remote PostgreSQL.
+             # Keep the probe bounded while allowing normal cross-region delay.
+             timeout: 5_000,
              # Wait briefly for a connection rather than refuse to queue for one.
              # SQLite runs a single connection, so a query in flight would
              # otherwise report a merely busy server as an unreachable one.

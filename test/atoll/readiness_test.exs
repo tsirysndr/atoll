@@ -51,6 +51,32 @@ defmodule Atoll.ReadinessTest do
     assert_receive :released, 5_000
   end
 
+  test "startup delays above one second do not destroy a healthy connection", %{pool: pool} do
+    parent = self()
+    supervisor = start_supervised!(Task.Supervisor)
+
+    task =
+      Task.Supervisor.async_nolink(supervisor, fn ->
+        Atoll.Repo.put_dynamic_repo(pool)
+
+        Atoll.Repo.transaction(fn ->
+          send(parent, :startup_connection_held)
+
+          receive do
+            :release_connection -> :ok
+          after
+            4000 -> raise "probe did not release its fixture connection"
+          end
+        end)
+      end)
+
+    assert_receive :startup_connection_held, 2000
+    Process.send_after(task.pid, :release_connection, 1200)
+    assert Atoll.Readiness.check() == :ready
+    assert {:ok, :ok} = Task.await(task, 5000)
+    assert Atoll.Readiness.check() == :ready
+  end
+
   test "an unreachable database is still reported as unavailable" do
     prior = Atoll.Repo.put_dynamic_repo(Atoll.UnavailableReadinessTestRepo)
 

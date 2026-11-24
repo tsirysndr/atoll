@@ -29,36 +29,58 @@ defmodule Atoll.Blobs.Cleanup do
          actor in ["operator", "worker"] do
       cutoff = DateTime.add(DateTime.utc_now(), -grace, :second)
 
-      Repo.transaction(fn ->
-        Atoll.Database.limits!(1_000, 5_000)
-        Events.lock!()
+      candidates = staged_candidates(cutoff, limit)
 
-        referenced =
-          from r in Reference,
-            where: r.did == parent_as(:blob).did and r.cid == parent_as(:blob).cid,
-            select: 1
+      if actor == "worker" and not Repo.exists?(candidates) do
+        {:ok, 0}
+      else
+        Repo.transaction(fn ->
+          Atoll.Database.limits!(1_000, 5_000)
+          cleanup_lock!(actor)
+          blobs = Repo.all(candidates)
 
-        blobs =
-          Repo.all(
-            from b in Blob,
-              as: :blob,
-              where: b.staged_at < ^cutoff,
-              where: not exists(subquery(referenced)),
-              order_by: [b.staged_at, b.did, b.cid],
-              limit: ^limit
-          )
+          enqueue!(blobs)
+          delete_expired!(blobs)
 
-        enqueue!(blobs)
-        Enum.each(blobs, &Repo.delete!/1)
+          if actor == "operator" or blobs != [],
+            do: Atoll.Moderation.Audit.staged_blob_expiration!(limit, grace, cutoff, blobs, actor)
 
-        if actor == "operator" or blobs != [],
-          do: Atoll.Moderation.Audit.staged_blob_expiration!(limit, grace, cutoff, blobs, actor)
-
-        length(blobs)
-      end)
+          length(blobs)
+        end)
+      end
     else
       {:error, :invalid_cleanup_options}
     end
+  rescue
+    error in [Postgrex.Error, Exqlite.Error] -> cleanup_error(error, __STACKTRACE__)
+  end
+
+  defp staged_candidates(cutoff, limit) do
+    referenced =
+      from r in Reference,
+        where: r.did == parent_as(:blob).did and r.cid == parent_as(:blob).cid,
+        select: 1
+
+    from b in Blob,
+      as: :blob,
+      where: b.staged_at < ^cutoff,
+      where: not exists(subquery(referenced)),
+      order_by: [b.staged_at, b.did, b.cid],
+      limit: ^limit
+  end
+
+  defp delete_expired!([]), do: :ok
+
+  defp delete_expired!(blobs) do
+    # Selection and deletion hold the publication lock. Delete this bounded
+    # set in one round trip instead of holding the lock across one DELETE for
+    # every expired upload.
+    selected =
+      Enum.reduce(blobs, dynamic(false), fn blob, selected ->
+        dynamic([b], ^selected or (b.did == ^blob.did and b.cid == ^blob.cid))
+      end)
+
+    Repo.delete_all(from b in Blob, where: ^selected)
   end
 
   @doc "Delete queued unowned bytes, using one transaction per item. Must not run inside a caller transaction."
@@ -90,64 +112,96 @@ defmodule Atoll.Blobs.Cleanup do
           collect_batch(jobs, limit, config, actor)
         end
     end
+  rescue
+    error in [Postgrex.Error, Exqlite.Error] -> cleanup_error(error, __STACKTRACE__)
   end
 
   defp collect_batch(jobs, limit, config, actor) do
     with {:ok, attempt} <-
-           audit_transaction(fn ->
-             Atoll.Moderation.Audit.blob_collection_attempt!(limit, jobs, actor)
-           end) do
-      counts =
-        Enum.reduce(jobs, %{deleted: 0, retained: 0, failed: 0, skipped: 0}, fn job, counts ->
-          {:ok, result} = collect_one(job, config, attempt.id, actor)
-          Map.update!(counts, result, &(&1 + 1))
+           audit_transaction(
+             fn ->
+               Atoll.Moderation.Audit.blob_collection_attempt!(limit, jobs, actor)
+             end,
+             actor
+           ) do
+      result =
+        Enum.reduce_while(jobs, {:ok, %{deleted: 0, retained: 0, failed: 0, skipped: 0}}, fn job,
+                                                                                             {:ok,
+                                                                                              counts} ->
+          case collect_one(job, config, attempt.id, actor) do
+            {:ok, result} -> {:cont, {:ok, Map.update!(counts, result, &(&1 + 1))}}
+            {:error, _} = error -> {:halt, error}
+          end
         end)
 
-      with {:ok, _} <-
-             audit_transaction(fn ->
-               Atoll.Moderation.Audit.blob_collection_completed!(attempt.id, counts, actor)
-             end),
+      with {:ok, counts} <- result,
+           {:ok, _} <-
+             audit_transaction(
+               fn ->
+                 Atoll.Moderation.Audit.blob_collection_completed!(attempt.id, counts, actor)
+               end,
+               actor
+             ),
            do: {:ok, counts}
     end
   end
 
-  defp audit_transaction(function) do
+  defp audit_transaction(function, actor) do
     Repo.transaction(fn ->
       Atoll.Database.limits!(1_000, 5_000)
+      if actor == "worker", do: cleanup_lock!(actor)
       function.()
     end)
   end
 
   defp collect_one(job, config, attempt_id, actor) do
-    audit_transaction(fn ->
-      Events.lock!()
-      current = Repo.get_by(CleanupJob, cid: job.cid, backend: job.backend)
+    audit_transaction(
+      fn ->
+        Events.lock!()
+        current = Repo.get_by(CleanupJob, cid: job.cid, backend: job.backend)
 
-      result =
-        cond do
-          is_nil(current) ->
-            :skipped
+        result =
+          cond do
+            is_nil(current) ->
+              :skipped
 
-          Repo.exists?(from b in Blob, where: b.cid == ^job.cid and b.backend == ^job.backend) ->
-            Repo.delete!(current)
-            :retained
+            Repo.exists?(from b in Blob, where: b.cid == ^job.cid and b.backend == ^job.backend) ->
+              Repo.delete!(current)
+              :retained
 
-          true ->
-            case delete_bytes(job, config) do
-              :ok ->
-                Repo.delete!(current)
-                :deleted
+            true ->
+              case delete_bytes(job, config) do
+                :ok ->
+                  Repo.delete!(current)
+                  :deleted
 
-              {:error, _} ->
-                # Move failures behind older work so one bad object cannot starve the queue.
-                current |> Ecto.Changeset.change(queued_at: DateTime.utc_now()) |> Repo.update!()
-                :failed
-            end
-        end
+                {:error, _} ->
+                  # Move failures behind older work so one bad object cannot starve the queue.
+                  current
+                  |> Ecto.Changeset.change(queued_at: DateTime.utc_now())
+                  |> Repo.update!()
 
-      Atoll.Moderation.Audit.blob_collection_item!(attempt_id, job, result, actor)
-      result
-    end)
+                  :failed
+              end
+          end
+
+        Atoll.Moderation.Audit.blob_collection_item!(attempt_id, job, result, actor)
+        result
+      end,
+      actor
+    )
+  end
+
+  defp cleanup_lock!("worker") do
+    unless Events.try_lock!(), do: Repo.rollback(:cleanup_busy)
+  end
+
+  defp cleanup_lock!(_actor), do: Events.lock!()
+
+  defp cleanup_error(error, stacktrace) do
+    if Atoll.Database.error_code(error) in [:lock_not_available, :query_canceled],
+      do: {:error, :cleanup_busy},
+      else: reraise(error, stacktrace)
   end
 
   defp delete_bytes(%{backend: :postgres, cid: cid}, _) do

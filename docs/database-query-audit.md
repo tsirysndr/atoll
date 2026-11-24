@@ -29,6 +29,7 @@ sites, not 328 distinct execution plans.
 | Record mutation | Batch generated MST nodes by 128 nodes or 1 MiB, verify existing conflicting bytes in batches, and stop fetching every generated node again. Trees remain canonical, atomic and quota checked. |
 | Record enumeration | Fetch at most 1025 metadata rows to use a single query for small repositories; larger repositories use bounded 1024-row streaming. |
 | Revision membership | PostgreSQL constructs the deduplicated ordered membership array from generated node CIDs, current indexed record CIDs and commit CID in one statement. SQLite retains transactional staging. |
+| Blob cleanup | Empty scheduled expiry batches avoid transactions and the global lock. Nonempty scheduled expiration and collection use a nonblocking lock attempt, returning `:cleanup_busy` for the next scheduled retry. Bounded expired ownership is deleted in one statement. Expected lock/statement contention does not crash the task, and pending jobs remain durable. |
 | Blob references | Skip reference deletion and withdrawal queries when no prior references exist. Blob-bearing records retain validation and ownership checks. |
 | Transaction setup | Set both local PostgreSQL timeout parameters in one parameterized query. Existing limits remain enforced. |
 | Migration startup | Probe a cold pool without queuing until a connection is usable (bounded to 60 seconds), before submitting migration DDL. This prevents normal checkout shedding from aborting a deployment during TLS connection startup. |
@@ -38,7 +39,7 @@ sites, not 328 distinct execution plans.
 | OAuth and replay admission | Existing primary-key/digest, expiry and session indexes cover the observed queries. Preserve atomic admission locks, bounded cleanup and authorization rechecks. |
 | Identity and signup workers | Existing lease keys, retry partial indexes and bounded batches cover their predicates. Preserve lease and publication ordering. |
 | Admin, invitations, preferences | Existing account, email, owner, usage and cursor indexes cover normal access; retain bounded pagination and consistent audit/authorization reads. |
-| Metrics and readiness | Inventory is already bounded and outside the request path; liveness/readiness and query deadlines remain distinct. |
+| Metrics and readiness | Inventory is already bounded and outside the request path. Readiness now permits five seconds for the remote pool instead of disconnecting healthy TLS connections at one second during startup; failed/unreachable probes still report unavailable. |
 
 PostgreSQL indexes are created concurrently; a matching SQLite migration is
 included. No stored records are changed by the migration.
@@ -62,3 +63,8 @@ readiness returned `:ready`. These measure the mutation path without an HTTP
 authorization round trip or a committed transaction; they are not end-to-end
 client latency measurements. The full precommit run passed 1662 tests (23
 excluded), and 64 targeted SQLite tests passed.
+
+Follow-up production logs identified one-second readiness connection disconnects
+at startup and an uncaught blob-expiration lock timeout. Regression tests now
+cover a healthy pool held for more than a second, a contended nonblocking
+maintenance lock, and empty scheduled blob expiration without lock acquisition.

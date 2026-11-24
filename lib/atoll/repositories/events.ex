@@ -8,15 +8,30 @@ defmodule Atoll.Repositories.Events do
   expected. Callers composing transactions must acquire this lock first too.
   Event retention is operator-controlled; referenced repository blocks remain retained.
   """
+  require Atoll.Database
   import Ecto.Query
   alias Atoll.{CBOR, Repo}
   alias Atoll.Repositories.{Event, EventEncoder, EventRetention, Head}
 
+  @lock_key 4_182_026_001
+
   @doc "Acquire before any repository mutation, inside its transaction."
   def lock! do
     unless Repo.in_transaction?(), do: raise(ArgumentError, "event lock requires a transaction")
-    Atoll.Database.serialize_writes!(4_182_026_001)
+    Atoll.Database.serialize_writes!(@lock_key)
     :ok
+  end
+
+  @doc "Attempt background maintenance without queuing behind repository writes."
+  def try_lock! do
+    unless Repo.in_transaction?(), do: raise(ArgumentError, "event lock requires a transaction")
+
+    if Atoll.Database.postgres?() do
+      %{rows: [[acquired]]} = Repo.query!("SELECT pg_try_advisory_xact_lock($1)", [@lock_key])
+      acquired
+    else
+      true
+    end
   end
 
   @doc false

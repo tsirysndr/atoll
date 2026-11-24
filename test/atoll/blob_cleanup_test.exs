@@ -126,6 +126,30 @@ defmodule Atoll.BlobCleanupTest do
              "private body"
   end
 
+  test "empty scheduled expiration never requests the repository write lock" do
+    owner = self()
+    handler = {__MODULE__, make_ref()}
+    tag = make_ref()
+
+    :telemetry.attach(
+      handler,
+      [:atoll, :repo, :query],
+      fn _, _, meta, _ ->
+        send(owner, {tag, meta.query})
+      end,
+      nil
+    )
+
+    try do
+      assert Cleanup.expire_staged(actor: "worker") == {:ok, 0}
+      assert_receive {^tag, query}
+      assert query =~ "repository_blobs"
+      refute_receive {^tag, _}
+    after
+      :telemetry.detach(handler)
+    end
+  end
+
   test "operator no-ops are recorded while empty worker batches are quiet" do
     assert Cleanup.expire_staged(actor: "worker") == {:ok, 0}
     assert Repo.aggregate(AuditEntry, :count) == 0
