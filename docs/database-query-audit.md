@@ -37,7 +37,7 @@ sites, not 328 distinct execution plans.
 | Ordered record queries | Add `(did, path COLLATE "C") INCLUDE (cid)` to match bytewise ordering and allow index-only lookup. |
 | Block deletion / ownership checks | Add referencing-side indexes on record CID, repository head and revision head. PostgreSQL does not automatically index foreign-key referencing columns. |
 | OAuth and replay admission | Existing primary-key/digest, expiry and session indexes cover the observed queries. Preserve atomic admission locks, bounded cleanup and authorization rechecks. |
-| Identity and signup workers | Existing lease keys, retry partial indexes and bounded batches cover their predicates. Preserve lease and publication ordering. |
+| Identity and signup workers | Unchanged automatic identity refreshes use one primary read that validates the current fingerprint and lease, avoiding the publication transaction and global lock. Changed automatic refreshes try the publication lock without waiting; database failures return an unavailable result for scheduled recovery. Authenticated refreshes still recheck authorization under locks, and changed publications retain lease fencing. The worker budget is 45 seconds, below the 60-second lease, for network resolution plus bounded database operations. Existing signup retry indexes and leases remain. |
 | Admin, invitations, preferences | Existing account, email, owner, usage and cursor indexes cover normal access; retain bounded pagination and consistent audit/authorization reads. |
 | Metrics and readiness | Inventory is already bounded and outside the request path. Readiness now permits five seconds for the remote pool instead of disconnecting healthy TLS connections at one second during startup; failed/unreachable probes still report unavailable. |
 
@@ -68,3 +68,12 @@ Follow-up production logs identified one-second readiness connection disconnects
 at startup and an uncaught blob-expiration lock timeout. Regression tests now
 cover a healthy pool held for more than a second, a contended nonblocking
 maintenance lock, and empty scheduled blob expiration without lock acquisition.
+
+A later identity-refresh error waited for COMMIT until the 15-second connection
+checkout deadline. Network resolution was already outside its transaction;
+the avoidable transaction was also used for unchanged identities. The automatic
+no-op path now performs no publication transaction or COMMIT. Changed identity
+publication remains atomic and fenced, and an uncertain commit is never blindly
+replayed: a subsequent sweep compares the persisted fingerprint before emitting
+an event. Regression coverage checks no-op SQL, expired-lease rejection and
+rollback/recovery after a simulated PostgreSQL publication failure.

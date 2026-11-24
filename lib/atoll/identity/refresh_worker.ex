@@ -26,7 +26,10 @@ defmodule Atoll.Identity.RefreshWorker do
       refresh: Keyword.get(opts, :refresh, &RefreshLeases.refresh/1),
       interval: Keyword.get(opts, :interval, 300_000),
       spacing: Keyword.get(opts, :spacing, 1000),
-      timeout: Keyword.get(opts, :timeout, 20_000)
+      # Network resolution and several bounded database operations share this
+      # budget. Keep it below the 60-second lease while allowing completion and
+      # connection cleanup rather than killing a valid task at 20 seconds.
+      timeout: Keyword.get(opts, :timeout, 45_000)
     }
 
     {:ok, schedule(state, Keyword.get(opts, :start_after, 1000))}

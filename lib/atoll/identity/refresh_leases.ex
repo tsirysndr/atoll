@@ -82,6 +82,36 @@ defmodule Atoll.Identity.RefreshLeases do
     end
   end
 
+  @doc "Read-only automatic no-op check; never authorizes or publishes a change."
+  def unchanged_current?(did, token, fingerprint) do
+    # One primary-database statement checks the live observation, repository
+    # and lease together. No mutation, global lock or explicit COMMIT is needed
+    # when the freshly resolved identity already matches persisted state.
+    %{num_rows: rows} =
+      Repo.query!(
+        Atoll.Database.sql(
+          """
+          SELECT 1 FROM repository_identities i
+          JOIN repositories r ON r.did = i.did
+          JOIN identity_refresh_leases l ON l.did = i.did
+          WHERE i.did = $1 AND i.fingerprint = $2 AND l.token = $3
+            AND l.leased_until > clock_timestamp()
+          """,
+          """
+          SELECT 1 FROM repository_identities i
+          JOIN repositories r ON r.did = i.did
+          JOIN identity_refresh_leases l ON l.did = i.did
+          WHERE i.did = ?1 AND i.fingerprint = ?2 AND l.token = ?3
+            AND l.leased_until > strftime('%Y-%m-%dT%H:%M:%f000', 'now')
+          """
+        ),
+        [did, Atoll.Database.blob(fingerprint), Atoll.Database.blob(token)],
+        log: false
+      )
+
+    rows == 1
+  end
+
   @doc "Checks ownership inside the publication transaction, after event and repository locks."
   def assert_current!(did, token) do
     unless Repo.in_transaction?(),

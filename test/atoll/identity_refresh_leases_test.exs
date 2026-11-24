@@ -106,6 +106,87 @@ defmodule Atoll.IdentityRefreshLeasesTest do
              end)
   end
 
+  test "unchanged automatic refreshes do not acquire publication locks or commit", c do
+    assert {:ok, :published} = RefreshLeases.refresh(@did, c.opts)
+    expire()
+    assert {:ok, token} = RefreshLeases.claim(@did)
+    owner = self()
+    tag = make_ref()
+    handler = {__MODULE__, tag}
+
+    :telemetry.attach(
+      handler,
+      [:atoll, :repo, :query],
+      fn _, _, meta, _ ->
+        send(owner, {tag, meta.query})
+      end,
+      nil
+    )
+
+    try do
+      assert {:ok, :unchanged} = Updates.refresh(@did, Keyword.put(c.opts, :refresh_lease, token))
+      queries = queries(tag, [])
+
+      refute Enum.any?(queries, fn query ->
+               query in ["begin", "commit"] or String.contains?(query, "advisory") or
+                 String.contains?(query, "FOR UPDATE")
+             end)
+    after
+      :telemetry.detach(handler)
+    end
+  end
+
+  test "unchanged identities still reject an expired automatic lease", c do
+    assert {:ok, :published} = RefreshLeases.refresh(@did, c.opts)
+    expire()
+    assert {:ok, token} = RefreshLeases.claim(@did)
+    expire()
+    seq = Events.latest_seq()
+
+    assert {:error, :stale_refresh_lease} =
+             Updates.refresh(@did, Keyword.put(c.opts, :refresh_lease, token))
+
+    assert Events.latest_seq() == seq
+  end
+
+  @tag :postgres
+  test "database publication failure returns an error and leaves no partial event", c do
+    {:ok, token} = RefreshLeases.claim(@did)
+    seq = Events.latest_seq()
+
+    assert {:error, :restore} =
+             Repo.transaction(fn ->
+               Repo.query!("""
+               CREATE FUNCTION reject_test_identity_refresh() RETURNS trigger LANGUAGE plpgsql AS $$
+               BEGIN
+                 RAISE EXCEPTION 'simulated identity statement timeout' USING ERRCODE = '57014';
+               END;
+               $$
+               """)
+
+               Repo.query!(
+                 "CREATE TRIGGER reject_test_identity_refresh BEFORE INSERT ON repository_identities FOR EACH ROW EXECUTE FUNCTION reject_test_identity_refresh()"
+               )
+
+               assert {:error, :identity_refresh_unavailable} =
+                        Updates.refresh(@did, Keyword.put(c.opts, :refresh_lease, token))
+
+               Repo.rollback(:restore)
+             end)
+
+    assert Repo.get(Observation, @did) == nil
+    assert Events.latest_seq() == seq
+    assert {:ok, :published} = Updates.refresh(@did, Keyword.put(c.opts, :refresh_lease, token))
+  end
+
+  defp queries(tag, acc) do
+    receive do
+      {^tag, query} -> queries(tag, [query | acc])
+    after
+      0 -> acc
+    end
+  end
+
   defp expire,
     do:
       Repo.query!(

@@ -65,7 +65,9 @@ defmodule AtollWeb.IdentityController do
              :invalid_did,
              :unsupported_did_method,
              :did_document_too_large,
-             :stale_identity_refresh
+             :stale_identity_refresh,
+             :identity_refresh_busy,
+             :identity_refresh_unavailable
            ] ->
         AtollWeb.XRPCFallback.call(conn, {:error, :identity_unavailable})
 
@@ -114,7 +116,9 @@ defmodule AtollWeb.IdentityController do
              :invalid_did,
              :unsupported_did_method,
              :did_document_too_large,
-             :stale_identity_refresh
+             :stale_identity_refresh,
+             :identity_refresh_busy,
+             :identity_refresh_unavailable
            ] ->
         AtollWeb.XRPCFallback.call(conn, {:error, :identity_unavailable})
 

@@ -78,44 +78,65 @@ defmodule Atoll.Identity.Updates do
             })
           )
 
-        Repo.transaction(fn ->
-          Events.lock!()
-          head = Repo.one(from h in Head, where: h.did == ^did, lock: "FOR UPDATE")
-          unless head, do: Repo.rollback(:not_found)
-
-          if Keyword.has_key?(opts, :refresh_lease),
-            do: Atoll.Identity.RefreshLeases.assert_current!(did, opts[:refresh_lease])
-
-          if token do
-            case Atoll.Identity.OAuthAuthorization.authenticate(token, :refresh_identity) do
-              {:ok, %{did: ^did}} -> :ok
-              {:error, reason} -> Repo.rollback(reason)
-            end
-          end
-
-          current = Repo.get(Observation, did)
-
-          outcome =
-            cond do
-              current && current.fingerprint == fingerprint ->
-                :unchanged
-
-              current != prior ->
-                Repo.rollback(:stale_identity_refresh)
-
-              true ->
-                Repo.insert!(%Observation{did: did, handle: handle, fingerprint: fingerprint},
-                  on_conflict: {:replace, [:handle, :fingerprint]},
-                  conflict_target: [:did]
-                )
-
-                Events.append!(:identity, head, %{"handle" => handle})
-                :published
+        if is_nil(token) and Keyword.has_key?(opts, :refresh_lease) and
+             Atoll.Identity.RefreshLeases.unchanged_current?(
+               did,
+               opts[:refresh_lease],
+               fingerprint
+             ) do
+          {:ok,
+           %{outcome: :unchanged, info: %{did: did, handle: handle, didDoc: identity.document}}}
+        else
+          Repo.transaction(fn ->
+            if Keyword.has_key?(opts, :refresh_lease) do
+              Atoll.Database.limits!(1_000, 5_000)
+              unless Events.try_lock!(), do: Repo.rollback(:identity_refresh_busy)
+            else
+              Events.lock!()
             end
 
-          %{outcome: outcome, info: %{did: did, handle: handle, didDoc: identity.document}}
-        end)
+            head = Repo.one(from h in Head, where: h.did == ^did, lock: "FOR UPDATE")
+            unless head, do: Repo.rollback(:not_found)
+
+            if Keyword.has_key?(opts, :refresh_lease),
+              do: Atoll.Identity.RefreshLeases.assert_current!(did, opts[:refresh_lease])
+
+            if token do
+              case Atoll.Identity.OAuthAuthorization.authenticate(token, :refresh_identity) do
+                {:ok, %{did: ^did}} -> :ok
+                {:error, reason} -> Repo.rollback(reason)
+              end
+            end
+
+            current = Repo.get(Observation, did)
+
+            outcome =
+              cond do
+                current && current.fingerprint == fingerprint ->
+                  :unchanged
+
+                current != prior ->
+                  Repo.rollback(:stale_identity_refresh)
+
+                true ->
+                  Repo.insert!(%Observation{did: did, handle: handle, fingerprint: fingerprint},
+                    on_conflict: {:replace, [:handle, :fingerprint]},
+                    conflict_target: [:did]
+                  )
+
+                  Events.append!(:identity, head, %{"handle" => handle})
+                  :published
+              end
+
+            %{outcome: outcome, info: %{did: did, handle: handle, didDoc: identity.document}}
+          end)
+        end
       end
     end
+  rescue
+    _ in [Postgrex.Error, Exqlite.Error, DBConnection.ConnectionError] ->
+      # COMMIT acknowledgement loss is ambiguous. Do not blindly replay a
+      # publication; the next leased sweep checks the persisted fingerprint.
+      {:error, :identity_refresh_unavailable}
   end
 end
