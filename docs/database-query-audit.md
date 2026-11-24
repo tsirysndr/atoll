@@ -31,6 +31,7 @@ sites, not 328 distinct execution plans.
 | Revision membership | PostgreSQL constructs the deduplicated ordered membership array from generated node CIDs, current indexed record CIDs and commit CID in one statement. SQLite retains transactional staging. |
 | Blob references | Skip reference deletion and withdrawal queries when no prior references exist. Blob-bearing records retain validation and ownership checks. |
 | Transaction setup | Set both local PostgreSQL timeout parameters in one parameterized query. Existing limits remain enforced. |
+| Migration startup | Probe a cold pool without queuing until a connection is usable (bounded to 60 seconds), before submitting migration DDL. This prevents normal checkout shedding from aborting a deployment during TLS connection startup. |
 | Session cleanup | Empty scheduled batches avoid the global event lock. Expected lock contention returns a busy result for later retry instead of crashing the worker task. Manual audit and rollback behavior remain. |
 | Ordered record queries | Add `(did, path COLLATE "C") INCLUDE (cid)` to match bytewise ordering and allow index-only lookup. |
 | Block deletion / ownership checks | Add referencing-side indexes on record CID, repository head and revision head. PostgreSQL does not automatically index foreign-key referencing columns. |
@@ -52,3 +53,12 @@ unlocked query.
 Query count and lock pressure are reduced, but a remote database or network
 outage can still fail a write. The database remains a synchronous dependency;
 these changes do not promise zero timeouts under every failure condition.
+
+Production verification: all four new indexes were valid and the migration
+version was `20261124091601`. Three internal single-record writes against the
+reported account, each inside an outer rolled-back transaction, took 4699,
+4620 and 5589 ms with 17 SQL calls each. The account head was unchanged and
+readiness returned `:ready`. These measure the mutation path without an HTTP
+authorization round trip or a committed transaction; they are not end-to-end
+client latency measurements. The full precommit run passed 1662 tests (23
+excluded), and 64 targeted SQLite tests passed.
