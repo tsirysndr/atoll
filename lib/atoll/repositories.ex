@@ -346,39 +346,38 @@ defmodule Atoll.Repositories do
         Atoll.Blobs.References.apply_writes!(did, prepared, rev)
         Enum.each(prepared, &persist_record!(did, &1))
 
-        records =
+        query =
           from(r in Record,
             where: r.did == ^did,
             order_by:
               Atoll.Database.sql_fragment("? COLLATE \"C\"", "? COLLATE BINARY", [r.path]),
             select: {r.path, r.cid}
           )
-          |> Repo.stream(max_rows: 128)
 
-        root =
-          case MST.Builder.build(records, &Storage.put_block/2) do
-            {:ok, root} -> root
-            {:error, _} -> Repo.rollback(:invalid_repository)
-          end
+        # Small repositories fit a fixed metadata budget and need one SELECT,
+        # rather than cursor declaration/fetch/close round trips. Large ones
+        # retain bounded streaming construction.
+        sample = Repo.all(from r in query, limit: 1025)
+        records = if length(sample) <= 1024, do: sample, else: Repo.stream(query, max_rows: 1024)
 
-        {:ok, commit} = Commit.create(did, root, rev, key)
-        :ok = Storage.put_block(commit.cid, commit.bytes)
-        updated_head = head |> Ecto.Changeset.change(head: commit.cid, rev: rev) |> Repo.update!()
+        Atoll.Repositories.WriteTree.with_tree(records, fn root, nodes ->
+          {:ok, commit} = Commit.create(did, root, rev, key)
+          :ok = Storage.put_block(commit.cid, commit.bytes)
 
-        cids =
-          MST.Traversal.stream(root, &Storage.get_block/1)
-          |> Stream.map(fn
-            {:node, cid, _} -> cid
-            {:record, _, cid} -> cid
-          end)
+          updated_head =
+            head |> Ecto.Changeset.change(head: commit.cid, rev: rev) |> Repo.update!()
 
-        Atoll.Repositories.RevisionMembership.insert!(updated_head, cids)
+          # Builder output is already the canonical reachable node set. Include
+          # indexed record CIDs directly instead of traversing and fetching every
+          # freshly built node from the remote database again.
+          Atoll.Repositories.RevisionMembership.insert_built!(updated_head, nodes)
 
-        payload =
-          Map.put(event_head(updated_head, head), "ops", event_ops(prepared, previous_records))
+          payload =
+            Map.put(event_head(updated_head, head), "ops", event_ops(prepared, previous_records))
 
-        Events.append!(:commit, updated_head, payload)
-        updated_head
+          Events.append!(:commit, updated_head, payload)
+          updated_head
+        end)
       end)
     end
   rescue

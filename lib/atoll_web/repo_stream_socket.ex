@@ -51,14 +51,19 @@ defmodule AtollWeb.RepoStreamSocket do
     do: {:stop, {:shutdown, :restart}, state}
 
   def handle_info(:drain, state) do
-    floor = EventRetention.bounds().floor
-    if state.cursor < floor, do: outdated(state, floor), else: drain(state)
+    %{floor: floor, latest: latest} = EventRetention.bounds()
+
+    cond do
+      state.cursor < floor -> outdated(state, floor)
+      state.cursor >= latest -> idle(state)
+      true -> drain(state, latest)
+    end
   end
 
   def handle_info(_, state), do: {:ok, state}
 
-  defp drain(state) do
-    if Events.backlog_exceeded?(state.cursor) do
+  defp drain(state, latest) do
+    if latest - state.cursor > 10_000 and Events.backlog_exceeded?(state.cursor) do
       stop("ConsumerTooSlow", "Replay backlog exceeds 10000 events", state)
     else
       case Events.next_frame(state.cursor) do
@@ -69,8 +74,7 @@ defmodule AtollWeb.RepoStreamSocket do
           {:ok, schedule(%{state | cursor: seq, idle: 0}, 0)}
 
         {:ok, :idle} ->
-          next = schedule(%{state | idle: rem(state.idle + 1, 30)}, 500)
-          if next.idle == 0, do: {:push, {:ping, ""}, next}, else: {:ok, next}
+          idle(state)
 
         {:error, :outdated_cursor} ->
           outdated(state, EventRetention.bounds().floor)
@@ -79,6 +83,14 @@ defmodule AtollWeb.RepoStreamSocket do
           stop("InternalServerError", "Unable to read repository event", state)
       end
     end
+  end
+
+  # A caught-up subscriber needs only the bounds query. Opening transactions,
+  # locking the retention floor and counting an empty backlog on every 500ms
+  # tick multiplied into millions of queries and delayed retention and writes.
+  defp idle(state) do
+    next = schedule(%{state | idle: rem(state.idle + 1, 30)}, 500)
+    if next.idle == 0, do: {:push, {:ping, ""}, next}, else: {:ok, next}
   end
 
   defp outdated(state, floor) do

@@ -1,5 +1,7 @@
 defmodule Atoll.Repositories.RevisionMembership do
   @moduledoc "Stages verified revision CIDs in the database without accumulating a membership list."
+  require Atoll.Database
+  import Ecto.Query
   alias Atoll.Repo
 
   @doc "Internal API: callers must hold the repository write lock and supply verified reachable CIDs."
@@ -52,6 +54,44 @@ defmodule Atoll.Repositories.RevisionMembership do
 
     query!("DROP TABLE #{table}", [])
     Atoll.Repositories.Quota.check!(head.did)
+  end
+
+  @doc "Persist a builder's verified nodes and the current indexed records in one statement."
+  def insert_built!(head, nodes) do
+    unless Repo.in_transaction?(),
+      do: raise(ArgumentError, "revision staging requires a transaction")
+
+    if Atoll.Database.postgres?() do
+      query!(
+        """
+        INSERT INTO repository_revisions
+          (did, rev, head, signing_curve, signing_public_key, blocks, inserted_at)
+        SELECT $1, $2, $3, $4, $5,
+          ARRAY(SELECT cid FROM (
+            SELECT unnest($6::bytea[]) AS cid
+            UNION SELECT cid FROM repository_records WHERE did = $1
+            UNION SELECT $3::bytea
+          ) AS membership ORDER BY cid),
+          CURRENT_TIMESTAMP AT TIME ZONE 'UTC'
+        """,
+        [
+          head.did,
+          head.rev,
+          head.head,
+          Atom.to_string(head.curve),
+          head.public_key,
+          Enum.to_list(nodes)
+        ]
+      )
+
+      Atoll.Repositories.Quota.check!(head.did)
+    else
+      records =
+        from(r in Atoll.Repositories.Record, where: r.did == ^head.did, select: r.cid)
+        |> Repo.stream(max_rows: 1024)
+
+      insert!(head, Stream.concat(nodes, records))
+    end
   end
 
   defp query!(sql, params), do: Ecto.Adapters.SQL.query!(Repo, sql, params)

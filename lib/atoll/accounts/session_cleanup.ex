@@ -12,6 +12,16 @@ defmodule Atoll.Accounts.SessionCleanup do
   def prune_expired(limit, actor) when is_integer(limit) and limit in 1..1000 do
     cutoff = System.system_time(:second)
 
+    if actor == "worker" and not Repo.exists?(from s in Session, where: s.expires_at <= ^cutoff) do
+      {:ok, 0}
+    else
+      prune_batch(limit, actor, cutoff)
+    end
+  end
+
+  def prune_expired(_, _), do: {:error, :invalid_limit}
+
+  defp prune_batch(limit, actor, cutoff) do
     Repo.transaction(fn ->
       Atoll.Database.limits!(1_000, 5_000)
       # Audit insertion uses the event lock. Acquire it before session locks to
@@ -42,7 +52,10 @@ defmodule Atoll.Accounts.SessionCleanup do
 
       count
     end)
+  rescue
+    error in [Postgrex.Error, Exqlite.Error] ->
+      if Atoll.Database.error_code(error) in [:lock_not_available, :query_canceled],
+        do: {:error, :session_cleanup_busy},
+        else: reraise(error, __STACKTRACE__)
   end
-
-  def prune_expired(_, _), do: {:error, :invalid_limit}
 end

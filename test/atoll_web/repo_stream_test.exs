@@ -138,6 +138,33 @@ defmodule AtollWeb.RepoStreamTest do
     Socket.terminate(:normal, next)
   end
 
+  test "caught-up polling performs one unlocked query and keeps detecting new commits" do
+    {:ok, _} = Repositories.create(@did, SigningKey.generate())
+    cursor = Events.latest_seq()
+    owner = self()
+    handler = {__MODULE__, make_ref()}
+
+    :telemetry.attach(
+      handler,
+      [:atoll, :repo, :query],
+      fn _, _, meta, _ ->
+        send(owner, {:poll_query, meta.query})
+      end,
+      nil
+    )
+
+    try do
+      assert {:ok, next} = Socket.handle_info(:drain, %{cursor: cursor, idle: 0})
+      Socket.terminate(:normal, next)
+      assert_receive {:poll_query, query}
+      assert query =~ "cursor_floor"
+      refute query =~ "FOR SHARE"
+      refute_receive {:poll_query, _}
+    after
+      :telemetry.detach(handler)
+    end
+  end
+
   defp handshake(conn) do
     %{conn | req_headers: [{"host", conn.host} | conn.req_headers]}
     |> put_req_header("connection", "upgrade")

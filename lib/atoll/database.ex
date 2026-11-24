@@ -68,8 +68,11 @@ defmodule Atoll.Database do
 
   def read_limits!(lock_ms \\ 1_000, statement_ms \\ 5_000) do
     if @adapter == :postgres do
-      Atoll.Repo.read_query!("SET LOCAL lock_timeout = '#{lock_ms}ms'", [], log: false)
-      Atoll.Repo.read_query!("SET LOCAL statement_timeout = '#{statement_ms}ms'", [], log: false)
+      Atoll.Repo.read_query!(
+        "SELECT set_config('lock_timeout', $1, true), set_config('statement_timeout', $2, true)",
+        ["#{lock_ms}ms", "#{statement_ms}ms"],
+        log: false
+      )
     end
 
     :ok
@@ -78,8 +81,12 @@ defmodule Atoll.Database do
   if @adapter == :postgres do
     @doc "Bound the current transaction's lock wait and statement duration."
     def limits!(lock_ms \\ 1_000, statement_ms \\ 5_000) do
-      Atoll.Repo.query!("SET LOCAL lock_timeout = '#{lock_ms}ms'")
-      Atoll.Repo.query!("SET LOCAL statement_timeout = '#{statement_ms}ms'")
+      Atoll.Repo.query!(
+        "SELECT set_config('lock_timeout', $1, true), set_config('statement_timeout', $2, true)",
+        ["#{lock_ms}ms", "#{statement_ms}ms"],
+        log: false
+      )
+
       :ok
     end
 

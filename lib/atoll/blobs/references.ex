@@ -10,7 +10,8 @@ defmodule Atoll.Blobs.References do
     prior =
       Repo.all(from r in Reference, where: r.did == ^did and r.path in ^paths, select: r.cid)
 
-    Repo.delete_all(from r in Reference, where: r.did == ^did and r.path in ^paths)
+    if prior != [],
+      do: Repo.delete_all(from r in Reference, where: r.did == ^did and r.path in ^paths)
 
     for {action, path, _, bytes} <- prepared,
         action != :delete,
@@ -107,6 +108,8 @@ defmodule Atoll.Blobs.References do
   defp collect(value, acc) when is_map(value), do: Enum.reduce(Map.values(value), acc, &collect/2)
   defp collect(value, acc) when is_list(value), do: Enum.reduce(value, acc, &collect/2)
   defp collect(_, acc), do: acc
+
+  defp withdraw!(_did, []), do: :ok
 
   defp withdraw!(did, cids) do
     # Removing ownership and enqueueing byte cleanup are one transaction.

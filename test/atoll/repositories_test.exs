@@ -177,6 +177,58 @@ defmodule Atoll.RepositoriesTest do
     assert Atoll.Repositories.Events.latest_seq() == seq
   end
 
+  test "large trees use batched SQL and retain exact revision membership", c do
+    writes = for n <- 1..200, do: {:put, "com.example.record/key#{n}", @value}
+    assert {:ok, _} = Repositories.apply_writes(@did, writes, c.key)
+    owner = self()
+    handler = {__MODULE__, make_ref()}
+    tag = make_ref()
+
+    :telemetry.attach(
+      handler,
+      [:atoll, :repo, :query],
+      fn _, _, meta, _ ->
+        send(owner, {tag, meta.query})
+      end,
+      nil
+    )
+
+    try do
+      assert {:ok, head} = Repositories.apply_writes(@did, [{:put, @path, @value}], c.key)
+      queries = collect_queries(tag, [])
+      assert length(queries) < 50
+
+      refute Enum.any?(
+               queries,
+               &String.contains?(&1, ~s|FROM "blocks" AS b0 WHERE (b0."cid" = $1)|)
+             )
+
+      records =
+        Repo.all(
+          from r in Atoll.Repositories.Record, where: r.did == @did, select: {r.path, r.cid}
+        )
+        |> Map.new()
+
+      assert {:ok, tree} = MST.new(records)
+      assert {:ok, commit} = Storage.get_node(head.head)
+      assert commit["data"].cid == tree.root
+      revision = Repo.get_by!(Atoll.Repositories.Revision, did: @did, rev: head.rev)
+
+      assert MapSet.new(revision.blocks) ==
+               MapSet.new([head.head | Map.keys(tree.blocks) ++ Map.values(records)])
+    after
+      :telemetry.detach(handler)
+    end
+  end
+
+  defp collect_queries(tag, acc) do
+    receive do
+      {^tag, query} -> collect_queries(tag, [query | acc])
+    after
+      0 -> acc
+    end
+  end
+
   test "rejects duplicate paths, mismatched types, invalid values and oversized records", %{
     key: key
   } do
