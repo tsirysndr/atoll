@@ -136,7 +136,11 @@ defmodule Atoll.Repositories.Writes do
     end
   end
 
-  defp publication_transaction(fun), do: Repo.transaction(fn -> Events.with_lock(fun) end)
+  # DBConnection's deadline covers queueing plus every network round trip in
+  # the transaction, rather than just one SQL statement. Keep SQL lock/statement
+  # limits intact while allowing a valid remote-database publication to finish.
+  defp publication_transaction(fun),
+    do: Repo.transaction(fn -> Events.with_lock(fun) end, timeout: 60_000)
 
   defp claims(%Atoll.OAuth.WriteCredential{} = credential, action) do
     with {:ok, principal} <- Atoll.OAuth.Resource.recheck(credential, action),
