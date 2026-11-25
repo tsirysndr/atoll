@@ -145,7 +145,7 @@ defmodule AtollWeb.OAuthRecordWriteTest do
     try do
       assert write(c, "createRecord", body(c, "budget")) |> json_response(200)
       count = drain_query_count(0)
-      assert count <= 60, "publication required #{count} database round trips (budget 60)"
+      assert count <= 50, "publication required #{count} database round trips (budget 50)"
     after
       :telemetry.detach(handler)
     end

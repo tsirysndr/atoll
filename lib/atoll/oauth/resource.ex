@@ -288,27 +288,26 @@ defmodule Atoll.OAuth.Resource do
   defp locked_read(access, candidate, reader, opts) do
     Repo.transaction(fn ->
       Atoll.Database.limits!(1_000, 5_000)
-      head = Repo.one(from h in Head, where: h.did == ^candidate.did, lock: "FOR SHARE")
-
-      if is_nil(head) or head.status != :active or Signup.pending?(head.did),
-        do: Repo.rollback(:invalid_token)
-
-      source =
+      # Lock the same primary rows in one round trip. All four are required
+      # for authorization; a missing join is the same invalid-token outcome as
+      # a missing row in the separate reads. FOR SHARE covers every joined row.
+      {head, source, session, current} =
         Repo.one(
-          from(s in AccountSession,
-            where: s.id == ^candidate.source_session_id and s.did == ^candidate.did,
+          from(h in Head,
+            join: source in AccountSession,
+            on: source.id == ^candidate.source_session_id and source.did == ^candidate.did,
+            join: session in Session,
+            on: session.id == ^candidate.id,
+            join: current in AccessToken,
+            on: current.digest == ^access.digest,
+            where: h.did == ^candidate.did,
+            select: {h, source, session, current},
             lock: "FOR SHARE"
           ),
           log: false
-        )
+        ) || Repo.rollback(:invalid_token)
 
-      session =
-        Repo.one(from(s in Session, where: s.id == ^candidate.id, lock: "FOR SHARE"), log: false)
-
-      current =
-        Repo.one(from(t in AccessToken, where: t.digest == ^access.digest, lock: "FOR SHARE"),
-          log: false
-        )
+      if head.status != :active or Signup.pending?(head.did), do: Repo.rollback(:invalid_token)
 
       now = Atoll.Database.now_seconds!()
 
