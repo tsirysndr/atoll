@@ -7,17 +7,17 @@ defmodule Atoll.Repositories.Writes do
   @batch_type "com.atproto.repo.applyWrites#"
 
   def batch(token, body) when is_map(body) do
-    with {:ok, claims} <- claims(token, :batch),
+    with {:ok, claims, admitted} <- claims(token, :batch),
          :ok <- batch_parameters(body),
          {:ok, _} <- batch_operations(Map.put(body, "validate", false), %{}),
          {:ok, commit} <- swap(body, "swapCommit", false),
          {:ok, did} <- repository_did(body["repo"]),
          true <- did == claims["sub"],
-         {:ok, principal} <- authenticate(token, :batch),
+         {:ok, principal} <- authenticate_admitted(token, :batch, admitted),
          :ok <- permissions(token, principal, :batch, body),
          {:ok, catalog} <- Atoll.Lexicon.WriteValidation.catalog(body, :batch),
          {:ok, writes} <- batch_operations(body, catalog) do
-      Repo.transaction(fn ->
+      publication_transaction(fn ->
         did = claims["sub"]
         head = authorize!(token, did, :batch, body)
         if commit != :any and commit != head.head, do: Repo.rollback(:invalid_swap)
@@ -136,12 +136,23 @@ defmodule Atoll.Repositories.Writes do
     end
   end
 
+  defp publication_transaction(fun), do: Repo.transaction(fn -> Events.with_lock(fun) end)
+
   defp claims(%Atoll.OAuth.WriteCredential{} = credential, action) do
     with {:ok, principal} <- Atoll.OAuth.Resource.recheck(credential, action),
-         do: {:ok, %{"sub" => principal.did}}
+         do: {:ok, %{"sub" => principal.did}, principal}
   end
 
-  defp claims(token, _action), do: Tokens.verify(token, :access)
+  defp claims(token, _action) do
+    with {:ok, claims} <- Tokens.verify(token, :access), do: {:ok, claims, nil}
+  end
+
+  # OAuth claim admission already performed the full locked authorization read.
+  # Reuse that result for preflight permissions instead of repeating it before
+  # schema lookup. authorize!/4 still rechecks revocation and scope under the
+  # final write locks, after all external validation has completed.
+  defp authenticate_admitted(_token, _action, %{} = principal), do: {:ok, principal}
+  defp authenticate_admitted(token, action, nil), do: authenticate(token, action)
 
   defp authenticate(%Atoll.OAuth.WriteCredential{} = credential, action),
     do: Atoll.OAuth.Resource.recheck(credential, action)
@@ -191,17 +202,17 @@ defmodule Atoll.Repositories.Writes do
   end
 
   def write(token, action, body) when action in [:create, :put, :delete] and is_map(body) do
-    with {:ok, claims} <- claims(token, action),
+    with {:ok, claims, admitted} <- claims(token, action),
          :ok <- parameters(action, body),
          {:ok, commit} <- swap(body, "swapCommit", false),
          {:ok, record} <- record_swap(action, body),
          {:ok, did} <- repository_did(body["repo"]),
          true <- did == claims["sub"],
-         {:ok, principal} <- authenticate(token, action),
+         {:ok, principal} <- authenticate_admitted(token, action, admitted),
          :ok <- permissions(token, principal, action, body),
          {:ok, catalog} <- Atoll.Lexicon.WriteValidation.catalog(body, action),
          {:ok, validation} <- record_validation(action, body, catalog) do
-      Repo.transaction(fn ->
+      publication_transaction(fn ->
         did = claims["sub"]
         head = authorize!(token, did, action, body)
 

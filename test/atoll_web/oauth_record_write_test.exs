@@ -129,6 +129,36 @@ defmodule AtollWeb.OAuthRecordWriteTest do
     Map.merge(c, %{tokens: tokens, resource_nonce: resource_nonce})
   end
 
+  test "record publication has a bounded database round-trip budget", c do
+    owner = self()
+    handler = {__MODULE__, make_ref()}
+
+    :telemetry.attach(
+      handler,
+      [:atoll, :repo, :query],
+      fn _, _, _, _ ->
+        if self() == owner, do: send(owner, :publication_query)
+      end,
+      nil
+    )
+
+    try do
+      assert write(c, "createRecord", body(c, "budget")) |> json_response(200)
+      count = drain_query_count(0)
+      assert count <= 60, "publication required #{count} database round trips (budget 60)"
+    after
+      :telemetry.detach(handler)
+    end
+  end
+
+  defp drain_query_count(count) do
+    receive do
+      :publication_query -> drain_query_count(count + 1)
+    after
+      0 -> count
+    end
+  end
+
   test "generic scope writes create, put, delete and atomic batches", c do
     created = write(c, "createRecord", body(c, "one")) |> json_response(200)
     assert created["uri"] == "at://#{c.did}/com.example.record/one"

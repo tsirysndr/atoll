@@ -18,9 +18,24 @@ defmodule Atoll.Repositories.Events do
   @doc "Acquire before any repository mutation, inside its transaction."
   def lock! do
     unless Repo.in_transaction?(), do: raise(ArgumentError, "event lock requires a transaction")
-    Atoll.Database.serialize_writes!(@lock_key)
+    unless Process.get(lock_scope_key(), false), do: Atoll.Database.serialize_writes!(@lock_key)
     :ok
   end
+
+  @doc "Keep nested mutations from reacquiring a transaction lock already held by this callback."
+  def with_lock(fun) when is_function(fun, 0) do
+    lock!()
+    key = lock_scope_key()
+    previous = Process.put(key, true)
+
+    try do
+      fun.()
+    after
+      if previous, do: Process.put(key, previous), else: Process.delete(key)
+    end
+  end
+
+  defp lock_scope_key, do: {__MODULE__, :held, Repo.get_dynamic_repo()}
 
   @doc "Attempt background maintenance without queuing behind repository writes."
   def try_lock! do

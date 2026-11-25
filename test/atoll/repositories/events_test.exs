@@ -32,6 +32,40 @@ defmodule Atoll.Repositories.EventsTest do
   end
 
   @tag :postgres
+  test "publication lock scope is cleared after rollback" do
+    owner = self()
+    handler = {__MODULE__, make_ref()}
+
+    :telemetry.attach(
+      handler,
+      [:atoll, :repo, :query],
+      fn _, _, meta, _ ->
+        if self() == owner and String.contains?(meta.query, "pg_advisory_xact_lock"),
+          do: send(owner, :publication_lock)
+      end,
+      nil
+    )
+
+    try do
+      assert {:error, :abort} =
+               Repo.transaction(fn ->
+                 Events.with_lock(fn ->
+                   Events.lock!()
+                   Repo.rollback(:abort)
+                 end)
+               end)
+
+      assert_receive :publication_lock
+      refute_receive :publication_lock
+      assert {:ok, :ok} = Repo.transaction(fn -> Events.with_lock(fn -> Events.lock!() end) end)
+      assert_receive :publication_lock
+      refute_receive :publication_lock
+    after
+      :telemetry.detach(handler)
+    end
+  end
+
+  @tag :postgres
   test "maintenance skips a write lock held by another connection" do
     supervisor = start_supervised!(Task.Supervisor)
 

@@ -187,7 +187,7 @@ defmodule Atoll.OAuth.Resource do
          {:ok, body} <- Plug.Crypto.MessageVerifier.verify(receipt, receipt_key(secret: secret)),
          {:ok, %{} = claims} <- Jason.decode(body),
          true <- claims["owner"] == owner() and claims["action"] == Atom.to_string(action),
-         true <- is_integer(claims["expires"]) and claims["expires"] > clock!(),
+         true <- is_integer(claims["expires"]),
          true <- is_binary(claims["digest"]),
          {:ok, <<_::256>> = digest} <- Base.url_decode64(claims["digest"], padding: false),
          %AccessToken{} = access <- Repo.get(AccessToken, digest, log: false, primary: true),
@@ -197,11 +197,10 @@ defmodule Atoll.OAuth.Resource do
         access,
         session,
         fn principal ->
-          if claims["expires"] <= clock!(), do: Repo.rollback(:invalid_token)
           require_write_permission!(principal, action)
           reader.(principal)
         end,
-        []
+        credential_expires_at: claims["expires"]
       )
     else
       _ -> {:error, :invalid_token}
@@ -312,6 +311,13 @@ defmodule Atoll.OAuth.Resource do
         )
 
       now = Atoll.Database.now_seconds!()
+
+      # Use the same authoritative post-lock wall clock for token and receipt
+      # expiry. Rechecking the clock in separate round trips adds latency and
+      # lengthens these authorization locks without strengthening the check.
+      if expires = opts[:credential_expires_at] do
+        if expires <= now, do: Repo.rollback(:invalid_token)
+      end
 
       if is_nil(source) or source.access_scope != "com.atproto.access" or source.expires_at <= now or
            is_nil(session) or session.expires_at <= now or
