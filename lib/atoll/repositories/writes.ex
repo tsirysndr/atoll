@@ -17,6 +17,16 @@ defmodule Atoll.Repositories.Writes do
          :ok <- permissions(token, principal, :batch, body),
          {:ok, catalog} <- Atoll.Lexicon.WriteValidation.catalog(body, :batch),
          {:ok, writes} <- batch_operations(body, catalog) do
+      plan =
+        if writes != [] and Enum.all?(writes, fn {_, value, _} -> is_binary(value["rkey"]) end) do
+          operations =
+            Enum.map(writes, fn {action, value, _} ->
+              batch_operation(action, value, value["collection"] <> "/" <> value["rkey"])
+            end)
+
+          Repositories.plan_write(did, operations)
+        end
+
       publication_transaction(fn ->
         did = claims["sub"]
         head = authorize!(token, did, :batch, body)
@@ -40,22 +50,17 @@ defmodule Atoll.Repositories.Writes do
                  not Repo.exists?(from r in Record, where: r.did == ^did and r.path == ^path),
                do: Repo.rollback(:record_not_found)
 
-            operation =
-              case action do
-                :delete -> {:delete, path}
-                :update -> {:put, path, value["value"]}
-                :create -> {:create, path, value["value"]}
-              end
-
-            {{action, path, operation, validation}, previous}
+            {{action, path, batch_operation(action, value, path), validation}, previous}
           end)
 
-        updated =
+        {updated, record_cids} =
           if prepared == [] do
-            head
+            {head, %{}}
           else
             case Repositories.apply_managed_writes(did, Enum.map(prepared, &elem(&1, 2)),
-                   swap_commit: commit
+                   swap_commit: commit,
+                   tree_plan: plan,
+                   return_record_cids: true
                  ) do
               {:ok, updated} -> updated
               {:error, reason} -> Repo.rollback(reason)
@@ -69,11 +74,9 @@ defmodule Atoll.Repositories.Writes do
             if action == :delete do
               result
             else
-              current = Repo.get_by!(Record, did: did, path: path)
-
               Map.merge(result, %{
                 "uri" => "at://" <> did <> "/" <> path,
-                "cid" => CID.to_base32(current.cid),
+                "cid" => CID.to_base32(Map.fetch!(record_cids, path)),
                 "validationStatus" => validation
               })
             end
@@ -88,6 +91,10 @@ defmodule Atoll.Repositories.Writes do
   end
 
   def batch(_, _), do: {:error, :invalid_request}
+
+  defp batch_operation(:delete, _, path), do: {:delete, path}
+  defp batch_operation(:update, value, path), do: {:put, path, value["value"]}
+  defp batch_operation(:create, value, path), do: {:create, path, value["value"]}
 
   defp batch_parameters(body) do
     cond do
@@ -216,6 +223,13 @@ defmodule Atoll.Repositories.Writes do
          :ok <- permissions(token, principal, action, body),
          {:ok, catalog} <- Atoll.Lexicon.WriteValidation.catalog(body, action),
          {:ok, validation} <- record_validation(action, body, catalog) do
+      plan =
+        if rkey = body["rkey"] do
+          path = body["collection"] <> "/" <> rkey
+          op = if action == :delete, do: {:delete, path}, else: {action, path, body["record"]}
+          Repositories.plan_write(did, [op])
+        end
+
       publication_transaction(fn ->
         did = claims["sub"]
         head = authorize!(token, did, action, body)
@@ -232,26 +246,30 @@ defmodule Atoll.Repositories.Writes do
 
         path = body["collection"] <> "/" <> rkey
 
-        prior =
-          Repo.one(from r in Record, where: r.did == ^did and r.path == ^path, select: r.cid)
+        if record != :any do
+          prior =
+            Repo.one(from r in Record, where: r.did == ^did and r.path == ^path, select: r.cid)
 
-        if record != :any and record != prior, do: Repo.rollback(:invalid_swap)
+          if record != prior, do: Repo.rollback(:invalid_swap)
+        end
 
         operation =
           if action == :delete, do: {:delete, path}, else: {action, path, body["record"]}
 
-        case Repositories.apply_managed_writes(did, [operation], swap_commit: commit) do
-          {:ok, updated} ->
+        case Repositories.apply_managed_writes(did, [operation],
+               swap_commit: commit,
+               return_record_cids: true,
+               tree_plan: plan
+             ) do
+          {:ok, {updated, record_cids}} ->
             result = %{commit: %{cid: CID.to_base32(updated.head), rev: updated.rev}}
 
             if action == :delete do
               result
             else
-              current = Repo.get_by!(Record, did: did, path: path)
-
               Map.merge(result, %{
                 uri: "at://" <> did <> "/" <> path,
-                cid: CID.to_base32(current.cid),
+                cid: CID.to_base32(Map.fetch!(record_cids, path)),
                 validationStatus: validation
               })
             end

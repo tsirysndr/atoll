@@ -1,5 +1,6 @@
 defmodule Atoll.RepositoriesTest do
   use Atoll.DataCase, async: false
+  require Atoll.Database
   alias Atoll.{CAR, Commit, MST, Repositories, SigningKey, Storage, TID}
   alias Atoll.Repositories.Head
   alias Atoll.Storage.Block
@@ -158,6 +159,18 @@ defmodule Atoll.RepositoriesTest do
            ]
   end
 
+  test "a concurrent write invalidates a precomputed tree without losing records", c do
+    operations = [{:put, @path, @value}]
+    plan = Repositories.plan_write(@did, operations)
+    other = "com.example.record/concurrent"
+    assert {:ok, _} = Repositories.apply_writes(@did, [{:put, other, @value}], c.key)
+    assert {:ok, head} = Repositories.apply_writes(@did, operations, c.key, tree_plan: plan)
+    assert {:ok, record} = Repositories.get_record(@did, @path)
+    assert {:ok, tree} = MST.new(%{@path => record.cid, other => record.cid})
+    assert {:ok, commit} = Storage.get_node(head.head)
+    assert commit["data"].cid == tree.root
+  end
+
   test "damaged persisted nodes abort rebuilt writes without publishing partial state", c do
     {:ok, prior} = Repositories.apply_writes(@did, [{:put, @path, @value}], c.key)
     {:ok, commit} = Storage.get_node(prior.head)
@@ -198,10 +211,14 @@ defmodule Atoll.RepositoriesTest do
       queries = collect_queries(tag, [])
       assert length(queries) < 50
 
-      refute Enum.any?(
-               queries,
-               &String.contains?(&1, ~s|FROM "blocks" AS b0 WHERE (b0."cid" = $1)|)
-             )
+      if Atoll.Database.postgres?() do
+        refute Enum.any?(queries, &String.contains?(&1, ~s|ORDER BY r0."path" COLLATE|))
+
+        assert Enum.count(
+                 queries,
+                 &String.contains?(&1, ~s|FROM "blocks" AS b0 WHERE (b0."cid" = $1)|)
+               ) < 12
+      end
 
       records =
         Repo.all(

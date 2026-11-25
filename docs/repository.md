@@ -157,21 +157,21 @@ snapshot. The buffered input still has its independent 64 MiB CAR/100,000-sectio
 limits; input buffers and traversal state can coexist with output maps, so this
 accounting budget is not an exact heap-size limit. `Snapshot.from_stage/4` keeps
 its streamed interface and does not collect these output maps.
-Ordinary record mutations now load previous values only for their at most 200
-changed paths, persist their changes transactionally, and feed a 128-row sorted
-record cursor to `MST.Builder.build/3`. Completed canonical nodes are emitted to
-block storage immediately. The builder keeps pending ancestor entries under a
-16 MiB accounting budget, with 10,000 entries/1 MiB per node, 100,000 emitted nodes
-and one million input records. It preserves exact prefix compression and empty
-intermediate levels. Invalid/unsorted input, exhausted budgets or failed writes
-abort construction; partial emissions require a transaction or staging. Final
-revision membership is built through bounded traversal and PostgreSQL staging.
-Quota, blob-reference, head and event failures roll the entire mutation back.
+PostgreSQL record mutations edit the affected MST paths and their split or merge
+boundaries. For authenticated writes with explicit record keys, Atoll can prepare
+the edit before taking the publication lock. It rechecks the base commit and
+operations under the lock and recomputes a stale edit. New revisions retain
+unchanged blocks and include only reachable nodes from the final edit. The
+database still materializes the complete revision membership array and tracks its
+block references. Quota, blob-reference, head and event failures roll back the
+whole mutation.
 
-Writes still rebuild the whole tree and perform work proportional to record count;
-this is not incremental path mutation. Pending-byte accounting is not a precise
-BEAM heap measurement. Public batch/body limits still bound prepared records, and
-the database materializes revision arrays. `MST.load/3` now uses the canonical
+SQLite and PostgreSQL's full-rebuild fallback use the sorted record index and
+the bounded canonical builder. The partial editor has a 16 MiB accounting
+budget. The builder supports 10,000 entries and 1 MiB per node, 100,000 nodes
+and one million records.
+
+`MST.load/3` now uses the canonical
 traversal directly instead of collecting records and rebuilding the tree. It
 returns the same fully buffered tree, but caps retained metadata at 64 MiB by
 default (`max_bytes:` overrides this for trusted callers). Accounting charges

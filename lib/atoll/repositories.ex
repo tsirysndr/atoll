@@ -6,8 +6,8 @@ defmodule Atoll.Repositories do
 
   Callers provide a signing key or use the encrypted key vault. Mutations
   lock the head, enforce optional compare-and-swap, and atomically persist
-  records, MST blocks, commit, and revision. Trees rebuild from sorted database
-  streams on each mutation, without collecting a whole-tree record map.
+  records, MST blocks, commit, and revision. PostgreSQL writes edit affected MST paths, with bounded streaming
+  reconstruction available for edits exceeding the partial editor budget.
   Retained revisions own their blocks; unowned blocks can be garbage-collected.
 
   Records use ATProto JSON values and must match their collection's `$type`.
@@ -346,42 +346,103 @@ defmodule Atoll.Repositories do
         Atoll.Blobs.References.apply_writes!(did, prepared, rev)
         Enum.each(prepared, &persist_record!(did, &1))
 
-        query =
-          from(r in Record,
-            where: r.did == ^did,
-            order_by:
-              Atoll.Database.sql_fragment("? COLLATE \"C\"", "? COLLATE BINARY", [r.path]),
-            select: {r.path, r.cid}
-          )
+        edits = tree_edits(prepared)
+        plan = Keyword.get(opts, :tree_plan)
 
-        # Small repositories fit a fixed metadata budget and need one SELECT,
-        # rather than cursor declaration/fetch/close round trips. Large ones
-        # retain bounded streaming construction.
-        sample = Repo.all(from r in query, limit: 1025)
-        records = if length(sample) <= 1024, do: sample, else: Repo.stream(query, max_rows: 1024)
+        plan =
+          if Atoll.Database.postgres?() do
+            case plan do
+              %{head: base, edits: ^edits} when base == head.head -> plan
+              _ -> Atoll.Repositories.WriteTree.plan(did, edits)
+            end
+          end
 
-        Atoll.Repositories.WriteTree.with_tree(records, fn root, nodes ->
+        with_write_tree(did, plan, fn root, membership ->
           {:ok, commit} = Commit.create(did, root, rev, key)
-          :ok = Storage.put_block(commit.cid, commit.bytes)
+
+          case membership do
+            {:edited, blocks, _} ->
+              Atoll.Repositories.WriteTree.persist!(Map.put(blocks, commit.cid, commit.bytes))
+
+            {:built, _} ->
+              :ok = Storage.put_block(commit.cid, commit.bytes)
+          end
 
           updated_head =
             head |> Ecto.Changeset.change(head: commit.cid, rev: rev) |> Repo.update!()
 
-          # Builder output is already the canonical reachable node set. Include
-          # indexed record CIDs directly instead of traversing and fetching every
-          # freshly built node from the remote database again.
-          Atoll.Repositories.RevisionMembership.insert_built!(updated_head, nodes)
+          case membership do
+            {:built, nodes} ->
+              Atoll.Repositories.RevisionMembership.insert_built!(updated_head, nodes)
+
+            {:edited, blocks, removed} ->
+              values = for {_, _, cid, _} <- prepared, cid != nil, do: cid
+
+              Atoll.Repositories.RevisionMembership.insert_edited!(
+                updated_head,
+                head,
+                removed,
+                Map.keys(blocks) ++ values,
+                Map.values(previous_records),
+                length(values) > map_size(previous_records)
+              )
+          end
 
           payload =
             Map.put(event_head(updated_head, head), "ops", event_ops(prepared, previous_records))
 
           Events.append!(:commit, updated_head, payload)
-          updated_head
+
+          if Keyword.get(opts, :return_record_cids, false) do
+            {updated_head, Map.new(prepared, fn {_, path, cid, _} -> {path, cid} end)}
+          else
+            updated_head
+          end
         end)
       end)
     end
   rescue
     Atoll.MST.TraversalError -> {:error, :invalid_repository}
+  end
+
+  @doc false
+  def plan_write(did, operations) do
+    with true <- Atoll.Database.postgres?(),
+         {:ok, prepared} <- prepare(operations) do
+      Atoll.Repositories.WriteTree.plan(did, tree_edits(prepared))
+    else
+      _ -> nil
+    end
+  end
+
+  defp tree_edits(prepared) do
+    Enum.map(prepared, fn
+      {:delete, path, _, _} -> {:delete, path}
+      {_, path, cid, _} -> {:put, path, cid}
+    end)
+  end
+
+  defp with_write_tree(_did, %{root: root, blocks: blocks, removed: removed}, callback) do
+    callback.(root, {:edited, blocks, removed})
+  end
+
+  defp with_write_tree(did, nil, callback) do
+    query =
+      from(r in Record,
+        where: r.did == ^did,
+        order_by: Atoll.Database.sql_fragment("? COLLATE \"C\"", "? COLLATE BINARY", [r.path]),
+        select: {r.path, r.cid}
+      )
+
+    # Small repositories fit a fixed metadata budget and need one SELECT,
+    # rather than cursor declaration/fetch/close round trips. Large ones
+    # retain bounded streaming construction.
+    sample = Repo.all(from r in query, limit: 1025)
+    records = if length(sample) <= 1024, do: sample, else: Repo.stream(query, max_rows: 1024)
+
+    Atoll.Repositories.WriteTree.with_tree(records, fn root, nodes ->
+      callback.(root, {:built, nodes})
+    end)
   end
 
   def get_head(did) when is_binary(did) do

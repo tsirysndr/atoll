@@ -94,5 +94,50 @@ defmodule Atoll.Repositories.RevisionMembership do
     end
   end
 
+  def insert_edited!(head, base, removed, added, previous_records, grew?) do
+    # A record CID may occur at multiple paths. Keep it if any post-write
+    # record still references it. Typed records cannot be MST nodes or commits.
+    result =
+      query!(
+        """
+        INSERT INTO repository_revisions
+          (did, rev, head, signing_curve, signing_public_key, blocks, inserted_at)
+        SELECT $1, $2, $3, $4, $5, membership.blocks, CURRENT_TIMESTAMP AT TIME ZONE 'UTC'
+        FROM repository_revisions r
+        CROSS JOIN LATERAL (SELECT ARRAY(
+          SELECT cid FROM (
+            SELECT unnest(r.blocks) AS cid
+            EXCEPT SELECT unnest($7::bytea[])
+            UNION SELECT unnest($8::bytea[])
+            UNION SELECT cid FROM repository_records WHERE did = $1 AND cid = ANY($9::bytea[])
+          ) AS members ORDER BY cid
+        ) AS blocks) AS membership
+        WHERE r.did = $1 AND r.rev = $6 AND r.head = $10
+          AND (NOT $11::boolean OR NOT EXISTS
+            (SELECT 1 FROM repository_records WHERE did = $1 OFFSET 1000000))
+          AND CASE WHEN cardinality(membership.blocks) > 100001 THEN
+            cardinality(membership.blocks) - 1 -
+              (SELECT count(DISTINCT cid) FROM repository_records WHERE did = $1) <= 100000
+            ELSE true END
+        """,
+        [
+          head.did,
+          head.rev,
+          head.head,
+          Atom.to_string(head.curve),
+          head.public_key,
+          base.rev,
+          [base.head | removed ++ previous_records],
+          [head.head | added],
+          previous_records,
+          base.head,
+          grew?
+        ]
+      )
+
+    if result.num_rows != 1, do: Repo.rollback(:invalid_repository)
+    Atoll.Repositories.Quota.check!(head.did)
+  end
+
   defp query!(sql, params), do: Ecto.Adapters.SQL.query!(Repo, sql, params)
 end
