@@ -235,6 +235,7 @@ defmodule Atoll.Identity.Resolver do
           ],
           connect_options: [
             hostname: uri.host,
+            protocols: [:http2, :http1],
             timeout: 3000,
             transport_opts: [inet6: tuple_size(address) == 8, inet4: tuple_size(address) == 4]
           ],

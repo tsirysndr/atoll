@@ -66,6 +66,7 @@ defmodule Atoll.IdentityResolverTest do
       Req.new(plug: plug)
       |> Req.Request.append_request_steps(
         inspect_options: fn req ->
+          assert req.options.connect_options[:protocols] == [:http2, :http1]
           assert req.options.connect_options[:hostname] == "alice.example.com"
           assert req.options.redirect == false
           assert req.options.raw == true
