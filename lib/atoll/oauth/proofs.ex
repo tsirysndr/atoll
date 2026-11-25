@@ -13,47 +13,53 @@ defmodule Atoll.OAuth.Proofs do
     if Repo.in_transaction?() do
       {:error, :oauth_proof_inside_transaction}
     else
-      Repo.transaction(fn ->
-        now = Admission.start!()
-        nonce = unwrap!(DPoP.peek_nonce(headers))
-        nonce_opts = Keyword.take(opts, [:secret, :issuer]) |> Keyword.put(:now, now)
-        verified_nonce = unwrap!(Nonce.verify(nonce, role, nonce_opts))
+      Repo.transaction(
+        fn ->
+          now = Admission.start!(nil, 10_000, 15_000)
+          nonce = unwrap!(DPoP.peek_nonce(headers))
+          nonce_opts = Keyword.take(opts, [:secret, :issuer]) |> Keyword.put(:now, now)
+          verified_nonce = unwrap!(Nonce.verify(nonce, role, nonce_opts))
 
-        if role == :resource and
-             (not is_binary(opts[:access_token]) or not is_binary(opts[:jkt])),
-           do: Repo.rollback(:invalid_dpop_proof)
+          if role == :resource and
+               (not is_binary(opts[:access_token]) or not is_binary(opts[:jkt])),
+             do: Repo.rollback(:invalid_dpop_proof)
 
-        proof_opts = Keyword.take(opts, [:access_token, :jkt]) ++ [now: now, nonce: nonce]
-        proof = unwrap!(DPoP.verify(headers, method, url, proof_opts))
+          proof_opts = Keyword.take(opts, [:access_token, :jkt]) ++ [now: now, nonce: nonce]
+          proof = unwrap!(DPoP.verify(headers, method, url, proof_opts))
 
-        # Separate from repository locks; shared by proof admission and pruning.
-        now = Admission.lock_now!(@lock)
+          # Separate from repository locks; shared by proof admission and pruning.
+          now = Admission.lock_now!(@lock)
 
-        if now >= verified_nonce.expires_at or now > proof.issued_at + 300,
-          do: Repo.rollback(:use_dpop_nonce)
+          if now >= verified_nonce.expires_at or now > proof.issued_at + 300,
+            do: Repo.rollback(:use_dpop_nonce)
 
-        digest =
-          :crypto.hash(
-            :sha256,
-            Atoll.CBOR.encode!([
-              "atoll.oauth.dpop-use.v1",
-              verified_nonce.issuer,
-              Atom.to_string(role),
-              proof.jkt,
-              proof.jti
-            ])
+          digest =
+            :crypto.hash(
+              :sha256,
+              Atoll.CBOR.encode!([
+                "atoll.oauth.dpop-use.v1",
+                verified_nonce.issuer,
+                Atom.to_string(role),
+                proof.jkt,
+                proof.jti
+              ])
+            )
+
+          status = Admission.prune_and_status!(ProofUse, now, digest)
+
+          if status.replayed, do: Repo.rollback(:dpop_replayed)
+
+          if status.count >= @capacity,
+            do: Repo.rollback(:oauth_proof_store_full)
+
+          Repo.insert!(%ProofUse{digest: digest, expires_at: verified_nonce.expires_at},
+            log: false
           )
 
-        status = Admission.prune_and_status!(ProofUse, now, digest)
-
-        if status.replayed, do: Repo.rollback(:dpop_replayed)
-
-        if status.count >= @capacity,
-          do: Repo.rollback(:oauth_proof_store_full)
-
-        Repo.insert!(%ProofUse{digest: digest, expires_at: verified_nonce.expires_at}, log: false)
-        proof
-      end)
+          proof
+        end,
+        timeout: 25_000
+      )
     end
   rescue
     _ in [Exqlite.Error, Postgrex.Error, DBConnection.ConnectionError] ->

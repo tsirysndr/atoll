@@ -7,13 +7,14 @@ defmodule Atoll.OAuth.Admission do
 
   # Keep transaction setup and bounded cleanup in single statements so
   # database round-trip latency does not multiply across OAuth admission.
-  def start!(lock \\ nil) do
+  def start!(lock \\ nil, lock_ms \\ 1000, statement_ms \\ 5000)
+      when is_integer(lock_ms) and is_integer(statement_ms) do
     transaction!()
 
     if Database.postgres?() do
       settings = """
-      SELECT set_config('lock_timeout', '1000ms', true),
-             set_config('statement_timeout', '5000ms', true)
+      SELECT set_config('lock_timeout', '#{lock_ms}ms', true),
+             set_config('statement_timeout', '#{statement_ms}ms', true)
       """
 
       {query, params} =

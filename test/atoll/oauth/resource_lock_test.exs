@@ -100,6 +100,22 @@ defmodule Atoll.OAuth.ResourceLockTest do
     supervisor = start_supervised!(Task.Supervisor)
     parent = self()
 
+    if mode == :direct do
+      # A concurrent publication owns this head longer than the former 1s
+      # lock timeout. Admission must wait and then validate the committed row.
+      Task.Supervisor.async_nolink(supervisor, fn ->
+        Ecto.Adapters.SQL.Sandbox.unboxed_run(Repo, fn ->
+          Repo.transaction(fn ->
+            Repo.query!("SELECT did FROM repositories WHERE did = $1 FOR UPDATE", [did])
+            send(parent, :writer_locked)
+            Repo.query!("SELECT pg_sleep(2)")
+          end)
+        end)
+      end)
+
+      assert_receive :writer_locked, 5000
+    end
+
     task =
       Task.Supervisor.async_nolink(supervisor, fn ->
         Ecto.Adapters.SQL.Sandbox.unboxed_run(Repo, fn ->

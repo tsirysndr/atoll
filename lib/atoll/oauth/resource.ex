@@ -286,60 +286,66 @@ defmodule Atoll.OAuth.Resource do
   defp token?(_), do: false
 
   defp locked_read(access, candidate, reader, opts) do
-    Repo.transaction(fn ->
-      Atoll.Database.limits!(1_000, 5_000)
-      # Lock the same primary rows in one round trip. All four are required
-      # for authorization; a missing join is the same invalid-token outcome as
-      # a missing row in the separate reads. FOR SHARE covers every joined row.
-      {head, source, session, current} =
-        Repo.one(
-          from(h in Head,
-            join: source in AccountSession,
-            on: source.id == ^candidate.source_session_id and source.did == ^candidate.did,
-            join: session in Session,
-            on: session.id == ^candidate.id,
-            join: current in AccessToken,
-            on: current.digest == ^access.digest,
-            where: h.did == ^candidate.did,
-            select: {h, source, session, current},
-            lock: "FOR SHARE"
-          ),
-          log: false
-        ) || Repo.rollback(:invalid_token)
+    Repo.transaction(
+      fn ->
+        # A normal publication can own the head for several seconds. Allow a
+        # bounded wait for that writer before checking current authorization.
+        Atoll.Database.limits!(15_000, 20_000)
+        # Lock the same primary rows in one round trip. All four are required
+        # for authorization; a missing join is the same invalid-token outcome as
+        # a missing row in the separate reads. FOR SHARE covers every joined row.
+        {head, source, session, current} =
+          Repo.one(
+            from(h in Head,
+              join: source in AccountSession,
+              on: source.id == ^candidate.source_session_id and source.did == ^candidate.did,
+              join: session in Session,
+              on: session.id == ^candidate.id,
+              join: current in AccessToken,
+              on: current.digest == ^access.digest,
+              where: h.did == ^candidate.did,
+              select: {h, source, session, current},
+              lock: "FOR SHARE"
+            ),
+            log: false
+          ) || Repo.rollback(:invalid_token)
 
-      if head.status != :active or Signup.pending?(head.did), do: Repo.rollback(:invalid_token)
+        if head.status != :active or Signup.pending?(head.did), do: Repo.rollback(:invalid_token)
 
-      now = Atoll.Database.now_seconds!()
+        now = Atoll.Database.now_seconds!()
 
-      # Use the same authoritative post-lock wall clock for token and receipt
-      # expiry. Rechecking the clock in separate round trips adds latency and
-      # lengthens these authorization locks without strengthening the check.
-      if expires = opts[:credential_expires_at] do
-        if expires <= now, do: Repo.rollback(:invalid_token)
-      end
-
-      if is_nil(source) or source.access_scope != "com.atproto.access" or source.expires_at <= now or
-           is_nil(session) or session.expires_at <= now or
-           session_binding(session) != session_binding(candidate) or
-           is_nil(current) or current.session_id != session.id or current.expires_at <= now,
-         do: Repo.rollback(:invalid_token)
-
-      if not allowed?(current.scope, session.scope, Keyword.get(opts, :required_scopes, [])),
-        do: Repo.rollback(:insufficient_scope)
-
-      effective_scope =
-        case Atoll.OAuth.PermissionSnapshots.effective(current.scope, current.permission_sets) do
-          {:ok, effective} -> effective
-          _ -> Repo.rollback(:insufficient_scope)
+        # Use the same authoritative post-lock wall clock for token and receipt
+        # expiry. Rechecking the clock in separate round trips adds latency and
+        # lengthens these authorization locks without strengthening the check.
+        if expires = opts[:credential_expires_at] do
+          if expires <= now, do: Repo.rollback(:invalid_token)
         end
 
-      reader.(%{
-        did: head.did,
-        status: head.status,
-        scope: effective_scope,
-        client_id: session.client_id
-      })
-    end)
+        if is_nil(source) or source.access_scope != "com.atproto.access" or
+             source.expires_at <= now or
+             is_nil(session) or session.expires_at <= now or
+             session_binding(session) != session_binding(candidate) or
+             is_nil(current) or current.session_id != session.id or current.expires_at <= now,
+           do: Repo.rollback(:invalid_token)
+
+        if not allowed?(current.scope, session.scope, Keyword.get(opts, :required_scopes, [])),
+          do: Repo.rollback(:insufficient_scope)
+
+        effective_scope =
+          case Atoll.OAuth.PermissionSnapshots.effective(current.scope, current.permission_sets) do
+            {:ok, effective} -> effective
+            _ -> Repo.rollback(:insufficient_scope)
+          end
+
+        reader.(%{
+          did: head.did,
+          status: head.status,
+          scope: effective_scope,
+          client_id: session.client_id
+        })
+      end,
+      timeout: 30_000
+    )
   end
 
   defp session_binding(session),
