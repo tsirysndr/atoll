@@ -1,5 +1,6 @@
 defmodule AtollWeb.OAuthRecordWriteTest do
   use AtollWeb.ConnCase, async: false
+  require Atoll.Database
   alias Atoll.OAuth.{Nonce, PAR, AuthorizationCodes, Session, AccessToken, Resource}
   alias Atoll.{Repo, Repositories}
   alias Atoll.Accounts.Sessions
@@ -143,9 +144,15 @@ defmodule AtollWeb.OAuthRecordWriteTest do
     )
 
     try do
-      assert write(c, "createRecord", body(c, "budget")) |> json_response(200)
-      count = drain_query_count(0)
-      assert count <= 50, "publication required #{count} database round trips (budget 50)"
+      budget = if Atoll.Database.postgres?(), do: 42, else: 50
+
+      for method <- ["createRecord", "putRecord"] do
+        assert write(c, method, body(c, "budget")) |> json_response(200)
+        count = drain_query_count(0)
+
+        assert count <= budget,
+               "#{method} required #{count} database round trips (budget #{budget})"
+      end
     after
       :telemetry.detach(handler)
     end

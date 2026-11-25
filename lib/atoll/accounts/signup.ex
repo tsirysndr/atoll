@@ -1,6 +1,7 @@
 defmodule Atoll.Accounts.Signup do
   @moduledoc "Fresh PLC signup with durable reservations and exact-operation retries."
   import Ecto.Query
+  require Atoll.Database
   alias Atoll.{KeyVault, Multikey, Repo, Repositories, SigningKey, Syntax}
   alias Atoll.Accounts.{Credentials, EmailAddress, Invites, Profile, Sessions, Tokens}
   alias Atoll.Identity.PLC.{Operation, Registration, Registrations}
@@ -204,11 +205,25 @@ defmodule Atoll.Accounts.Signup do
       end)
   end
 
-  def pending?(did),
-    do:
-      Repo.exists?(from(r in Registration, where: r.did == ^did and is_nil(r.completed_at)),
+  def pending?(did), do: Repo.exists?(pending_registration(did), primary: true)
+
+  @doc false
+  def pending_and_time(did) do
+    if Atoll.Database.postgres?() do
+      Repo.one!(
+        from(r in pending_registration(did),
+          select:
+            {count(r.did) > 0, fragment("floor(extract(epoch FROM clock_timestamp()))::bigint")}
+        ),
         primary: true
       )
+    else
+      {pending?(did), Atoll.Database.now_seconds!()}
+    end
+  end
+
+  defp pending_registration(did),
+    do: from(r in Registration, where: r.did == ^did and is_nil(r.completed_at))
 
   defp verify_turnstile(params) when is_map(params),
     do: Atoll.Accounts.Turnstile.verify(params["turnstileToken"])

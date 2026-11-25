@@ -190,8 +190,7 @@ defmodule Atoll.OAuth.Resource do
          true <- is_integer(claims["expires"]),
          true <- is_binary(claims["digest"]),
          {:ok, <<_::256>> = digest} <- Base.url_decode64(claims["digest"], padding: false),
-         %AccessToken{} = access <- Repo.get(AccessToken, digest, log: false, primary: true),
-         %Session{} = session <- Repo.get(Session, access.session_id, log: false, primary: true),
+         {access, session} <- token_session(digest),
          true <- claims["binding"] == fingerprint(session) do
       locked_read(
         access,
@@ -253,9 +252,7 @@ defmodule Atoll.OAuth.Resource do
       true ->
         digest = :crypto.hash(:sha256, token)
 
-        with %AccessToken{} = access <- Repo.get(AccessToken, digest, log: false, primary: true),
-             %Session{} = candidate <-
-               Repo.get(Session, access.session_id, log: false, primary: true),
+        with {access, candidate} <- token_session(digest),
              true <- candidate.issuer == issuer,
              {:ok, _} <-
                Proofs.verify(
@@ -280,6 +277,19 @@ defmodule Atoll.OAuth.Resource do
   rescue
     _ in [Exqlite.Error, Postgrex.Error, DBConnection.ConnectionError] ->
       {:error, :oauth_resource_store_unavailable}
+  end
+
+  defp token_session(digest) do
+    Repo.one(
+      from(t in AccessToken,
+        join: s in Session,
+        on: s.id == t.session_id,
+        where: t.digest == ^digest,
+        select: {t, s}
+      ),
+      log: false,
+      primary: true
+    )
   end
 
   defp token?("atoll_access_" <> value), do: PKCE.challenge?(value)
@@ -310,9 +320,8 @@ defmodule Atoll.OAuth.Resource do
             log: false
           ) || Repo.rollback(:invalid_token)
 
-        if head.status != :active or Signup.pending?(head.did), do: Repo.rollback(:invalid_token)
-
-        now = Atoll.Database.now_seconds!()
+        {pending?, now} = Signup.pending_and_time(head.did)
+        if head.status != :active or pending?, do: Repo.rollback(:invalid_token)
 
         # Use the same authoritative post-lock wall clock for token and receipt
         # expiry. Rechecking the clock in separate round trips adds latency and
