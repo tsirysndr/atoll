@@ -1,5 +1,7 @@
 import Config
 
+config :atoll, :stream_bounds_cache_enabled, false
+
 config :atoll, :opentelemetry_enabled, true
 config :opentelemetry, span_processor: :simple, traces_exporter: :none, sampler: :always_on
 

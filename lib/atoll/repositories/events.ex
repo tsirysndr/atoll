@@ -57,27 +57,33 @@ defmodule Atoll.Repositories.Events do
     Repo.aggregate(subquery(query), :count) > limit
   end
 
-  @doc "Build one public frame, checking current availability under a shared head lock."
+  @doc "Build immutable bytes before taking the short primary availability lock."
   def next_frame(cursor) do
+    with {:ok, events} <- list_after(cursor, 1) do
+      case events do
+        [] -> {:ok, :idle}
+        [event] -> prepare_frame(event, cursor)
+      end
+    end
+  end
+
+  defp prepare_frame(event, cursor) do
+    # Encoding can read many historical blocks over a remote connection. Never
+    # hold the head's shared lock while doing that: a writer waiting for it also
+    # owns the global event lock and would stall every repository's writes.
+    encoded = EventEncoder.encode(event)
+
     Repo.transaction(fn ->
-      case list_after(cursor, 1) do
-        {:error, reason} ->
-          Repo.rollback(reason)
+      if cursor < EventRetention.lock_floor!(), do: Repo.rollback(:outdated_cursor)
+      head = Repo.one(from h in Head, where: h.did == ^event.did, lock: "FOR SHARE")
 
-        {:ok, []} ->
-          :idle
-
-        {:ok, [event]} ->
-          head = Repo.one(from h in Head, where: h.did == ^event.did, lock: "FOR SHARE")
-
-          if event.kind in [:account, :identity] or match?(%Head{status: :active}, head) do
-            case EventEncoder.encode(event) do
-              {:ok, frame} -> {:frame, event.seq, frame}
-              {:error, reason} -> Repo.rollback(reason)
-            end
-          else
-            {:skip, event.seq}
-          end
+      if event.kind in [:account, :identity] or match?(%Head{status: :active}, head) do
+        case encoded do
+          {:ok, frame} -> {:frame, event.seq, frame}
+          {:error, reason} -> Repo.rollback(reason)
+        end
+      else
+        {:skip, event.seq}
       end
     end)
   end

@@ -10,6 +10,7 @@ defmodule Atoll.Application do
     children = [
       AtollWeb.Telemetry,
       Atoll.Repo,
+      Atoll.Repositories.StreamBounds,
       {DynamicSupervisor,
        name: Atoll.CAR.StageSupervisor,
        strategy: :one_for_one,

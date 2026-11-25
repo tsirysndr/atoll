@@ -7,6 +7,30 @@ defmodule Atoll.Repositories.EventsTest do
   @path "com.example.record/self"
   @value %{"$type" => "com.example.record", "text" => "hello"}
 
+  test "frame encoding never holds the repository availability lock" do
+    {:ok, _} = Repositories.create(@did, SigningKey.generate())
+    owner = self()
+    handler = {__MODULE__, make_ref()}
+
+    :telemetry.attach(
+      handler,
+      [:atoll, :repo, :query],
+      fn _, _, meta, _ ->
+        if self() == owner and String.contains?(meta.query, "FROM \"blocks\""),
+          do: send(owner, {:block_read_in_transaction, Repo.in_transaction?()})
+      end,
+      nil
+    )
+
+    try do
+      assert {:ok, {:frame, _, _}} = Events.next_frame(0)
+      assert_receive {:block_read_in_transaction, false}
+      refute_receive {:block_read_in_transaction, true}
+    after
+      :telemetry.detach(handler)
+    end
+  end
+
   @tag :postgres
   test "maintenance skips a write lock held by another connection" do
     supervisor = start_supervised!(Task.Supervisor)

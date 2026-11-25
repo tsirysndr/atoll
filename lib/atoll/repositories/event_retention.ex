@@ -25,16 +25,19 @@ defmodule Atoll.Repositories.EventRetention do
     %{enabled: enabled and not test?, seconds: seconds}
   end
 
-  def bounds do
+  def bounds(opts \\ []) do
+    # Stream cursors and the retention floor require current primary state.
     %{rows: [[floor, latest]]} =
-      Repo.read_query!(
+      Repo.query!(
         Atoll.Database.sql(
           """
           SELECT cursor_floor, GREATEST(cursor_floor, COALESCE((SELECT max(seq) FROM repository_events), 0))
           FROM event_retention_state WHERE id = 1
           """,
           "SELECT cursor_floor, max(cursor_floor, COALESCE((SELECT max(seq) FROM repository_events), 0)) FROM event_retention_state WHERE id = 1"
-        )
+        ),
+        [],
+        opts
       )
 
     %{floor: floor, latest: latest}

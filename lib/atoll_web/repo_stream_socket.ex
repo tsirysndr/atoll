@@ -5,7 +5,7 @@ defmodule AtollWeb.RepoStreamSocket do
   No per-client event queue or uncommitted PubSub notifications are used.
   """
   @behaviour WebSock
-  alias Atoll.Repositories.{EventEncoder, EventRetention, Events}
+  alias Atoll.Repositories.{EventEncoder, EventRetention, Events, StreamBounds}
 
   @impl true
   def init(%{cursor: cursor, lease: {manager, _} = lease}) do
@@ -29,8 +29,13 @@ defmodule AtollWeb.RepoStreamSocket do
   def init({:error, :invalid_cursor}), do: stop("InvalidRequest", "Invalid cursor", %{})
 
   def init({:ok, cursor}) do
-    %{floor: floor, latest: latest} = EventRetention.bounds()
+    case StreamBounds.fetch() do
+      {:ok, bounds} -> init_bounds(cursor, bounds)
+      {:error, _} -> {:stop, :normal, 1013, %{}}
+    end
+  end
 
+  defp init_bounds(cursor, %{floor: floor, latest: latest}) do
     cond do
       cursor && cursor > latest ->
         stop("FutureCursor", "Cursor is ahead of the stream", %{})
@@ -51,16 +56,24 @@ defmodule AtollWeb.RepoStreamSocket do
     do: {:stop, {:shutdown, :restart}, state}
 
   def handle_info(:drain, state) do
-    %{floor: floor, latest: latest} = EventRetention.bounds()
+    case StreamBounds.get() do
+      {:ok, bounds} -> drain_bounds(state, bounds)
+      {:error, _} -> {:ok, schedule(state, 1_000)}
+    end
+  rescue
+    _ in [DBConnection.ConnectionError, Postgrex.Error, Exqlite.Error] ->
+      {:ok, schedule(state, 1_000)}
+  end
 
+  def handle_info(_, state), do: {:ok, state}
+
+  defp drain_bounds(state, %{floor: floor, latest: latest}) do
     cond do
       state.cursor < floor -> outdated(state, floor)
       state.cursor >= latest -> idle(state)
       true -> drain(state, latest)
     end
   end
-
-  def handle_info(_, state), do: {:ok, state}
 
   defp drain(state, latest) do
     if latest - state.cursor > 10_000 and Events.backlog_exceeded?(state.cursor) do
